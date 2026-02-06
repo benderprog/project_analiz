@@ -1,0 +1,7 @@
+Django>=4.2
+psycopg2-binary>=2.9
+python-docx>=1.1
+natasha>=1.6
+sentence-transformers>=2.2
+openpyxl>=3.1
+python-dotenv>=1.0
