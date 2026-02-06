@@ -26,6 +26,10 @@ The command above:
 * Writes a `manifest.json` with checksums and metadata.
 * Produces `dist/release_ver_1_1.tar.gz`.
 
+The web image is built as CPU-only (no CUDA/NVIDIA libraries), which reduces the
+export size substantially. GPU builds are intentionally not part of the closed
+contour release flow.
+
 ## 2) Deploy inside the closed contour
 
 Copy the archive to the offline machine. Then run:

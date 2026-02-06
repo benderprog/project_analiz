@@ -10,9 +10,22 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
+ARG TORCH_CHANNEL=cpu
+ARG TORCH_VERSION=""
+
 COPY requirements.txt /app/
 RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -z "$TORCH_VERSION" ]; then \
+        pip install --no-cache-dir --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}" torch torchvision torchaudio; \
+    else \
+        pip install --no-cache-dir --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}" torch=="${TORCH_VERSION}" torchvision torchaudio; \
+    fi
+
+RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -r requirements.txt
+
+RUN python -c "import pkgutil, sys; bad=[m.name for m in pkgutil.iter_modules() if m.name.startswith('nvidia')]; sys.exit(1 if bad else 0)" \
+    && python -c "import torch; print('torch', torch.__version__, 'cuda_available', torch.cuda.is_available()); assert torch.cuda.is_available() is False"
 
 COPY manage.py /app/
 COPY apps /app/apps
