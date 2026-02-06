@@ -23,10 +23,51 @@ SUBDIVISION_YELLOW_THRESHOLD = 0.75
 _CODE_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого|погк)\s*[-№]?\s*(\d+)\b", re.IGNORECASE)
 _OP_NAME_REGEX = re.compile(r"\bоп\s*-\s*[а-яё]+\b", re.IGNORECASE)
 _CONTEXT_REGEX = re.compile(
-    r"(?:на посту|посту|службой|служба|в районе ответственности|в р-не ответственности|в районе|в р-не)\s+"
+    r"(?:на посту|посту|службой|служба|в районе|в р-не|в районе ответственности|в р-не ответственности)\s+"
     r"(?P<unit>[^;.,]+)",
     re.IGNORECASE,
 )
+_POGK_REGEX = re.compile(
+    r"\bпогк\s*[«\"](?P<name>[^»\"]+)[»\"]\s*(?P<loc>\([^)]+\))?",
+    re.IGNORECASE,
+)
+_UNIT_GROUPS = {
+    "op": {"оп", "опк"},
+    "pz": {"пз"},
+    "pogz": {"погз"},
+    "pogo": {"пого"},
+    "pogk": {"погк", "пункт пограничного контроля", "пограничный контроль"},
+}
+_UNIT_TOKEN_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого|погк)\b", re.IGNORECASE)
+_TRAILING_VERBS_REGEX = re.compile(
+    r"\b(остановлен|остановлена|остановлены|выявлен|выявлена|выявлены|установлен|установлена|установлены)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _unit_group(text: str) -> str | None:
+    if not text:
+        return None
+    normalized = normalize_text(text)
+    for group, tokens in _UNIT_GROUPS.items():
+        if any(token in normalized for token in tokens):
+            return group
+    return None
+
+
+def _trim_unit_fragment(fragment: str) -> str:
+    trimmed = fragment.strip()
+    if not trimmed:
+        return trimmed
+    if ")" in trimmed:
+        return trimmed[: trimmed.index(")") + 1].strip()
+    trimmed = _TRAILING_VERBS_REGEX.sub("", trimmed).strip()
+    if any(dash in trimmed for dash in ("—", "–", "-")):
+        trimmed = re.split(r"\s*[—–-]\s*", trimmed, maxsplit=1)[0].strip()
+    tokens = trimmed.split()
+    if len(tokens) > 8:
+        trimmed = " ".join(tokens[:8])
+    return trimmed.strip()
 
 _cache_version = 0
 
@@ -136,8 +177,15 @@ def extract_subdivision_queries(text: str) -> list[SubdivisionQuery]:
             )
         )
 
+    for match in _POGK_REGEX.finditer(text):
+        fragment = match.group(0)
+        loc = match.group("loc") if match.group("loc") else ""
+        if loc and loc not in fragment:
+            fragment = f"{fragment} {loc}"
+        _add_query(fragment, (match.start(), match.end()))
+
     for match in _CONTEXT_REGEX.finditer(text):
-        fragment = match.group("unit")
+        fragment = _trim_unit_fragment(match.group("unit"))
         _add_query(fragment, (match.start("unit"), match.end("unit")))
 
     for match in _CODE_REGEX.finditer(text):
@@ -267,6 +315,25 @@ def _score_alias(
         and query_unit_type != alias_unit_type
     )
 
+    unit_group_query = _unit_group(query_norm)
+    unit_group_alias = _unit_group(alias_norm)
+    if unit_group_alias is None and candidate_unit_type != "UNKNOWN":
+        unit_group_alias = candidate_unit_type.lower()
+    unit_group_conflict = bool(
+        unit_group_query and unit_group_alias and unit_group_query != unit_group_alias
+    )
+    unit_group_unknown = bool(unit_group_query and unit_group_alias is None)
+    query_unit_tokens = set(_UNIT_TOKEN_REGEX.findall(query_norm))
+    alias_unit_tokens = set(_UNIT_TOKEN_REGEX.findall(alias_norm))
+    explicit_unit_missing = bool(query_unit_tokens and not (query_unit_tokens & alias_unit_tokens))
+    unit_penalty = 0.0
+    if unit_group_conflict:
+        unit_penalty -= 0.25
+    elif unit_group_unknown:
+        unit_penalty -= 0.10
+    if explicit_unit_missing:
+        unit_penalty -= 0.15
+
     containment_score, containment_hit = _containment_score(
         query_norm,
         alias_norm,
@@ -282,6 +349,12 @@ def _score_alias(
         "unit_type_conflict": unit_type_conflict if query_unit_type != "UNKNOWN" else None,
         "containment_hit": containment_hit,
         "alias_unit_type": alias_unit_type,
+        "unit_group_query": unit_group_query,
+        "unit_group_alias": unit_group_alias,
+        "unit_group_conflict": unit_group_conflict if unit_group_query else None,
+        "unit_group_unknown": unit_group_unknown if unit_group_query else None,
+        "explicit_unit_missing": explicit_unit_missing if query_unit_tokens else None,
+        "unit_penalty": unit_penalty,
     }
     return base_score, flags
 
@@ -384,10 +457,9 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
                         adjusted_score += 0.10
                     if locality_conflict:
                         adjusted_score -= 0.25
-                    if flags.get("unit_type_conflict"):
-                        adjusted_score -= 0.15
+                    adjusted_score += flags.get("unit_penalty", 0.0)
                     adjusted_score = max(0.0, min(1.0, adjusted_score))
-                    if flags.get("unit_type_conflict"):
+                    if flags.get("unit_type_conflict") or flags.get("unit_group_conflict"):
                         adjusted_score = min(adjusted_score, 0.84)
 
                     if adjusted_score > best_score:

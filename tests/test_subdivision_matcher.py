@@ -26,6 +26,20 @@ class SubdivisionMatcherTests(TestCase):
 
         self.assertIn("пз №1 с. полярное", normalized)
 
+    def test_extract_subdivision_queries_pogk_in_rayon(self):
+        text = "02.02.2026 в 10:35 в районе ПОГК «Северная» (пгт Северный) остановлен автомобиль."
+        queries = extract_subdivision_queries(text)
+
+        self.assertTrue(queries)
+        self.assertTrue(
+            any(
+                "погк" in query.normalized
+                and "северн" in query.normalized
+                and "северный" in query.normalized
+                for query in queries
+            )
+        )
+
     @override_settings(SKIP_SEMANTIC_MODEL=True)
     def test_match_subdivision_prefers_explicit_unit_code(self):
         correct = CachedSubdivision.objects.create(
@@ -160,6 +174,42 @@ class SubdivisionMatcherTests(TestCase):
         self.assertEqual(candidates[1]["name"], "ПЗ №2 (с. Васильки)")
         self.assertTrue(candidates[1]["flags"].get("unit_type_conflict"))
         self.assertTrue(candidates[1]["flags"].get("locality_conflict"))
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_match_subdivision_prefers_pogk_over_pz_when_query_has_pogk(self):
+        pogk = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПОГК «Северная» (пгт Северный)",
+            normalized_name=normalize_text("ПОГК Северная (пгт Северный)"),
+            aliases=[],
+            embedding=None,
+        )
+        pz = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПЗ №2 (с. Васильки)",
+            normalized_name=normalize_text("ПЗ №2 (с. Васильки)"),
+            aliases=[],
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=pogk,
+            alias_text="ПОГК Северная (пгт Северный)",
+            normalized_alias=normalize_text("ПОГК Северная (пгт Северный)"),
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=pz,
+            alias_text="ПЗ №2 (с. Васильки)",
+            normalized_alias=normalize_text("ПЗ №2 (с. Васильки)"),
+            embedding=None,
+        )
+        invalidate_subdivision_cache()
+
+        paragraph = "02.02.2026 в 10:35 в районе ПОГК «Северная» (пгт Северный) остановлен автомобиль."
+        candidates = match_subdivision(paragraph, top_k=2)
+
+        self.assertEqual(candidates[0]["name"], "ПОГК «Северная» (пгт Северный)")
+        self.assertNotEqual(candidates[0]["name"], "ПЗ №2 (с. Васильки)")
 
     def test_build_comments_includes_locality_mismatch(self):
         comments = analysis_views._build_comments(
