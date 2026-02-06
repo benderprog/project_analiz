@@ -101,7 +101,8 @@ def _extract_names(text: str) -> list[dict]:
     for match in extractor(text):
         name = match.fact
         full_name = " ".join(filter(None, [name.last, name.first, name.middle]))
-        year = _find_birth_year(text, match.span[1])
+        end_idx = _match_end_index(match)
+        year = _find_birth_year(text, end_idx) if end_idx is not None else None
         offenders.append(
             {
                 "full_name": full_name,
@@ -112,6 +113,25 @@ def _extract_names(text: str) -> list[dict]:
             }
         )
     return offenders
+
+
+def _match_end_index(match) -> int | None:
+    span_attr = getattr(match, "span", None)
+    if span_attr is not None:
+        sp = span_attr() if callable(span_attr) else span_attr
+        if isinstance(sp, (tuple, list)) and len(sp) == 2:
+            return int(sp[1])
+        if hasattr(sp, "stop"):
+            return int(sp.stop)
+        if hasattr(sp, "end"):
+            return int(sp.end)
+    if hasattr(match, "stop"):
+        return int(match.stop)
+    if hasattr(match, "end"):
+        return int(match.end)
+    if hasattr(match, "start") and hasattr(match, "stop"):
+        return int(match.stop)
+    return None
 
 
 def _find_birth_year(text: str, start_idx: int) -> int | None:
