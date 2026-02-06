@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 from django.utils import timezone
 
@@ -38,11 +39,19 @@ def parse_docx(file_path: str) -> list[str]:
     return paragraphs
 
 
+@lru_cache(maxsize=1)
+def _get_morph():
+    """Provide a shared MorphVocab for Natasha extractors (required in 1.6+)."""
+    from natasha import MorphVocab
+
+    return MorphVocab()
+
+
 def _extract_date(text: str) -> datetime | None:
     """Extract date/time using Natasha; return timezone-aware datetime."""
     from natasha import DatesExtractor
 
-    extractor = DatesExtractor()
+    extractor = DatesExtractor(_get_morph())
     matches = list(extractor(text))
     if not matches:
         return None
@@ -56,7 +65,7 @@ def _extract_names(text: str) -> list[dict]:
     """Extract offender names and optional birth years."""
     from natasha import NamesExtractor
 
-    extractor = NamesExtractor()
+    extractor = NamesExtractor(_get_morph())
     offenders = []
     for match in extractor(text):
         name = match.fact
