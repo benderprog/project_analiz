@@ -11,6 +11,10 @@ The recommended path keeps the Docker image small by mounting the model at
 runtime. The optional profile bakes the model into the image during build, which
 increases image size and build time.
 
+By default, the Docker images are CPU-only and do not include CUDA/NVIDIA
+libraries. A GPU-enabled build would require a separate, explicit profile and
+would significantly increase image size.
+
 ## Option 1: lightweight image + mounted model directory (recommended)
 
 Prepare the model directory on the host and run with the offline override:

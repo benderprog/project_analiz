@@ -69,6 +69,11 @@ web_tag="${tag_prefix}:web-ver-${version}"
 log "Tagging web image ${web_image_id} as ${web_tag}"
 docker tag "$web_image_id" "$web_tag"
 
+web_size_bytes="$(docker image inspect -f '{{.Size}}' "$web_tag")"
+web_size_mb="$(awk -v size="$web_size_bytes" 'BEGIN { printf "%.2f", size / 1024 / 1024 }')"
+web_size_gb="$(awk -v size="$web_size_bytes" 'BEGIN { printf "%.2f", size / 1024 / 1024 / 1024 }')"
+log "Web image size: ${web_size_mb} MB (${web_size_gb} GB)"
+
 web_tar="${output}/web_ver_${version}.tar"
 log "Saving web image to ${web_tar}"
 docker save -o "$web_tar" "$web_tag"
