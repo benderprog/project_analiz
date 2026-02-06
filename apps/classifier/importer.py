@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import Iterable
 
+from django.db import transaction
 from openpyxl import load_workbook
 
 logger = logging.getLogger(__name__)
@@ -10,8 +11,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ClassifierRow:
     event_type: str
-    event_pattern: str
+    pattern: str
     article_of_law: str
+
+
+@dataclass
+class ImportSummary:
+    created_types: int = 0
+    created_patterns: int = 0
+    updated_patterns: int = 0
+    skipped_rows: int = 0
 
 
 def _normalize_cell(value: object | None) -> str:
@@ -20,15 +29,14 @@ def _normalize_cell(value: object | None) -> str:
     return str(value).strip()
 
 
-def parse_classifier_xlsx(file_obj) -> list[ClassifierRow]:
-    """Parse classifier XLSX with fill-down rules."""
+def parse_classifier_xlsx(file_obj) -> tuple[list[ClassifierRow], int]:
+    """Parse classifier XLSX with strict 3-column format and optional type fill-down."""
     workbook = load_workbook(file_obj, data_only=True)
     sheet = workbook.active
 
     rows: list[ClassifierRow] = []
+    skipped_rows = 0
     last_event_type = ""
-    last_pattern = ""
-    last_article = ""
 
     for row in sheet.iter_rows(min_row=2, values_only=True):
         raw_event_type = _normalize_cell(row[0] if len(row) > 0 else None)
@@ -36,52 +44,75 @@ def parse_classifier_xlsx(file_obj) -> list[ClassifierRow]:
         raw_article = _normalize_cell(row[2] if len(row) > 2 else None)
 
         if not raw_event_type and not raw_pattern and not raw_article:
+            skipped_rows += 1
             continue
 
-        event_type = raw_event_type or last_event_type
-        pattern = raw_pattern or last_pattern
-        article = raw_article or last_article
-
+        event_type = raw_event_type or (last_event_type if (raw_pattern or raw_article) else "")
         if not event_type:
-            logger.debug("Skipping row without event_type after fill-down.")
+            skipped_rows += 1
             continue
 
         rows.append(
             ClassifierRow(
                 event_type=event_type,
-                event_pattern=pattern,
-                article_of_law=article,
+                pattern=raw_pattern,
+                article_of_law=raw_article,
             )
         )
         last_event_type = event_type
-        if raw_pattern:
-            last_pattern = pattern
-        if raw_article:
-            last_article = article
 
-    logger.info("Parsed %s classifier rows", len(rows))
-    return rows
+    logger.info("Parsed %s classifier rows (skipped %s)", len(rows), skipped_rows)
+    return rows, skipped_rows
 
 
 def import_classifier_rows(
     rows: Iterable[ClassifierRow],
     *,
     clear_before: bool = False,
-) -> int:
+    skipped_rows: int = 0,
+) -> ImportSummary:
     """Import classifier rows into the DB."""
-    from apps.classifier.models import EventTypeClassifier
+    from apps.classifier.models import EventType, EventTypePattern
 
-    if clear_before:
-        EventTypeClassifier.objects.all().delete()
+    summary = ImportSummary(skipped_rows=skipped_rows)
 
-    created = 0
-    for row in rows:
-        EventTypeClassifier.objects.create(
-            event_type=row.event_type,
-            event_pattern=row.event_pattern,
-            article_of_law=row.article_of_law,
-        )
-        created += 1
+    with transaction.atomic():
+        if clear_before:
+            EventType.objects.all().delete()
 
-    logger.info("Imported %s classifier rows", created)
-    return created
+        for row in rows:
+            event_type_value = row.event_type.strip()
+            event_type_obj, created = EventType.objects.get_or_create(
+                event_type=event_type_value
+            )
+            if created:
+                summary.created_types += 1
+
+            pattern_value = row.pattern.strip()
+            if not pattern_value:
+                continue
+
+            pattern_obj, created = EventTypePattern.objects.get_or_create(
+                event_type=event_type_obj,
+                pattern=pattern_value,
+                defaults={"article_of_law": row.article_of_law.strip() or None},
+            )
+            if created:
+                summary.created_patterns += 1
+                continue
+
+            if row.article_of_law.strip() and row.article_of_law.strip() != (
+                pattern_obj.article_of_law or ""
+            ):
+                pattern_obj.article_of_law = row.article_of_law.strip()
+                pattern_obj.save(update_fields=["article_of_law"])
+                summary.updated_patterns += 1
+
+    logger.info(
+        "Imported classifier rows: types=%s patterns=%s updated=%s skipped=%s",
+        summary.created_types,
+        summary.created_patterns,
+        summary.updated_patterns,
+        summary.skipped_rows,
+    )
+    return summary

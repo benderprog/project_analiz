@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 from django.urls import path
 
 from apps.classifier.importer import import_classifier_rows, parse_classifier_xlsx
-from apps.classifier.models import EventTypeClassifier
+from apps.classifier.models import EventType, EventTypePattern
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,22 @@ class ClassifierImportForm(forms.Form):
     )
 
 
-@admin.register(EventTypeClassifier)
-class EventTypeClassifierAdmin(admin.ModelAdmin):
-    list_display = ("event_type", "event_pattern", "article_of_law")
-    search_fields = ("event_type", "event_pattern", "article_of_law")
-    change_list_template = "admin/classifier/eventtypeclassifier/change_list.html"
+class EventTypePatternInline(admin.TabularInline):
+    model = EventTypePattern
+    extra = 1
+    fields = ("pattern", "article_of_law")
+
+
+@admin.register(EventType)
+class EventTypeAdmin(admin.ModelAdmin):
+    list_display = ("event_type", "patterns_count")
+    search_fields = ("event_type", "patterns__pattern")
+    inlines = [EventTypePatternInline]
+    change_list_template = "admin/classifier/eventtype/change_list.html"
+
+    @admin.display(description="Patterns")
+    def patterns_count(self, obj):
+        return obj.patterns.count()
 
     def get_urls(self):
         urls = super().get_urls()
@@ -39,13 +50,26 @@ class EventTypeClassifierAdmin(admin.ModelAdmin):
             if form.is_valid():
                 xlsx_file = form.cleaned_data["xlsx_file"]
                 clear_before = form.cleaned_data["clear_before"]
-                rows = parse_classifier_xlsx(xlsx_file)
-                created = import_classifier_rows(rows, clear_before=clear_before)
+                rows, skipped_rows = parse_classifier_xlsx(xlsx_file)
+                summary = import_classifier_rows(
+                    rows,
+                    clear_before=clear_before,
+                    skipped_rows=skipped_rows,
+                )
                 messages.success(
                     request,
-                    f"Импорт завершен: создано {created} строк(и).",
+                    (
+                        "Импорт завершен: "
+                        f"создано типов {summary.created_types}, "
+                        f"паттернов {summary.created_patterns}, "
+                        f"обновлено статей {summary.updated_patterns}, "
+                        f"пропущено строк {summary.skipped_rows}."
+                    ),
                 )
-                logger.info("Classifier import completed: %s rows", created)
+                logger.info(
+                    "Classifier import completed: %s",
+                    summary,
+                )
                 return redirect("..")
         else:
             form = ClassifierImportForm()
