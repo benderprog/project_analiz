@@ -13,6 +13,7 @@ from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
 from apps.analysis_app.utils.dt_display import format_local_naive
+from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.portaldb import repository
 from apps.portaldb.models import Event
 
@@ -505,7 +506,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
     if not best_flags.get("offenders_ok"):
         diffs["offenders"] = {
-            "expected": attributes.offenders,
+            "expected": [offender_to_json(offender) for offender in attributes.offenders],
             "actual": [
                 {
                     "full_name": " ".join(
@@ -519,6 +520,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                         )
                     ),
                     "birth_year": offender.date_of_birth.year,
+                    "birth_date": date_to_str(offender.date_of_birth),
                 }
                 for offender in best_event.offenders.all()
             ],
@@ -537,6 +539,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 )
             ),
             "birth_year": offender.date_of_birth.year if offender.date_of_birth else None,
+            "birth_date": date_to_str(offender.date_of_birth),
         }
         for offender in best_event.offenders.all()
     ]
