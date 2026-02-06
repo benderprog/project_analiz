@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -7,11 +8,13 @@ from difflib import SequenceMatcher
 
 from django.utils import timezone
 
-from apps.classifier.models import EventTypeClassifier
+from apps.classifier.models import EventTypePattern
 from apps.portaldb import repository
 from apps.portaldb.models import Event
 
 from .semantic import get_sentence_model
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -132,15 +135,41 @@ def _match_offenders(extracted: list[dict], event: Event) -> float:
     return sum(scores) / len(scores)
 
 
+def _looks_like_regex(pattern: str) -> bool:
+    return any(char in pattern for char in ".^$*+?{}[]\\|()")
+
+
 def _classify_event_type(text: str) -> tuple[str | None, str | None]:
     lowered = text.lower()
-    for row in EventTypeClassifier.objects.all():
-        pattern = row.event_pattern.lower().strip()
-        if pattern and re.search(pattern, lowered):
-            return row.event_type, row.article_of_law
-        if pattern and pattern in lowered:
-            return row.event_type, row.article_of_law
-    return None, None
+    best_match = None
+    best_length = -1
+    patterns = EventTypePattern.objects.select_related("event_type")
+
+    for row in patterns:
+        pattern = row.pattern.strip()
+        if not pattern:
+            continue
+
+        matched = False
+        if _looks_like_regex(pattern):
+            try:
+                matched = re.search(pattern, lowered, re.IGNORECASE) is not None
+            except re.error:
+                logger.warning("Invalid regex pattern skipped: %s", pattern)
+                matched = False
+        else:
+            matched = pattern.lower() in lowered
+
+        if matched:
+            match_length = len(pattern)
+            if match_length > best_length:
+                best_match = row
+                best_length = match_length
+
+    if not best_match:
+        return None, None
+
+    return best_match.event_type.event_type, best_match.article_of_law
 
 
 def match_event(attributes: ExtractedAttributes, text: str) -> dict:
