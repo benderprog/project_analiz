@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  web:
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      WARMUP_ON_START: "1"
+      SEMANTIC_MODEL_PATH: /opt/models/paraphrase-multilingual-MiniLM-L12-v2
+    volumes:
+      - ./models:/opt/models:ro
