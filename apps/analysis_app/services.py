@@ -14,6 +14,7 @@ from apps.portaldb import repository
 from apps.portaldb.models import Event
 
 from .semantic import get_sentence_model
+from .utils.datetime_normalize import to_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def _extract_date(text: str) -> datetime | None:
     matches = list(extractor(text))
     if not matches:
         return None
-    dt = matches[0].fact.as_datetime()
+    dt = to_datetime(matches[0].fact)
     if dt is None:
         return None
     return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
@@ -112,7 +113,11 @@ def extract_attributes(text: str) -> ExtractedAttributes:
 
 
 def _offender_similarity(text_a: str, text_b: str) -> float:
-    model = get_sentence_model()
+    try:
+        model = get_sentence_model()
+    except RuntimeError as exc:
+        logger.info("Semantic model unavailable, falling back to sequence match: %s", exc)
+        model = None
     if model:
         embeddings = model.encode([text_a, text_b])
         similarity = float(
