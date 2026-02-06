@@ -7,43 +7,290 @@
   <p>Статус: {{ run.status }}</p>
 </section>
 
-{% for paragraph in paragraphs %}
-  <section class="result">
-    <div class="result-left">
-      <h3>Событие {{ paragraph.idx }}</h3>
-      <p>{{ paragraph.text }}</p>
-      <h4>Извлеченные атрибуты</h4>
+{% if events %}
+  <div class="analysis-layout">
+    <aside class="analysis-list">
+      <h3>События</h3>
       <ul>
-        <li>Дата/время: {{ paragraph.result.extracted_attributes.date_time|default:"—" }}</li>
-        <li>Подразделение: {{ paragraph.result.extracted_attributes.subdivision_name|default:"—" }}</li>
-        <li>Нарушители:</li>
-        <ul>
-          {% for offender in paragraph.result.extracted_attributes.offenders %}
-            <li>{{ offender.full_name }} ({{ offender.birth_year|default:"—" }})</li>
+        {% for event in events %}
+          <li>
+            <a
+              class="event-item{% if selected_event and event.idx == selected_event.idx %} is-active{% endif %}"
+              href="?event={{ event.idx }}"
+              data-index="{{ event.idx }}"
+            >
+              <span class="event-number">#{{ event.idx }}</span>
+              <span class="event-preview">{{ event.preview }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </aside>
+
+    <section class="analysis-detail">
+      <div class="detail-header">
+        <h3 id="event-title">Событие {{ selected_event.idx }}</h3>
+        <p class="detail-score">
+          Совпадение: {{ selected_event.match.score_percent|default:"0" }}%
+        </p>
+      </div>
+
+      <div class="event-text" id="event-text">
+        {{ selected_event.highlighted_html|safe }}
+      </div>
+
+      <div class="detail-block">
+        <h4>Основные атрибуты</h4>
+        <table class="attributes-table">
+          <thead>
+            <tr>
+              <th>Атрибут</th>
+              <th>Извлечение</th>
+              <th>Статус</th>
+              <th>В БД</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-row="timestamp">
+              <td>Дата/время</td>
+              <td id="attr-timestamp">{{ selected_event.extracted.date_time|default:"—" }}</td>
+              <td>
+                <span class="badge badge-{{ selected_event.status.timestamp }}" data-badge="timestamp">
+                  {% if selected_event.status.timestamp == "green" %}
+                    ✓
+                  {% elif selected_event.status.timestamp == "yellow" %}
+                    !
+                  {% else %}
+                    ✕
+                  {% endif %}
+                </span>
+                <span class="attr-metric" id="metric-timestamp">
+                  {% if selected_event.match.time_delta_minutes is not None %}
+                    Δ {{ selected_event.match.time_delta_minutes }} мин
+                  {% else %}
+                    —
+                  {% endif %}
+                </span>
+              </td>
+              <td id="portal-timestamp">{{ selected_event.portal.timestamp|default:"—" }}</td>
+            </tr>
+            <tr data-row="subdivision">
+              <td>Подразделение</td>
+              <td id="attr-subdivision">{{ selected_event.extracted.subdivision_name|default:"—" }}</td>
+              <td>
+                <span class="badge badge-{{ selected_event.status.subdivision }}" data-badge="subdivision">
+                  {% if selected_event.status.subdivision == "green" %}
+                    ✓
+                  {% elif selected_event.status.subdivision == "yellow" %}
+                    !
+                  {% else %}
+                    ✕
+                  {% endif %}
+                </span>
+                <span class="attr-metric" id="metric-subdivision">
+                  {% if selected_event.match.subdivision_match_percent %}
+                    {{ selected_event.match.subdivision_match_percent }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </span>
+              </td>
+              <td id="portal-subdivision">{{ selected_event.portal.subdivision_name|default:"—" }}</td>
+            </tr>
+            <tr data-row="offenders">
+              <td>Нарушители</td>
+              <td id="attr-offenders">
+                {% if selected_event.extracted.offenders %}
+                  <ul>
+                    {% for offender in selected_event.extracted.offenders %}
+                      <li>{{ offender }}</li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                <span class="badge badge-{{ selected_event.status.offenders }}" data-badge="offenders">
+                  {% if selected_event.status.offenders == "green" %}
+                    ✓
+                  {% elif selected_event.status.offenders == "yellow" %}
+                    !
+                  {% else %}
+                    ✕
+                  {% endif %}
+                </span>
+                <span class="attr-metric" id="metric-offenders">
+                  {% if selected_event.match.offenders_score_percent is not None %}
+                    {{ selected_event.match.offenders_score_percent }}%
+                    ({{
+                      selected_event.match.offenders_counts.matched|default:"0"
+                    }}/{{ selected_event.match.offenders_counts.portal|default:"0" }})
+                  {% else %}
+                    —
+                  {% endif %}
+                </span>
+              </td>
+              <td id="portal-offenders">
+                {% if selected_event.portal.offenders %}
+                  <ul>
+                    {% for offender in selected_event.portal.offenders %}
+                      <li>{{ offender }}</li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="detail-block">
+        <h4>Тип события</h4>
+        <p id="predicted-type">
+          Определено:
+          {{ selected_event.predicted.event_type|default:"не удалось" }}
+          {% if selected_event.predicted.article_of_law %}
+            ({{ selected_event.predicted.article_of_law }})
+          {% endif %}
+        </p>
+        <p id="portal-type">
+          В БД:
+          {{ selected_event.portal.event_type|default:"не задан" }}
+          {% if selected_event.portal.article_of_law %}
+            ({{ selected_event.portal.article_of_law }})
+          {% endif %}
+        </p>
+      </div>
+
+      <div class="detail-block">
+        <h4>Комментарии</h4>
+        <ul id="comments-list">
+          {% for comment in selected_event.comments %}
+            <li>{{ comment }}</li>
           {% empty %}
             <li>—</li>
           {% endfor %}
         </ul>
-      </ul>
-    </div>
-    <div class="result-right">
-      <h4>Сопоставление с БД</h4>
-      {% if paragraph.result.match_result.matched %}
-        <p>Event ID: {{ paragraph.result.match_result.matched_event_id }}</p>
-        <p>Совпадение: {{ paragraph.result.match_result.score_percent }}%</p>
-        <p>Дельта времени: {{ paragraph.result.match_result.time_delta_minutes }} мин</p>
-        <h5>Расхождения</h5>
-        <ul>
-          {% for key, diff in paragraph.result.match_result.diffs.items %}
-            <li>{{ key }}: {{ diff }}</li>
-          {% empty %}
-            <li>Нет расхождений</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p>{{ paragraph.result.match_result.diffs.message }}</p>
-      {% endif %}
-    </div>
+      </div>
+    </section>
+  </div>
+
+  {{ events|json_script:"events-data" }}
+  <script>
+    const events = JSON.parse(document.getElementById("events-data").textContent);
+    const badgeIcons = { green: "✓", yellow: "!", red: "✕" };
+    const listItems = document.querySelectorAll(".event-item");
+
+    const dom = {
+      title: document.getElementById("event-title"),
+      text: document.getElementById("event-text"),
+      score: document.querySelector(".detail-score"),
+      attrTimestamp: document.getElementById("attr-timestamp"),
+      attrSubdivision: document.getElementById("attr-subdivision"),
+      attrOffenders: document.getElementById("attr-offenders"),
+      portalTimestamp: document.getElementById("portal-timestamp"),
+      portalSubdivision: document.getElementById("portal-subdivision"),
+      portalOffenders: document.getElementById("portal-offenders"),
+      metricTimestamp: document.getElementById("metric-timestamp"),
+      metricSubdivision: document.getElementById("metric-subdivision"),
+      metricOffenders: document.getElementById("metric-offenders"),
+      predictedType: document.getElementById("predicted-type"),
+      portalType: document.getElementById("portal-type"),
+      commentsList: document.getElementById("comments-list"),
+      badges: {
+        timestamp: document.querySelector('[data-badge="timestamp"]'),
+        subdivision: document.querySelector('[data-badge="subdivision"]'),
+        offenders: document.querySelector('[data-badge="offenders"]'),
+      },
+    };
+
+    const escapeHtml = (value) =>
+      String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+
+    const renderList = (items) => {
+      if (!items || !items.length) {
+        return "—";
+      }
+      return `<ul>${items
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("")}</ul>`;
+    };
+
+    const renderListItems = (items) => {
+      if (!items || !items.length) {
+        return "<li>—</li>";
+      }
+      return items.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    };
+
+    const renderEvent = (event) => {
+      dom.title.textContent = `Событие ${event.idx}`;
+      dom.text.innerHTML = event.highlighted_html;
+      dom.score.textContent = `Совпадение: ${event.match.score_percent ?? 0}%`;
+      dom.attrTimestamp.textContent = event.extracted.date_time || "—";
+      dom.attrSubdivision.textContent = event.extracted.subdivision_name || "—";
+      dom.attrOffenders.innerHTML = renderList(event.extracted.offenders);
+      dom.portalTimestamp.textContent = event.portal.timestamp || "—";
+      dom.portalSubdivision.textContent = event.portal.subdivision_name || "—";
+      dom.portalOffenders.innerHTML = renderList(event.portal.offenders);
+
+      const delta = event.match.time_delta_minutes;
+      dom.metricTimestamp.textContent =
+        delta === null || delta === undefined ? "—" : `Δ ${delta} мин`;
+      dom.metricSubdivision.textContent = event.match.subdivision_match_percent
+        ? `${event.match.subdivision_match_percent}%`
+        : "—";
+      const offendersCounts = event.match.offenders_counts || {};
+      dom.metricOffenders.textContent =
+        event.match.offenders_score_percent !== null &&
+        event.match.offenders_score_percent !== undefined
+          ? `${event.match.offenders_score_percent}% (${offendersCounts.matched ?? 0}/${
+              offendersCounts.portal ?? 0
+            })`
+          : "—";
+
+      ["timestamp", "subdivision", "offenders"].forEach((key) => {
+        const badge = dom.badges[key];
+        const status = event.status[key];
+        badge.className = `badge badge-${status}`;
+        badge.textContent = badgeIcons[status] || "✕";
+      });
+
+      dom.predictedType.textContent = `Определено: ${
+        event.predicted.event_type || "не удалось"
+      }${event.predicted.article_of_law ? ` (${event.predicted.article_of_law})` : ""}`;
+      dom.portalType.textContent = `В БД: ${
+        event.portal.event_type || "не задан"
+      }${event.portal.article_of_law ? ` (${event.portal.article_of_law})` : ""}`;
+
+      dom.commentsList.innerHTML = renderListItems(event.comments);
+    };
+
+    listItems.forEach((item) => {
+      item.addEventListener("click", (event) => {
+        event.preventDefault();
+        const index = Number(item.dataset.index);
+        const selected = events.find((entry) => entry.idx === index);
+        if (!selected) {
+          return;
+        }
+        listItems.forEach((entry) => entry.classList.remove("is-active"));
+        item.classList.add("is-active");
+        renderEvent(selected);
+      });
+    });
+  </script>
+{% else %}
+  <section class="card">
+    <p>События не найдены.</p>
   </section>
-{% endfor %}
+{% endif %}
 {% endblock %}

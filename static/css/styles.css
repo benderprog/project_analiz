@@ -49,6 +49,171 @@ body {
   border-radius: 6px;
 }
 
+.analysis-layout {
+  display: flex;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.analysis-list {
+  width: 320px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+
+.analysis-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.analysis-list li + li {
+  margin-top: 8px;
+}
+
+.event-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid transparent;
+  background: #f9fafb;
+}
+
+.event-item.is-active {
+  border-color: #0b5cad;
+  background: #e8f2ff;
+}
+
+.event-number {
+  font-weight: 600;
+  color: #0b5cad;
+}
+
+.event-preview {
+  font-size: 0.9rem;
+  color: #3b3b3b;
+}
+
+.analysis-detail {
+  flex: 1;
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.detail-score {
+  margin: 0;
+  font-weight: 600;
+  color: #0b5cad;
+}
+
+.event-text {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 16px;
+  line-height: 1.6;
+}
+
+.detail-block {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.attributes-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.attributes-table th,
+.attributes-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e1e5ea;
+  vertical-align: top;
+}
+
+.attributes-table th {
+  text-align: left;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.attributes-table ul {
+  padding-left: 18px;
+  margin: 0;
+}
+
+.attr-metric {
+  margin-left: 8px;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: #fff;
+}
+
+.badge-green {
+  background: #2e7d32;
+}
+
+.badge-yellow {
+  background: #f9a825;
+}
+
+.badge-red {
+  background: #c62828;
+}
+
+.hl {
+  padding: 0 2px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.hl-green {
+  background: #d7f4dc;
+  border-color: #8dd69c;
+}
+
+.hl-yellow {
+  background: #fff4cc;
+  border-color: #f0d37a;
+}
+
+.hl-red {
+  background: #fde2e2;
+  border-color: #f2a7a7;
+}
+
 .primary {
   background: #0b5cad;
   color: #fff;
