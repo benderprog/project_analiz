@@ -71,7 +71,7 @@ class CachedSubdivision(models.Model):
     name = models.CharField(max_length=255)
     pu = models.ForeignKey(CachedPU, null=True, blank=True, on_delete=models.SET_NULL)
     normalized_name = models.TextField()
-    aliases = models.JSONField(blank=True, null=True)
+    legacy_aliases = models.JSONField(blank=True, null=True)
     embedding = models.JSONField(blank=True, null=True)
     embedding_source_hash = models.CharField(max_length=64, blank=True, default="")
     embedding_updated_at = models.DateTimeField(null=True)
@@ -88,7 +88,7 @@ class CachedSubdivision(models.Model):
         update_fields = kwargs.get("update_fields")
         if self.name:
             self.normalized_name = normalize_subdivision_name(self.name)
-        new_hash = build_embedding_source_hash(self.normalized_name, self.aliases)
+        new_hash = build_embedding_source_hash(self.normalized_name, self.legacy_aliases)
         existing_hash = None
         if self.pk:
             existing_hash = (
