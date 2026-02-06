@@ -41,10 +41,16 @@ def parse_classifier_xlsx(file_obj) -> tuple[list[ClassifierRow], int]:
     skipped_rows = 0
     last_event_type = ""
 
-    for row_idx in range(2, sheet.max_row + 1):
-        raw_event_type = _normalize_cell(sheet.cell(row=row_idx, column=1).value)
-        raw_pattern = _normalize_cell(sheet.cell(row=row_idx, column=2).value)
-        raw_article = _normalize_cell(sheet.cell(row=row_idx, column=3).value)
+    for raw_event_type, raw_pattern, raw_article in sheet.iter_rows(
+        min_row=2,
+        max_row=sheet.max_row,
+        min_col=1,
+        max_col=3,
+        values_only=True,
+    ):
+        raw_event_type = _normalize_cell(raw_event_type)
+        raw_pattern = _normalize_cell(raw_pattern)
+        raw_article = _normalize_cell(raw_article)
 
         if not raw_event_type and not raw_pattern and not raw_article:
             skipped_rows += 1
