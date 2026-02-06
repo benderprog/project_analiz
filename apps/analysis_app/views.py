@@ -13,6 +13,10 @@ from apps.analysis_app.services import (
     match_event,
     parse_docx,
 )
+from apps.analysis_app.subdivision_matcher import (
+    SUBDIVISION_GREEN_THRESHOLD,
+    SUBDIVISION_YELLOW_THRESHOLD,
+)
 from apps.analysis_app.utils.dt_display import format_local_naive
 
 
@@ -38,10 +42,18 @@ def _status_for_timestamp(match_result: dict) -> str:
 
 
 def _status_for_subdivision(match_result: dict) -> str:
-    if not match_result.get("matched"):
+    score = match_result.get("subdivision_match_percent")
+    if score is None:
         return "red"
-    diffs = match_result.get("diffs", {})
-    return "yellow" if "subdivision" in diffs else "green"
+    if match_result.get("subdivision_locality_mismatch") or match_result.get(
+        "subdivision_unit_type_conflict"
+    ):
+        return "yellow" if score >= SUBDIVISION_YELLOW_THRESHOLD * 100 else "red"
+    if score >= SUBDIVISION_GREEN_THRESHOLD * 100:
+        return "green"
+    if score >= SUBDIVISION_YELLOW_THRESHOLD * 100:
+        return "yellow"
+    return "red"
 
 
 def _status_for_offenders(match_result: dict) -> str:
@@ -60,8 +72,7 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
     if date_span:
         spans.append((date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}"))
 
-    subdivision = extracted.get("subdivision_name")
-    subdivision_span = _find_case_insensitive_span(text, subdivision) if subdivision else None
+    subdivision_span = extracted.get("subdivision_span")
     if subdivision_span:
         spans.append(
             (
@@ -70,6 +81,17 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
                 f"hl-{_status_for_subdivision(match_result)}",
             )
         )
+    else:
+        subdivision = extracted.get("subdivision_name")
+        subdivision_span = _find_case_insensitive_span(text, subdivision) if subdivision else None
+        if subdivision_span:
+            spans.append(
+                (
+                    subdivision_span[0],
+                    subdivision_span[1],
+                    f"hl-{_status_for_subdivision(match_result)}",
+                )
+            )
 
     offenders = extracted.get("offenders") or []
     offender_status = f"hl-{_status_for_offenders(match_result)}"
@@ -82,6 +104,28 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
     return highlight_text(text, spans)
 
 
+def _format_locality_label(locality: dict | None) -> str:
+    if not locality:
+        return "—"
+    name = locality.get("name")
+    if not name:
+        return "—"
+    locality_type = locality.get("type")
+    display_name = str(name).replace("-", " ").title()
+    if locality_type:
+        return f"{locality_type}. {display_name}"
+    return display_name
+
+
+def _locality_mismatch_comment(match_result: dict) -> str:
+    query_locality = _format_locality_label(match_result.get("subdivision_locality_query"))
+    candidate_locality = _format_locality_label(match_result.get("subdivision_locality_candidate"))
+    return (
+        "Населённый пункт не совпадает: "
+        f"в тексте '({query_locality})', в БД '({candidate_locality})'."
+    )
+
+
 def _build_comments(match_result: dict) -> list[str]:
     comments = []
     if not match_result.get("matched"):
@@ -89,6 +133,8 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append(message)
         if match_result.get("date_time_present") and not match_result.get("time_found"):
             comments.append("Не определилось время (использована только дата).")
+        if match_result.get("subdivision_locality_mismatch"):
+            comments.append(_locality_mismatch_comment(match_result))
         return comments
 
     diffs = match_result.get("diffs", {})
@@ -96,6 +142,8 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Расхождений не обнаружено.")
     if "subdivision" in diffs:
         comments.append("Подразделение не совпадает с БД.")
+    if match_result.get("subdivision_locality_mismatch"):
+        comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:
         comments.append("Нарушители отличаются от данных БД.")
     if "event_type" in diffs:
@@ -130,6 +178,24 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         portal_dt
     )
 
+    subdivision_candidates = extracted.get("subdivision_candidates") or []
+    formatted_candidates = []
+    for candidate in subdivision_candidates:
+        formatted_candidates.append(
+            {
+                "portal_subdivision_id": candidate.get("portal_subdivision_id"),
+                "name": candidate.get("name"),
+                "score": round(candidate.get("score", 0) * 100, 2)
+                if candidate.get("score") is not None
+                else None,
+                "score_percent": candidate.get("score_percent"),
+                "flags": candidate.get("flags"),
+                "query_locality": candidate.get("query_locality"),
+                "candidate_locality": candidate.get("candidate_locality"),
+                "locality_mismatch": candidate.get("locality_mismatch"),
+            }
+        )
+
     return {
         "idx": paragraph.idx,
         "preview": preview,
@@ -140,6 +206,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         "extracted": {
             "date_time": extracted_timestamp_display,
             "subdivision_name": extracted.get("subdivision_name"),
+            "subdivision_candidates": formatted_candidates,
             "offenders": _format_offenders(extracted.get("offenders") or []),
         },
         "match": {
@@ -198,6 +265,8 @@ class UploadView(View):
                         "time_found": attributes.time_found,
                         "subdivision_id": attributes.subdivision_id,
                         "subdivision_name": attributes.subdivision_name,
+                        "subdivision_candidates": attributes.subdivision_candidates,
+                        "subdivision_span": attributes.subdivision_span,
                         "offenders": attributes.offenders,
                     },
                     match_result=match_result,

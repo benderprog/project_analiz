@@ -2,6 +2,14 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
+
+from apps.analysis_app.semantic import get_sentence_model
+from apps.analysis_app.subdivision_utils import (
+    build_embedding_source_hash,
+    normalize_subdivision_name,
+    to_py_floats,
+)
 
 
 class AnalysisRun(models.Model):
@@ -40,3 +48,104 @@ class AnalysisResult(models.Model):
 
     def __str__(self) -> str:
         return f"Result for {self.paragraph_id}"
+
+
+class CachedPU(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    portal_pu_id = models.UUIDField(unique=True)
+    short_name = models.CharField(max_length=255)
+    full_name = models.CharField(max_length=255)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cached PU"
+        verbose_name_plural = "Cached PUs"
+
+    def __str__(self) -> str:
+        return self.short_name or self.full_name
+
+
+class CachedSubdivision(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    portal_subdivision_id = models.UUIDField(unique=True)
+    name = models.CharField(max_length=255)
+    pu = models.ForeignKey(CachedPU, null=True, blank=True, on_delete=models.SET_NULL)
+    normalized_name = models.TextField()
+    legacy_aliases = models.JSONField(blank=True, null=True)
+    embedding = models.JSONField(blank=True, null=True)
+    embedding_source_hash = models.CharField(max_length=64, blank=True, default="")
+    embedding_updated_at = models.DateTimeField(null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cached Subdivision"
+        verbose_name_plural = "Cached Subdivisions"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def save(self, *args, **kwargs) -> None:
+        update_fields = kwargs.get("update_fields")
+        if self.name:
+            self.normalized_name = normalize_subdivision_name(self.name)
+        new_hash = build_embedding_source_hash(self.normalized_name, self.legacy_aliases)
+        existing_hash = None
+        if self.pk:
+            existing_hash = (
+                CachedSubdivision.objects.filter(pk=self.pk)
+                .values_list("embedding_source_hash", flat=True)
+                .first()
+            )
+
+        should_rebuild = (
+            self._state.adding
+            or self.embedding is None
+            or (existing_hash is not None and existing_hash != new_hash)
+        )
+        self.embedding_source_hash = new_hash
+
+        if should_rebuild and settings.SKIP_SEMANTIC_MODEL:
+            self.embedding = None
+            self.embedding_updated_at = None
+        elif should_rebuild:
+            try:
+                model = get_sentence_model()
+            except RuntimeError:
+                model = None
+            if model:
+                embedding = model.encode([self.normalized_name])[0]
+                self.embedding = to_py_floats(embedding)
+                self.embedding_updated_at = timezone.now()
+
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            update_fields.update({"normalized_name", "embedding_source_hash", "updated_at"})
+            if should_rebuild:
+                update_fields.update({"embedding", "embedding_updated_at"})
+            kwargs["update_fields"] = update_fields
+
+        super().save(*args, **kwargs)
+
+
+class CachedSubdivisionAlias(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subdivision = models.ForeignKey(
+        CachedSubdivision, on_delete=models.CASCADE, related_name="aliases"
+    )
+    alias_text = models.TextField()
+    normalized_alias = models.TextField(db_index=True)
+    embedding = models.JSONField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cached Subdivision Alias"
+        verbose_name_plural = "Cached Subdivision Aliases"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["subdivision", "normalized_alias"],
+                name="uniq_cached_subdivision_alias",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return self.alias_text

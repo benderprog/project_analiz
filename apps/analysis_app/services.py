@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -17,6 +17,10 @@ from apps.portaldb import repository
 from apps.portaldb.models import Event
 
 from .semantic import get_sentence_model
+from .subdivision_matcher import (
+    SUBDIVISION_MATCH_THRESHOLD,
+    match_subdivision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,8 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
+    subdivision_candidates: list[dict] = field(default_factory=list)
+    subdivision_span: list[int] | None = None
 
 
 def parse_docx(file_path: str) -> list[str]:
@@ -283,26 +289,29 @@ def highlight_text(text: str, spans: list[tuple[int, int, str]]) -> SafeString:
     return mark_safe("".join(parts))
 
 
-def _detect_subdivision(text: str) -> tuple[str | None, str | None]:
-    subdivisions = list(repository.list_subdivisions())
-    lowered = text.lower()
-    for subdivision in subdivisions:
-        if subdivision.name.lower() in lowered:
-            return str(subdivision.subdivision_id), subdivision.name
-    return None, None
-
-
 def extract_attributes(text: str) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
     offenders = _extract_names(text)
-    subdivision_id, subdivision_name = _detect_subdivision(text)
+    subdivision_candidates = match_subdivision(text, top_k=5)
+    best_candidate = subdivision_candidates[0] if subdivision_candidates else None
+    if best_candidate and best_candidate["score"] >= SUBDIVISION_MATCH_THRESHOLD:
+        subdivision_id = best_candidate["portal_subdivision_id"]
+        subdivision_name = best_candidate["name"]
+    else:
+        subdivision_id = None
+        subdivision_name = None
+    subdivision_span = None
+    if best_candidate and best_candidate.get("query_span"):
+        subdivision_span = list(best_candidate["query_span"])
     return ExtractedAttributes(
         date_time=date_time,
         time_found=time_found,
         subdivision_id=subdivision_id,
         offenders=offenders,
         subdivision_name=subdivision_name,
+        subdivision_candidates=subdivision_candidates,
+        subdivision_span=subdivision_span,
     )
 
 
@@ -385,6 +394,12 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 
 def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     """Match extracted attributes to portal events and build comparison result."""
+    subdivision_confidence_percent = 0.0
+    best_candidate = attributes.subdivision_candidates[0] if attributes.subdivision_candidates else None
+    if attributes.subdivision_candidates:
+        subdivision_confidence_percent = round(
+            attributes.subdivision_candidates[0]["score"] * 100, 2
+        )
     candidates = []
     if attributes.date_time:
         candidates = list(repository.find_close_events_by_date(attributes.date_time))
@@ -453,6 +468,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             }
 
     if not best_event:
+        unit_type_conflict = bool(
+            best_candidate.get("flags", {}).get("unit_type_conflict") if best_candidate else False
+        )
         return {
             "matched": False,
             "score_percent": 0,
@@ -463,9 +481,17 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "portal": 0,
                 "matched": 0,
             },
-            "subdivision_match_percent": 0,
+            "subdivision_match_percent": subdivision_confidence_percent,
             "time_found": attributes.time_found,
             "date_time_present": bool(attributes.date_time),
+            "subdivision_locality_query": best_candidate.get("query_locality") if best_candidate else None,
+            "subdivision_locality_candidate": best_candidate.get("candidate_locality")
+            if best_candidate
+            else None,
+            "subdivision_locality_mismatch": bool(
+                best_candidate.get("locality_mismatch") if best_candidate else False
+            ),
+            "subdivision_unit_type_conflict": unit_type_conflict,
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
@@ -527,16 +553,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
         for offender in best_event.offenders.all()
     ]
-    subdivision_match_percent = 0.0
-    if attributes.subdivision_name and best_event.find_subdivision_unit:
-        subdivision_match_percent = (
-            SequenceMatcher(
-                None,
-                attributes.subdivision_name.lower(),
-                best_event.find_subdivision_unit.name.lower(),
-            ).ratio()
-            * 100
-        )
+    subdivision_match_percent = subdivision_confidence_percent
+    unit_type_conflict = bool(
+        best_candidate.get("flags", {}).get("unit_type_conflict") if best_candidate else False
+    )
 
     return {
         "matched": True,
@@ -554,6 +574,14 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_match_percent": round(subdivision_match_percent, 2),
         "time_found": attributes.time_found,
         "date_time_present": bool(attributes.date_time),
+        "subdivision_locality_query": best_candidate.get("query_locality") if best_candidate else None,
+        "subdivision_locality_candidate": best_candidate.get("candidate_locality")
+        if best_candidate
+        else None,
+        "subdivision_locality_mismatch": bool(
+            best_candidate.get("locality_mismatch") if best_candidate else False
+        ),
+        "subdivision_unit_type_conflict": unit_type_conflict,
         "portal": {
             "timestamp": format_local_naive(best_event.date_detection),
             "subdivision_name": best_event.find_subdivision_unit.name
