@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils.dateparse import parse_datetime
 from django.views import View
 
 from apps.analysis_app.forms import UploadDocxForm
@@ -12,6 +13,7 @@ from apps.analysis_app.services import (
     match_event,
     parse_docx,
 )
+from apps.analysis_app.utils.dt_display import format_local_naive
 
 
 def _format_offenders(offenders: list[dict]) -> list[str]:
@@ -119,14 +121,24 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     preview = text[:80] + ("…" if len(text) > 80 else "")
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}
+    extracted_dt = parse_datetime(extracted.get("date_time") or "")
+    portal_dt = parse_datetime(portal.get("timestamp") or "")
+    extracted_timestamp_display = match_result.get(
+        "extracted_timestamp_display"
+    ) or format_local_naive(extracted_dt)
+    portal_timestamp_display = match_result.get("portal_timestamp_display") or format_local_naive(
+        portal_dt
+    )
 
     return {
         "idx": paragraph.idx,
         "preview": preview,
         "full_text": text,
         "highlighted_html": _build_highlighted_html(text, extracted, match_result),
+        "extracted_timestamp_display": extracted_timestamp_display,
+        "portal_timestamp_display": portal_timestamp_display,
         "extracted": {
-            "date_time": extracted.get("date_time"),
+            "date_time": extracted_timestamp_display,
             "subdivision_name": extracted.get("subdivision_name"),
             "offenders": _format_offenders(extracted.get("offenders") or []),
         },
@@ -139,7 +151,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "subdivision_match_percent": match_result.get("subdivision_match_percent"),
         },
         "portal": {
-            "timestamp": portal.get("timestamp"),
+            "timestamp": portal_timestamp_display,
             "subdivision_name": portal.get("subdivision_name"),
             "offenders": _format_offenders(portal.get("offenders") or []),
             "event_type": portal.get("event_type"),
@@ -182,9 +194,7 @@ class UploadView(View):
                 AnalysisResult.objects.create(
                     paragraph=paragraph,
                     extracted_attributes={
-                        "date_time": attributes.date_time.isoformat()
-                        if attributes.date_time
-                        else None,
+                        "date_time": format_local_naive(attributes.date_time),
                         "time_found": attributes.time_found,
                         "subdivision_id": attributes.subdivision_id,
                         "subdivision_name": attributes.subdivision_name,

@@ -7,11 +7,13 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from openpyxl import load_workbook
 from docx import Document
 
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
+from apps.analysis_app.utils.dt_display import format_local_naive
 
 PORTAL_DB_ALIAS = "portal"
 DEFAULT_XLSX = "subdivizion_primer.xlsx"
@@ -275,6 +277,7 @@ class Command(BaseCommand):
         dry_run: bool,
     ) -> dict[str, object]:
         inserted_events: list[int] = []
+        inserted_event_displays: list[str] = []
         offender_count = 0
         skipped_missing_subdivision: list[int] = []
 
@@ -287,6 +290,11 @@ class Command(BaseCommand):
             if not event_datetime:
                 continue
             event_datetime += timedelta(minutes=scenario.time_shift_minutes)
+            if timezone.is_naive(event_datetime) and settings.USE_TZ:
+                event_datetime = timezone.make_aware(
+                    event_datetime, timezone.get_current_timezone()
+                )
+            event_display = format_local_naive(event_datetime)
 
             subdivision = self._match_subdivision(text, subdivision_candidates)
             if subdivision is None:
@@ -314,9 +322,12 @@ class Command(BaseCommand):
 
             inserted_events.append(index)
             offender_count += len(offenders)
+            if event_display:
+                inserted_event_displays.append(f"#{index} {event_display}")
 
         return {
             "inserted_events": inserted_events,
+            "inserted_event_displays": inserted_event_displays,
             "offenders_inserted": offender_count,
             "skipped_missing_subdivision": skipped_missing_subdivision,
         }
@@ -409,6 +420,7 @@ class Command(BaseCommand):
     ) -> None:
         inserted_events = event_stats["inserted_events"]
         offenders_inserted = event_stats["offenders_inserted"]
+        inserted_event_displays = event_stats.get("inserted_event_displays", [])
         skipped_missing_subdivision = event_stats["skipped_missing_subdivision"]
 
         if dry_run:
@@ -425,6 +437,10 @@ class Command(BaseCommand):
         self.stdout.write(
             f"Events inserted: {len(inserted_events)} (paragraphs: {inserted_events})"
         )
+        if inserted_event_displays:
+            self.stdout.write(
+                "Event times (local display): " + "; ".join(inserted_event_displays)
+            )
         if skipped_missing_subdivision:
             self.stdout.write(
                 "Skipped events due to missing subdivision: "
