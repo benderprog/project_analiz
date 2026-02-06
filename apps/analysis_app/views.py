@@ -68,8 +68,7 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
     if date_span:
         spans.append((date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}"))
 
-    subdivision = extracted.get("subdivision_name")
-    subdivision_span = _find_case_insensitive_span(text, subdivision) if subdivision else None
+    subdivision_span = extracted.get("subdivision_span")
     if subdivision_span:
         spans.append(
             (
@@ -78,6 +77,17 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
                 f"hl-{_status_for_subdivision(match_result)}",
             )
         )
+    else:
+        subdivision = extracted.get("subdivision_name")
+        subdivision_span = _find_case_insensitive_span(text, subdivision) if subdivision else None
+        if subdivision_span:
+            spans.append(
+                (
+                    subdivision_span[0],
+                    subdivision_span[1],
+                    f"hl-{_status_for_subdivision(match_result)}",
+                )
+            )
 
     offenders = extracted.get("offenders") or []
     offender_status = f"hl-{_status_for_offenders(match_result)}"
@@ -141,12 +151,15 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     subdivision_candidates = extracted.get("subdivision_candidates") or []
     formatted_candidates = []
     for candidate in subdivision_candidates:
-        score = candidate.get("score")
         formatted_candidates.append(
             {
                 "portal_subdivision_id": candidate.get("portal_subdivision_id"),
                 "name": candidate.get("name"),
-                "score": round(score * 100, 2) if score is not None else None,
+                "score": round(candidate.get("score", 0) * 100, 2)
+                if candidate.get("score") is not None
+                else None,
+                "score_percent": candidate.get("score_percent"),
+                "flags": candidate.get("flags"),
             }
         )
 
@@ -220,6 +233,7 @@ class UploadView(View):
                         "subdivision_id": attributes.subdivision_id,
                         "subdivision_name": attributes.subdivision_name,
                         "subdivision_candidates": attributes.subdivision_candidates,
+                        "subdivision_span": attributes.subdivision_span,
                         "offenders": attributes.offenders,
                     },
                     match_result=match_result,

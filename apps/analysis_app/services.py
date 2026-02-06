@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -32,7 +32,8 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
-    subdivision_candidates: list[dict]
+    subdivision_candidates: list[dict] = field(default_factory=list)
+    subdivision_span: list[int] | None = None
 
 
 def parse_docx(file_path: str) -> list[str]:
@@ -300,6 +301,9 @@ def extract_attributes(text: str) -> ExtractedAttributes:
     else:
         subdivision_id = None
         subdivision_name = None
+    subdivision_span = None
+    if best_candidate and best_candidate.get("query_span"):
+        subdivision_span = list(best_candidate["query_span"])
     return ExtractedAttributes(
         date_time=date_time,
         time_found=time_found,
@@ -307,6 +311,7 @@ def extract_attributes(text: str) -> ExtractedAttributes:
         offenders=offenders,
         subdivision_name=subdivision_name,
         subdivision_candidates=subdivision_candidates,
+        subdivision_span=subdivision_span,
     )
 
 
