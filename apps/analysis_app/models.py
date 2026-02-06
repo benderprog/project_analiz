@@ -40,3 +40,36 @@ class AnalysisResult(models.Model):
 
     def __str__(self) -> str:
         return f"Result for {self.paragraph_id}"
+
+
+class CachedPU(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    portal_pu_id = models.UUIDField(unique=True)
+    short_name = models.CharField(max_length=255)
+    full_name = models.CharField(max_length=255)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cached PU"
+        verbose_name_plural = "Cached PUs"
+
+    def __str__(self) -> str:
+        return self.short_name or self.full_name
+
+
+class CachedSubdivision(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    portal_subdivision_id = models.UUIDField(unique=True)
+    name = models.CharField(max_length=255)
+    pu = models.ForeignKey(CachedPU, null=True, blank=True, on_delete=models.SET_NULL)
+    normalized_name = models.TextField()
+    aliases = models.JSONField(blank=True, null=True)
+    embedding = models.JSONField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cached Subdivision"
+        verbose_name_plural = "Cached Subdivisions"
+
+    def __str__(self) -> str:
+        return self.name
