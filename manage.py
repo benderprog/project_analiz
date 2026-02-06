@@ -4,7 +4,11 @@ import sys
 
 
 def main() -> None:
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    if "test" in sys.argv and "DJANGO_SETTINGS_MODULE" not in os.environ:
+        # Default tests to SQLite for portability (e.g., Codex/CI without Postgres).
+        os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings_test"
+    else:
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     from django.core.management import execute_from_command_line
 
     execute_from_command_line(sys.argv)

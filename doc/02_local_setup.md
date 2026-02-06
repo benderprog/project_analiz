@@ -21,13 +21,8 @@ python manage.py migrate --database=portal
 ```
 
 ## Запуск тестов
-Тесты используют временные базы, поэтому роли `app` и `portal` должны иметь
-право `CREATEDB` (или используйте отдельные тестовые роли с этим правом).
-
-```bash
-export SKIP_SEMANTIC_MODEL=1
-python manage.py test
-```
+Unit-тесты по умолчанию используют SQLite и не требуют Postgres.
+Подробности — в [документации по тестированию](06_testing.md).
 
 ## Запуск
 ```bash
