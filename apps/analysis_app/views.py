@@ -97,7 +97,11 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
     offender_status = f"hl-{_status_for_offenders(match_result)}"
     for offender in offenders:
         full_name = offender.get("full_name")
-        offender_span = _find_case_insensitive_span(text, full_name) if full_name else None
+        offender_span = offender.get("span")
+        if offender_span and len(offender_span) == 2:
+            offender_span = (int(offender_span[0]), int(offender_span[1]))
+        else:
+            offender_span = _find_case_insensitive_span(text, full_name) if full_name else None
         if offender_span:
             spans.append((offender_span[0], offender_span[1], offender_status))
 
