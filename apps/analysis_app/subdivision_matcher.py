@@ -12,7 +12,7 @@ from django.conf import settings
 from apps.analysis_app.models import CachedSubdivision, CachedSubdivisionAlias
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_utils import normalize_subdivision_name, to_py_float, to_py_floats
-from apps.analysis_app.utils.subdivision_norm import extract_locality, normalize_text
+from apps.analysis_app.utils.subdivision_norm import extract_locality, normalize_text, unit_type_group
 
 logger = logging.getLogger(__name__)
 
@@ -20,19 +20,13 @@ SUBDIVISION_MATCH_THRESHOLD = 0.75
 SUBDIVISION_GREEN_THRESHOLD = 0.85
 SUBDIVISION_YELLOW_THRESHOLD = 0.75
 
-_CODE_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого)\s*[-№]?\s*(\d+)\b", re.IGNORECASE)
+_CODE_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого|погк)\s*[-№]?\s*(\d+)\b", re.IGNORECASE)
 _OP_NAME_REGEX = re.compile(r"\bоп\s*-\s*[а-яё]+\b", re.IGNORECASE)
 _CONTEXT_REGEX = re.compile(
-    r"(?:на посту|посту|службой|служба|в районе ответственности|в р-не ответственности)\s+"
+    r"(?:на посту|посту|службой|служба|в районе ответственности|в р-не ответственности|в районе|в р-не)\s+"
     r"(?P<unit>[^;.,]+)",
     re.IGNORECASE,
 )
-
-_UNIT_GROUPS = {
-    "op": {"оп", "опк", "отделение пограничного контроля", "отделение погранконтроля"},
-    "pz": {"пз", "погз", "погранзастава", "пограничная застава"},
-    "pogo": {"пого", "погранотделение", "пограничное отделение"},
-}
 
 _cache_version = 0
 
@@ -59,6 +53,7 @@ class SubdivisionQuery:
     locality_name: str | None
     unit_code: str | None
     unit_number: str | None
+    unit_type: str
 
 
 def invalidate_subdivision_cache() -> None:
@@ -127,6 +122,7 @@ def extract_subdivision_queries(text: str) -> list[SubdivisionQuery]:
         code_match = _CODE_REGEX.search(normalized)
         unit_code = code_match.group(1) if code_match else None
         unit_number = code_match.group(2) if code_match else None
+        unit_type = unit_type_group(normalized)
         queries.append(
             SubdivisionQuery(
                 text=fragment.strip(),
@@ -136,6 +132,7 @@ def extract_subdivision_queries(text: str) -> list[SubdivisionQuery]:
                 locality_name=locality_name,
                 unit_code=unit_code,
                 unit_number=unit_number,
+                unit_type=unit_type,
             )
         )
 
@@ -176,12 +173,34 @@ def _sequence_similarity(query: str, candidate: str) -> float:
     return SequenceMatcher(None, query, candidate).ratio()
 
 
-def _unit_group(text: str) -> str | None:
-    for group, tokens in _UNIT_GROUPS.items():
-        for token in tokens:
-            if token in text:
-                return group
-    return None
+def _tokenize(text: str) -> set[str]:
+    if not text:
+        return set()
+    return set(re.findall(r"[\w№]+", text.lower()))
+
+
+def _containment_score(
+    query_norm: str,
+    alias_norm: str,
+    query_unit_type: str,
+    alias_unit_type: str,
+) -> tuple[float, bool]:
+    if not query_norm or not alias_norm:
+        return 0.0, False
+    containment_score = 0.0
+    if query_norm in alias_norm or alias_norm in query_norm:
+        coverage = min(len(query_norm), len(alias_norm)) / max(len(query_norm), len(alias_norm))
+        containment_score = 0.90 + 0.10 * coverage
+    query_tokens = _tokenize(query_norm)
+    alias_tokens = _tokenize(alias_norm)
+    if (
+        query_tokens
+        and query_tokens.issubset(alias_tokens)
+        and query_unit_type != "UNKNOWN"
+        and query_unit_type == alias_unit_type
+    ):
+        containment_score = max(containment_score, 0.95)
+    return containment_score, containment_score > 0.0
 
 
 def _fallback_query(text: str) -> SubdivisionQuery:
@@ -192,6 +211,7 @@ def _fallback_query(text: str) -> SubdivisionQuery:
         fragment = text[start:end]
         normalized = normalize_text(fragment)
         locality_type, locality_name = extract_locality(fragment)
+        unit_type = unit_type_group(normalized)
         return SubdivisionQuery(
             text=fragment,
             normalized=normalized,
@@ -200,6 +220,7 @@ def _fallback_query(text: str) -> SubdivisionQuery:
             locality_name=locality_name,
             unit_code=match.group(1),
             unit_number=match.group(2),
+            unit_type=unit_type,
         )
     normalized = normalize_text(text)
     locality_type, locality_name = extract_locality(text)
@@ -211,6 +232,7 @@ def _fallback_query(text: str) -> SubdivisionQuery:
         locality_name=locality_name,
         unit_code=None,
         unit_number=None,
+        unit_type=unit_type_group(normalized),
     )
 
 
@@ -218,12 +240,11 @@ def _score_alias(
     query: SubdivisionQuery,
     alias: dict,
     query_embedding: list[float] | None,
+    candidate_unit_type: str,
 ) -> tuple[float, dict]:
     alias_norm = normalize_subdivision_name(alias.get("normalized_alias") or alias.get("alias_text") or "")
     query_norm = query.normalized
     string_score = _sequence_similarity(query_norm, alias_norm) if alias_norm else 0.0
-    if query.locality_name and query.locality_name not in alias_norm:
-        string_score = min(string_score, 0.84)
 
     semantic_score = 0.0
     if query_embedding is not None:
@@ -231,28 +252,38 @@ def _score_alias(
         if embedding:
             semantic_score = _cosine_similarity(query_embedding, to_py_floats(embedding))
 
-    unit_match_boost = 0.0
-    unit_group_query = _unit_group(query_norm)
-    unit_group_alias = _unit_group(alias_norm)
-    if unit_group_query and unit_group_alias:
-        if unit_group_query == unit_group_alias:
-            unit_match_boost = 0.15
-        else:
-            unit_match_boost = -0.10
+    alias_unit_type = unit_type_group(alias_norm)
+    if alias_unit_type == "UNKNOWN":
+        alias_unit_type = candidate_unit_type
+    query_unit_type = query.unit_type
+    unit_type_match = (
+        query_unit_type != "UNKNOWN"
+        and alias_unit_type != "UNKNOWN"
+        and query_unit_type == alias_unit_type
+    )
+    unit_type_conflict = (
+        query_unit_type != "UNKNOWN"
+        and alias_unit_type != "UNKNOWN"
+        and query_unit_type != alias_unit_type
+    )
 
-    locality_boost = 0.0
-    if query.locality_name and query.locality_name in alias_norm:
-        locality_boost = 0.10
+    containment_score, containment_hit = _containment_score(
+        query_norm,
+        alias_norm,
+        query_unit_type,
+        alias_unit_type,
+    )
 
-    final_score = max(string_score, semantic_score) + unit_match_boost + locality_boost
-    final_score = max(0.0, min(1.0, final_score))
+    base_score = max(string_score, semantic_score, containment_score)
+    base_score = max(0.0, min(1.0, base_score))
 
     flags = {
-        "matched_locality": bool(locality_boost),
-        "unit_match": unit_group_query == unit_group_alias if unit_group_query and unit_group_alias else None,
-        "unit_conflict": unit_group_query != unit_group_alias if unit_group_query and unit_group_alias else None,
+        "unit_type_match": unit_type_match if query_unit_type != "UNKNOWN" else None,
+        "unit_type_conflict": unit_type_conflict if query_unit_type != "UNKNOWN" else None,
+        "containment_hit": containment_hit,
+        "alias_unit_type": alias_unit_type,
     }
-    return final_score, flags
+    return base_score, flags
 
 
 def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
@@ -268,19 +299,22 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
     if not queries:
         queries = [_fallback_query(query_text)]
 
+    queries_with_locality = [query for query in queries if query.locality_name]
+    primary_queries = queries_with_locality or queries
+
     try:
         model = get_sentence_model() if not settings.SKIP_SEMANTIC_MODEL else None
     except RuntimeError as exc:
         logger.info("Semantic model unavailable, falling back to sequence match: %s", exc)
         model = None
 
-    query_embeddings: list[list[float] | None] = [None] * len(queries)
+    query_embeddings: list[list[float] | None] = [None] * len(primary_queries)
     if model:
-        embeddings = model.encode([query.normalized for query in queries])
+        embeddings = model.encode([query.normalized for query in primary_queries])
         query_embeddings = [to_py_floats(item) for item in embeddings]
 
     strict_query = next(
-        (query for query in queries if query.unit_code and query.unit_number),
+        (query for query in primary_queries if query.unit_code and query.unit_number),
         None,
     )
 
@@ -292,41 +326,84 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
             best_flags: dict = {}
             best_span: tuple[int, int] | None = None
             best_query_locality: dict | None = None
+            best_query_unit_type = "UNKNOWN"
             candidate_locality_type, candidate_locality_name = extract_locality(subdivision.get("name") or "")
             candidate_has_locality_match = False
+            candidate_has_locality_present = bool(candidate_locality_name)
+            candidate_has_locality_conflict = False
+            candidate_unit_type = unit_type_group(
+                normalize_subdivision_name(subdivision.get("normalized_name") or subdivision.get("name") or "")
+            )
 
-            for idx, query in enumerate(queries):
+            for idx, query in enumerate(primary_queries):
                 if strict_only and strict_query and query != strict_query:
                     continue
                 for alias in aliases:
+                    alias_text = alias.get("alias_text") or ""
                     alias_norm = normalize_subdivision_name(
-                        alias.get("normalized_alias") or alias.get("alias_text") or ""
+                        alias.get("normalized_alias") or alias_text or ""
                     )
+                    alias_locality_type, alias_locality_name = extract_locality(alias_text)
                     if strict_only and strict_query:
                         code_token = f"{strict_query.unit_code} №{strict_query.unit_number}"
                         if code_token not in alias_norm:
                             continue
-                    if (
+                    if alias_locality_name:
+                        candidate_has_locality_present = True
+                    locality_match = bool(
                         query.locality_name
-                        and not candidate_has_locality_match
                         and (
                             query.locality_name in alias_norm
                             or (
                                 candidate_locality_name
                                 and candidate_locality_name == query.locality_name
                             )
+                            or (alias_locality_name and alias_locality_name == query.locality_name)
                         )
-                    ):
+                    )
+                    locality_conflict = bool(
+                        query.locality_name
+                        and (
+                            (candidate_locality_name and candidate_locality_name != query.locality_name)
+                            or (alias_locality_name and alias_locality_name != query.locality_name)
+                        )
+                    )
+                    if locality_match:
                         candidate_has_locality_match = True
-                    score, flags = _score_alias(query, alias, query_embeddings[idx])
-                    if score > best_score:
-                        best_score = score
-                        best_flags = flags
+                    if locality_conflict:
+                        candidate_has_locality_conflict = True
+
+                    score, flags = _score_alias(
+                        query,
+                        alias,
+                        query_embeddings[idx],
+                        candidate_unit_type,
+                    )
+                    adjusted_score = score
+                    if locality_match:
+                        adjusted_score += 0.10
+                    if locality_conflict:
+                        adjusted_score -= 0.25
+                    if flags.get("unit_type_conflict"):
+                        adjusted_score -= 0.15
+                    adjusted_score = max(0.0, min(1.0, adjusted_score))
+                    if flags.get("unit_type_conflict"):
+                        adjusted_score = min(adjusted_score, 0.84)
+
+                    if adjusted_score > best_score:
+                        best_score = adjusted_score
+                        best_flags = {
+                            **flags,
+                            "locality_match": locality_match,
+                            "locality_conflict": locality_conflict,
+                            "locality_present": candidate_has_locality_present,
+                        }
                         best_span = query.span
                         best_query_locality = {
                             "type": query.locality_type,
                             "name": query.locality_name,
                         }
+                        best_query_unit_type = query.unit_type
 
             if best_score <= 0.0:
                 continue
@@ -340,6 +417,10 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
                     flags={
                         **best_flags,
                         "locality_match": candidate_has_locality_match,
+                        "locality_conflict": candidate_has_locality_conflict,
+                        "locality_present": candidate_has_locality_present,
+                        "query_unit_type": best_query_unit_type,
+                        "candidate_unit_type": candidate_unit_type,
                     },
                     query_span=best_span,
                     query_locality=best_query_locality
@@ -356,63 +437,71 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
     results = _collect_results(strict_only=bool(strict_query))
     if strict_query and not results:
         results = _collect_results(strict_only=False)
+    if not results and primary_queries != queries:
+        primary_queries = queries
+        query_embeddings = [None] * len(primary_queries)
+        if model:
+            embeddings = model.encode([query.normalized for query in primary_queries])
+            query_embeddings = [to_py_floats(item) for item in embeddings]
+        strict_query = next(
+            (query for query in primary_queries if query.unit_code and query.unit_number),
+            None,
+        )
+        results = _collect_results(strict_only=bool(strict_query))
 
     if not results:
         return []
 
+    preferred_locality = None
     if strict_query and strict_query.locality_name:
+        preferred_locality = strict_query.locality_name
+    else:
+        preferred_locality = next(
+            (query.locality_name for query in primary_queries if query.locality_name),
+            None,
+        )
+
+    if preferred_locality:
         locality_matches = [item for item in results if item.flags.get("locality_match")]
         if locality_matches:
             results = locality_matches
         else:
-            penalized: list[SubdivisionCandidate] = []
-            for item in results:
-                adjusted_score = max(0.0, item.score - 0.25)
-                adjusted_score = min(adjusted_score, 0.84)
-                penalized.append(
-                    SubdivisionCandidate(
-                        portal_subdivision_id=item.portal_subdivision_id,
-                        name=item.name,
-                        score=adjusted_score,
-                        score_percent=round(adjusted_score * 100, 2),
-                        flags=item.flags,
-                        query_span=item.query_span,
-                        query_locality=item.query_locality,
-                        candidate_locality=item.candidate_locality,
-                        locality_mismatch=True,
-                    )
-                )
-            results = penalized
+            locality_present = [item for item in results if item.flags.get("locality_present")]
+            if locality_present:
+                results = locality_present
 
-    adjusted_results: list[SubdivisionCandidate] = []
-    for item in results:
-        locality_mismatch = item.locality_mismatch
-        if (
-            item.query_locality.get("name")
-            and item.candidate_locality.get("name")
-            and item.query_locality["name"] != item.candidate_locality["name"]
-            and not locality_mismatch
-        ):
-            locality_mismatch = True
-            adjusted_score = max(0.0, item.score - 0.25)
-            adjusted_score = min(adjusted_score, 0.84)
-        else:
-            adjusted_score = item.score
-        adjusted_results.append(
-            SubdivisionCandidate(
-                portal_subdivision_id=item.portal_subdivision_id,
-                name=item.name,
-                score=adjusted_score,
-                score_percent=round(adjusted_score * 100, 2),
-                flags=item.flags,
-                query_span=item.query_span,
-                query_locality=item.query_locality,
-                candidate_locality=item.candidate_locality,
-                locality_mismatch=locality_mismatch,
-            )
+    preferred_unit_type = None
+    if strict_query and strict_query.unit_type != "UNKNOWN":
+        preferred_unit_type = strict_query.unit_type
+    else:
+        preferred_unit_type = next(
+            (query.unit_type for query in primary_queries if query.unit_type != "UNKNOWN"),
+            None,
         )
 
-    results = adjusted_results
+    if preferred_unit_type:
+        unit_matches = [
+            item
+            for item in results
+            if item.flags.get("unit_type_match") or item.flags.get("candidate_unit_type") == preferred_unit_type
+        ]
+        if unit_matches:
+            results = unit_matches
+
+    results = [
+        SubdivisionCandidate(
+            portal_subdivision_id=item.portal_subdivision_id,
+            name=item.name,
+            score=item.score,
+            score_percent=item.score_percent,
+            flags=item.flags,
+            query_span=item.query_span,
+            query_locality=item.query_locality,
+            candidate_locality=item.candidate_locality,
+            locality_mismatch=bool(item.flags.get("locality_conflict")),
+        )
+        for item in results
+    ]
     results.sort(key=lambda item: item.score, reverse=True)
     return [
         {

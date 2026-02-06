@@ -71,7 +71,7 @@ def build_subdivision_aliases(name: str, limit: int = 30) -> list[str]:
         if hyphen_space:
             expanded_variants.add(hyphen_space)
 
-        match = re.match(r"^(?P<prefix>ОП|ПЗ|ПОГЗ|ПОГО)\b\.?\s*(?P<rest>.*)$", variant)
+        match = re.match(r"^(?P<prefix>ОП|ПЗ|ПОГЗ|ПОГО|ПОГК)\b\.?\s*(?P<rest>.*)$", variant)
         if match:
             prefix = match.group("prefix")
             rest = match.group("rest").strip()
@@ -80,7 +80,7 @@ def build_subdivision_aliases(name: str, limit: int = 30) -> list[str]:
 
     for variant in expanded_variants:
         _add(variant)
-        number_match = re.search(r"\b(ОП|ОПК|ПЗ|ПОГЗ|ПОГО)\s*№?\s*(\d+)\b", variant)
+        number_match = re.search(r"\b(ОП|ОПК|ПЗ|ПОГЗ|ПОГО|ПОГК)\s*№?\s*(\d+)\b", variant)
         if number_match:
             prefix, number = number_match.groups()
             for numbered in _number_variants(prefix, number):

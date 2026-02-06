@@ -119,6 +119,48 @@ class SubdivisionMatcherTests(TestCase):
         self.assertTrue(candidates[0]["locality_mismatch"])
         self.assertLess(candidates[0]["score_percent"], 85)
 
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_match_subdivision_prefers_contained_pogk_with_locality(self):
+        pogk = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПОГК «Северная» (пгт Северный)",
+            normalized_name=normalize_text("ПОГК Северная (пгт Северный)"),
+            aliases=[],
+            embedding=None,
+        )
+        pz = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПЗ №2 (с. Васильки)",
+            normalized_name=normalize_text("ПЗ №2 (с. Васильки)"),
+            aliases=[],
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=pogk,
+            alias_text="ПОГК Северная",
+            normalized_alias=normalize_text("ПОГК Северная"),
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=pz,
+            alias_text="ПЗ №2 (с. Васильки)",
+            normalized_alias=normalize_text("ПЗ №2 (с. Васильки)"),
+            embedding=None,
+        )
+        invalidate_subdivision_cache()
+
+        paragraph = "02.02.2026 в 10:35 в районе ПОГК «Северная» (пгт Северный) ..."
+        candidates = match_subdivision(paragraph, top_k=2)
+
+        self.assertEqual(candidates[0]["name"], "ПОГК «Северная» (пгт Северный)")
+        self.assertGreaterEqual(candidates[0]["score"], 0.85)
+        self.assertTrue(candidates[0]["flags"].get("locality_match"))
+        self.assertFalse(candidates[0]["flags"].get("unit_type_conflict"))
+        self.assertTrue(candidates[0]["flags"].get("containment_hit"))
+        self.assertEqual(candidates[1]["name"], "ПЗ №2 (с. Васильки)")
+        self.assertTrue(candidates[1]["flags"].get("unit_type_conflict"))
+        self.assertTrue(candidates[1]["flags"].get("locality_conflict"))
+
     def test_build_comments_includes_locality_mismatch(self):
         comments = analysis_views._build_comments(
             {

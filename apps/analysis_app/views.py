@@ -45,7 +45,9 @@ def _status_for_subdivision(match_result: dict) -> str:
     score = match_result.get("subdivision_match_percent")
     if score is None:
         return "red"
-    if match_result.get("subdivision_locality_mismatch"):
+    if match_result.get("subdivision_locality_mismatch") or match_result.get(
+        "subdivision_unit_type_conflict"
+    ):
         return "yellow" if score >= SUBDIVISION_YELLOW_THRESHOLD * 100 else "red"
     if score >= SUBDIVISION_GREEN_THRESHOLD * 100:
         return "green"
