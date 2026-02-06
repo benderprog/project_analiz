@@ -10,4 +10,4 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       WARMUP_ON_START: "0"
-      SEMANTIC_MODEL_PATH: /opt/models/paraphrase-multilingual-MiniLM-L12-v2
+      SEMANTIC_MODEL_PATH: ${SEMANTIC_MODEL_PATH:-/opt/models/paraphrase-multilingual-MiniLM-L12-v2}
