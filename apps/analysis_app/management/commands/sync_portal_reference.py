@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import logging
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from apps.analysis_app.models import CachedPU, CachedSubdivision
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache
 from apps.analysis_app.subdivision_utils import (
+    build_embedding_source_hash,
     build_subdivision_aliases,
     normalize_subdivision_name,
+    to_py_floats,
 )
 from apps.portaldb.models import Pu, Subdivision
 
@@ -65,25 +69,42 @@ class Command(BaseCommand):
             for portal_subdivision in portal_subdivisions:
                 normalized_name = normalize_subdivision_name(portal_subdivision.name)
                 aliases = build_subdivision_aliases(portal_subdivision.name)
-                cached_subdivision, _ = CachedSubdivision.objects.update_or_create(
+                source_hash = build_embedding_source_hash(normalized_name, aliases)
+                cached_subdivision, created = CachedSubdivision.objects.get_or_create(
                     portal_subdivision_id=portal_subdivision.subdivision_id,
                     defaults={
                         "name": portal_subdivision.name,
                         "pu": cached_pus.get(portal_subdivision.parent_pu_id),
                         "normalized_name": normalized_name,
                         "aliases": aliases,
+                        "embedding_source_hash": source_hash,
                     },
                 )
+                if not created:
+                    cached_subdivision.name = portal_subdivision.name
+                    cached_subdivision.pu = cached_pus.get(portal_subdivision.parent_pu_id)
+                    cached_subdivision.normalized_name = normalized_name
+                    cached_subdivision.aliases = aliases
 
-                if model and (rebuild_embeddings or cached_subdivision.embedding is None):
-                    embedding = model.encode([normalized_name])[0]
-                    cached_subdivision.embedding = (
-                        embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
-                    )
-                    cached_subdivision.save(update_fields=["embedding", "updated_at"])
-                elif rebuild_embeddings and not model:
-                    cached_subdivision.embedding = None
-                    cached_subdivision.save(update_fields=["embedding", "updated_at"])
+                hash_changed = cached_subdivision.embedding_source_hash != source_hash
+                should_rebuild = (
+                    rebuild_embeddings
+                    or cached_subdivision.embedding is None
+                    or hash_changed
+                    or created
+                )
+                cached_subdivision.embedding_source_hash = source_hash
+
+                if should_rebuild:
+                    if model and not settings.SKIP_SEMANTIC_MODEL:
+                        embedding = model.encode([normalized_name])[0]
+                        cached_subdivision.embedding = to_py_floats(embedding)
+                        cached_subdivision.embedding_updated_at = timezone.now()
+                    else:
+                        cached_subdivision.embedding = None
+                        cached_subdivision.embedding_updated_at = None
+
+                cached_subdivision.save()
 
         invalidate_subdivision_cache()
         self.stdout.write(

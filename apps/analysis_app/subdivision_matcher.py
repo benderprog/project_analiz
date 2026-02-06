@@ -8,7 +8,11 @@ from functools import lru_cache
 
 from apps.analysis_app.models import CachedSubdivision
 from apps.analysis_app.semantic import get_sentence_model
-from apps.analysis_app.subdivision_utils import normalize_subdivision_name
+from apps.analysis_app.subdivision_utils import (
+    normalize_subdivision_name,
+    to_py_float,
+    to_py_floats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     norm_b = math.sqrt(sum(b * b for b in vec_b))
     if not norm_a or not norm_b:
         return 0.0
-    return dot / (norm_a * norm_b)
+    return to_py_float(dot / (norm_a * norm_b))
 
 
 def _fallback_similarity(query: str, subdivision: dict) -> float:
@@ -65,7 +69,7 @@ def _fallback_similarity(query: str, subdivision: dict) -> float:
             continue
         normalized_candidate = normalize_subdivision_name(candidate)
         best = max(best, SequenceMatcher(None, normalized_query, normalized_candidate).ratio())
-    return best
+    return to_py_float(best)
 
 
 def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
@@ -85,12 +89,12 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
 
     results: list[SubdivisionCandidate] = []
     if model:
-        query_embedding = model.encode([query_text])[0]
+        query_embedding = to_py_floats(model.encode([query_text])[0])
         for subdivision in cached:
             embedding = subdivision.get("embedding")
             if not embedding:
                 continue
-            score = _cosine_similarity(query_embedding, embedding)
+            score = _cosine_similarity(query_embedding, to_py_floats(embedding))
             results.append(
                 SubdivisionCandidate(
                     portal_subdivision_id=str(subdivision["portal_subdivision_id"]),
@@ -115,7 +119,7 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
         {
             "portal_subdivision_id": candidate.portal_subdivision_id,
             "name": candidate.name,
-            "score": candidate.score,
+            "score": to_py_float(candidate.score),
         }
         for candidate in results[:top_k]
     ]
