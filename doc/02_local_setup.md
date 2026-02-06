@@ -20,6 +20,15 @@ python manage.py migrate
 python manage.py migrate --database=portal
 ```
 
+## Запуск тестов
+Тесты используют временные базы, поэтому роли `app` и `portal` должны иметь
+право `CREATEDB` (или используйте отдельные тестовые роли с этим правом).
+
+```bash
+export SKIP_SEMANTIC_MODEL=1
+python manage.py test
+```
+
 ## Запуск
 ```bash
 python manage.py runserver

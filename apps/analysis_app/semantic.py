@@ -11,6 +11,12 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def get_sentence_model():
     """Load sentence transformer model from local path or model name."""
+    if settings.SKIP_SEMANTIC_MODEL:
+        # Avoid heavy model downloads during lightweight test runs (e.g., CI).
+        raise RuntimeError(
+            "Semantic model loading is disabled via SKIP_SEMANTIC_MODEL."
+        )
+
     from sentence_transformers import SentenceTransformer
 
     if settings.SEMANTIC_MODEL_PATH:

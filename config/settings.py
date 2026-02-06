@@ -93,3 +93,8 @@ SEMANTIC_MODEL_NAME = os.getenv(
     "SEMANTIC_MODEL_NAME", "paraphrase-multilingual-MiniLM-L12-v2"
 )
 SEMANTIC_MODEL_PATH = os.getenv("SEMANTIC_MODEL_PATH")
+SKIP_SEMANTIC_MODEL = os.getenv("SKIP_SEMANTIC_MODEL", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)

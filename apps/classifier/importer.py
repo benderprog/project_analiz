@@ -30,7 +30,10 @@ def _normalize_cell(value: object | None) -> str:
 
 
 def parse_classifier_xlsx(file_obj) -> tuple[list[ClassifierRow], int]:
-    """Parse classifier XLSX with strict 3-column format and optional type fill-down."""
+    """Parse classifier XLSX with strict 3-column format and optional type fill-down.
+
+    Empty rows (all three columns blank after normalization) are counted as skipped.
+    """
     workbook = load_workbook(file_obj, data_only=True)
     sheet = workbook.active
 
@@ -39,9 +42,10 @@ def parse_classifier_xlsx(file_obj) -> tuple[list[ClassifierRow], int]:
     last_event_type = ""
 
     for row in sheet.iter_rows(min_row=2, values_only=True):
-        raw_event_type = _normalize_cell(row[0] if len(row) > 0 else None)
-        raw_pattern = _normalize_cell(row[1] if len(row) > 1 else None)
-        raw_article = _normalize_cell(row[2] if len(row) > 2 else None)
+        values = list(row[:3]) + [None] * (3 - len(row))
+        raw_event_type = _normalize_cell(values[0])
+        raw_pattern = _normalize_cell(values[1])
+        raw_article = _normalize_cell(values[2])
 
         if not raw_event_type and not raw_pattern and not raw_article:
             skipped_rows += 1
