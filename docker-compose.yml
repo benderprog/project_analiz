@@ -9,9 +9,6 @@ services:
     env_file:
       - .env.docker
     environment:
-      HF_HUB_OFFLINE: "1"
-      TRANSFORMERS_OFFLINE: "1"
-      SEMANTIC_MODEL_PATH: /opt/models/paraphrase-multilingual-MiniLM-L12-v2
       WARMUP_ON_START: "0"
       APP_DB_HOST: db
       PORTAL_DB_HOST: portal_db
@@ -25,9 +22,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    # Optional override to supply updated models without rebuilding:
-    # volumes:
-    #   - ./models:/opt/models
+    # To use an offline model mount, see docker-compose.offline.yml.
 
   db:
     image: postgres:15

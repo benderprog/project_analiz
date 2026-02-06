@@ -1,0 +1,29 @@
+.git
+.venv
+venv
+env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.idea/
+.vscode/
+node_modules/
+artifacts/
+*.tar
+media/
+staticfiles/
+*.log
+*.sqlite3
+models/
+# Docs build outputs
+_doc/_build/
+doc/_build/
+# Large local fixtures or reports
+*.docx
+*.xlsx
+*.pdf
