@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExtractedAttributes:
     date_time: datetime | None
+    time_found: bool
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
@@ -80,18 +81,81 @@ def _fact_to_datetime(fact) -> datetime | None:
     return None
 
 
-def _extract_date(text: str) -> datetime | None:
-    """Extract date/time using Natasha; return timezone-aware datetime."""
+_DATETIME_REGEXES = [
+    re.compile(
+        r"(?:\bв\b\s*)?(?P<time>\d{1,2}[.:]\d{2})\s*(?P<date>\d{2}\.\d{2}\.\d{4})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?P<date>\d{2}\.\d{2}\.\d{4})\s*(?:,|;|—|-)?\s*(?:\bв\b\s*)?"
+        r"(?P<time>\d{1,2}[.:]\d{2})",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _find_datetime_regex_match(text: str) -> re.Match[str] | None:
+    for regex in _DATETIME_REGEXES:
+        match = regex.search(text)
+        if match:
+            return match
+    return None
+
+
+def _parse_time_value(time_str: str) -> tuple[int, int] | None:
+    normalized = time_str.replace(".", ":")
+    parts = normalized.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def _extract_datetime_regex(text: str) -> tuple[datetime | None, bool]:
+    match = _find_datetime_regex_match(text)
+    if not match:
+        return None, False
+
+    date_str = match.group("date")
+    time_str = match.group("time")
+    parsed_time = _parse_time_value(time_str)
+    if not parsed_time:
+        return None, False
+
+    try:
+        date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
+    except ValueError:
+        return None, False
+
+    hour, minute = parsed_time
+    return datetime.combine(date_obj, time(hour, minute)), True
+
+
+def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
+    """Extract date/time using regex first, then Natasha; return timezone-aware datetime."""
     from natasha import DatesExtractor
+
+    dt, time_found = _extract_datetime_regex(text)
+    if dt is not None:
+        aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        return aware_dt, time_found
 
     extractor = DatesExtractor(_get_morph())
     matches = list(extractor(text))
     if not matches:
-        return None
+        return None, False
     dt = _fact_to_datetime(matches[0].fact)
     if dt is None:
-        return None
-    return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        return None, False
+    time_found = dt.time() != time(0, 0)
+    aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    return aware_dt, time_found
 
 
 def _extract_names(text: str) -> list[dict]:
@@ -160,6 +224,10 @@ def _find_birth_year(text: str, start_idx: int) -> int | None:
 
 
 def _find_datetime_span(text: str) -> tuple[int, int] | None:
+    regex_match = _find_datetime_regex_match(text)
+    if regex_match:
+        return regex_match.start(), regex_match.end()
+
     from natasha import DatesExtractor
 
     extractor = DatesExtractor(_get_morph())
@@ -225,11 +293,12 @@ def _detect_subdivision(text: str) -> tuple[str | None, str | None]:
 
 def extract_attributes(text: str) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
-    date_time = _extract_date(text)
+    date_time, time_found = _extract_datetime(text)
     offenders = _extract_names(text)
     subdivision_id, subdivision_name = _detect_subdivision(text)
     return ExtractedAttributes(
         date_time=date_time,
+        time_found=time_found,
         subdivision_id=subdivision_id,
         offenders=offenders,
         subdivision_name=subdivision_name,
@@ -394,6 +463,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "matched": 0,
             },
             "subdivision_match_percent": 0,
+            "time_found": attributes.time_found,
+            "date_time_present": bool(attributes.date_time),
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
@@ -478,6 +549,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "matched": best_offenders_matched,
         },
         "subdivision_match_percent": round(subdivision_match_percent, 2),
+        "time_found": attributes.time_found,
+        "date_time_present": bool(attributes.date_time),
         "portal": {
             "timestamp": best_event.date_detection.isoformat(),
             "subdivision_name": best_event.find_subdivision_unit.name

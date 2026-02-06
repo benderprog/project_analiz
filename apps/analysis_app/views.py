@@ -81,12 +81,15 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
 
 
 def _build_comments(match_result: dict) -> list[str]:
+    comments = []
     if not match_result.get("matched"):
         message = match_result.get("diffs", {}).get("message") or "Событие не найдено."
-        return [message]
+        comments.append(message)
+        if match_result.get("date_time_present") and not match_result.get("time_found"):
+            comments.append("Не определилось время (использована только дата).")
+        return comments
 
     diffs = match_result.get("diffs", {})
-    comments = []
     if not diffs:
         comments.append("Расхождений не обнаружено.")
     if "subdivision" in diffs:
@@ -103,6 +106,8 @@ def _build_comments(match_result: dict) -> list[str]:
             "Совпало нарушителей: "
             f"{offenders_counts.get('matched', 0)} из {offenders_counts.get('portal', 0)}."
         )
+    if match_result.get("date_time_present") and not match_result.get("time_found"):
+        comments.append("Не определилось время (использована только дата).")
     return comments
 
 
@@ -180,6 +185,7 @@ class UploadView(View):
                         "date_time": attributes.date_time.isoformat()
                         if attributes.date_time
                         else None,
+                        "time_found": attributes.time_found,
                         "subdivision_id": attributes.subdivision_id,
                         "subdivision_name": attributes.subdivision_name,
                         "offenders": attributes.offenders,
