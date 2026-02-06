@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 
 
@@ -45,3 +46,21 @@ def build_subdivision_aliases(name: str) -> list[str]:
 
     aliases.discard(base)
     return sorted(aliases)
+
+
+def to_py_float(value) -> float:
+    return float(value)
+
+
+def to_py_floats(vec) -> list[float]:
+    if vec is None:
+        return []
+    if hasattr(vec, "tolist"):
+        vec = vec.tolist()
+    return [to_py_float(item) for item in vec]
+
+
+def build_embedding_source_hash(normalized_name: str, aliases: list[str] | None) -> str:
+    alias_list = sorted(aliases or [])
+    payload = f"{normalized_name}|{'|'.join(alias_list)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
