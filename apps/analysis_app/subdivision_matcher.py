@@ -45,6 +45,9 @@ class SubdivisionCandidate:
     score_percent: float
     flags: dict
     query_span: tuple[int, int] | None
+    query_locality: dict
+    candidate_locality: dict
+    locality_mismatch: bool
 
 
 @dataclass(frozen=True)
@@ -52,7 +55,8 @@ class SubdivisionQuery:
     text: str
     normalized: str
     span: tuple[int, int] | None
-    locality: str
+    locality_type: str | None
+    locality_name: str | None
     unit_code: str | None
     unit_number: str | None
 
@@ -119,7 +123,7 @@ def extract_subdivision_queries(text: str) -> list[SubdivisionQuery]:
         normalized = normalize_text(fragment)
         if not normalized:
             return
-        locality = extract_locality(fragment)
+        locality_type, locality_name = extract_locality(fragment)
         code_match = _CODE_REGEX.search(normalized)
         unit_code = code_match.group(1) if code_match else None
         unit_number = code_match.group(2) if code_match else None
@@ -128,7 +132,8 @@ def extract_subdivision_queries(text: str) -> list[SubdivisionQuery]:
                 text=fragment.strip(),
                 normalized=normalized,
                 span=span,
-                locality=locality,
+                locality_type=locality_type,
+                locality_name=locality_name,
                 unit_code=unit_code,
                 unit_number=unit_number,
             )
@@ -186,20 +191,24 @@ def _fallback_query(text: str) -> SubdivisionQuery:
         end = min(match.end() + 40, len(text))
         fragment = text[start:end]
         normalized = normalize_text(fragment)
+        locality_type, locality_name = extract_locality(fragment)
         return SubdivisionQuery(
             text=fragment,
             normalized=normalized,
             span=(start, end),
-            locality=extract_locality(fragment),
+            locality_type=locality_type,
+            locality_name=locality_name,
             unit_code=match.group(1),
             unit_number=match.group(2),
         )
     normalized = normalize_text(text)
+    locality_type, locality_name = extract_locality(text)
     return SubdivisionQuery(
         text=text,
         normalized=normalized,
         span=None,
-        locality=extract_locality(text),
+        locality_type=locality_type,
+        locality_name=locality_name,
         unit_code=None,
         unit_number=None,
     )
@@ -213,6 +222,8 @@ def _score_alias(
     alias_norm = normalize_subdivision_name(alias.get("normalized_alias") or alias.get("alias_text") or "")
     query_norm = query.normalized
     string_score = _sequence_similarity(query_norm, alias_norm) if alias_norm else 0.0
+    if query.locality_name and query.locality_name not in alias_norm:
+        string_score = min(string_score, 0.84)
 
     semantic_score = 0.0
     if query_embedding is not None:
@@ -230,7 +241,7 @@ def _score_alias(
             unit_match_boost = -0.10
 
     locality_boost = 0.0
-    if query.locality and query.locality in alias_norm:
+    if query.locality_name and query.locality_name in alias_norm:
         locality_boost = 0.10
 
     final_score = max(string_score, semantic_score) + unit_match_boost + locality_boost
@@ -280,6 +291,9 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
             best_score = 0.0
             best_flags: dict = {}
             best_span: tuple[int, int] | None = None
+            best_query_locality: dict | None = None
+            candidate_locality_type, candidate_locality_name = extract_locality(subdivision.get("name") or "")
+            candidate_has_locality_match = False
 
             for idx, query in enumerate(queries):
                 if strict_only and strict_query and query != strict_query:
@@ -292,11 +306,27 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
                         code_token = f"{strict_query.unit_code} №{strict_query.unit_number}"
                         if code_token not in alias_norm:
                             continue
+                    if (
+                        query.locality_name
+                        and not candidate_has_locality_match
+                        and (
+                            query.locality_name in alias_norm
+                            or (
+                                candidate_locality_name
+                                and candidate_locality_name == query.locality_name
+                            )
+                        )
+                    ):
+                        candidate_has_locality_match = True
                     score, flags = _score_alias(query, alias, query_embeddings[idx])
                     if score > best_score:
                         best_score = score
                         best_flags = flags
                         best_span = query.span
+                        best_query_locality = {
+                            "type": query.locality_type,
+                            "name": query.locality_name,
+                        }
 
             if best_score <= 0.0:
                 continue
@@ -307,8 +337,18 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
                     name=subdivision["name"],
                     score=best_score,
                     score_percent=round(best_score * 100, 2),
-                    flags=best_flags,
+                    flags={
+                        **best_flags,
+                        "locality_match": candidate_has_locality_match,
+                    },
                     query_span=best_span,
+                    query_locality=best_query_locality
+                    or {"type": None, "name": None},
+                    candidate_locality={
+                        "type": candidate_locality_type,
+                        "name": candidate_locality_name,
+                    },
+                    locality_mismatch=False,
                 )
             )
         return collected
@@ -320,6 +360,59 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
     if not results:
         return []
 
+    if strict_query and strict_query.locality_name:
+        locality_matches = [item for item in results if item.flags.get("locality_match")]
+        if locality_matches:
+            results = locality_matches
+        else:
+            penalized: list[SubdivisionCandidate] = []
+            for item in results:
+                adjusted_score = max(0.0, item.score - 0.25)
+                adjusted_score = min(adjusted_score, 0.84)
+                penalized.append(
+                    SubdivisionCandidate(
+                        portal_subdivision_id=item.portal_subdivision_id,
+                        name=item.name,
+                        score=adjusted_score,
+                        score_percent=round(adjusted_score * 100, 2),
+                        flags=item.flags,
+                        query_span=item.query_span,
+                        query_locality=item.query_locality,
+                        candidate_locality=item.candidate_locality,
+                        locality_mismatch=True,
+                    )
+                )
+            results = penalized
+
+    adjusted_results: list[SubdivisionCandidate] = []
+    for item in results:
+        locality_mismatch = item.locality_mismatch
+        if (
+            item.query_locality.get("name")
+            and item.candidate_locality.get("name")
+            and item.query_locality["name"] != item.candidate_locality["name"]
+            and not locality_mismatch
+        ):
+            locality_mismatch = True
+            adjusted_score = max(0.0, item.score - 0.25)
+            adjusted_score = min(adjusted_score, 0.84)
+        else:
+            adjusted_score = item.score
+        adjusted_results.append(
+            SubdivisionCandidate(
+                portal_subdivision_id=item.portal_subdivision_id,
+                name=item.name,
+                score=adjusted_score,
+                score_percent=round(adjusted_score * 100, 2),
+                flags=item.flags,
+                query_span=item.query_span,
+                query_locality=item.query_locality,
+                candidate_locality=item.candidate_locality,
+                locality_mismatch=locality_mismatch,
+            )
+        )
+
+    results = adjusted_results
     results.sort(key=lambda item: item.score, reverse=True)
     return [
         {
@@ -329,6 +422,9 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
             "score_percent": to_py_float(candidate.score_percent),
             "flags": candidate.flags,
             "query_span": candidate.query_span,
+            "query_locality": candidate.query_locality,
+            "candidate_locality": candidate.candidate_locality,
+            "locality_mismatch": candidate.locality_mismatch,
         }
         for candidate in results[:top_k]
     ]

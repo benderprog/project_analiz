@@ -45,6 +45,8 @@ def _status_for_subdivision(match_result: dict) -> str:
     score = match_result.get("subdivision_match_percent")
     if score is None:
         return "red"
+    if match_result.get("subdivision_locality_mismatch"):
+        return "yellow" if score >= SUBDIVISION_YELLOW_THRESHOLD * 100 else "red"
     if score >= SUBDIVISION_GREEN_THRESHOLD * 100:
         return "green"
     if score >= SUBDIVISION_YELLOW_THRESHOLD * 100:
@@ -100,6 +102,28 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
     return highlight_text(text, spans)
 
 
+def _format_locality_label(locality: dict | None) -> str:
+    if not locality:
+        return "—"
+    name = locality.get("name")
+    if not name:
+        return "—"
+    locality_type = locality.get("type")
+    display_name = str(name).replace("-", " ").title()
+    if locality_type:
+        return f"{locality_type}. {display_name}"
+    return display_name
+
+
+def _locality_mismatch_comment(match_result: dict) -> str:
+    query_locality = _format_locality_label(match_result.get("subdivision_locality_query"))
+    candidate_locality = _format_locality_label(match_result.get("subdivision_locality_candidate"))
+    return (
+        "Населённый пункт не совпадает: "
+        f"в тексте '({query_locality})', в БД '({candidate_locality})'."
+    )
+
+
 def _build_comments(match_result: dict) -> list[str]:
     comments = []
     if not match_result.get("matched"):
@@ -107,6 +131,8 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append(message)
         if match_result.get("date_time_present") and not match_result.get("time_found"):
             comments.append("Не определилось время (использована только дата).")
+        if match_result.get("subdivision_locality_mismatch"):
+            comments.append(_locality_mismatch_comment(match_result))
         return comments
 
     diffs = match_result.get("diffs", {})
@@ -114,6 +140,8 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Расхождений не обнаружено.")
     if "subdivision" in diffs:
         comments.append("Подразделение не совпадает с БД.")
+    if match_result.get("subdivision_locality_mismatch"):
+        comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:
         comments.append("Нарушители отличаются от данных БД.")
     if "event_type" in diffs:
@@ -160,6 +188,9 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
                 else None,
                 "score_percent": candidate.get("score_percent"),
                 "flags": candidate.get("flags"),
+                "query_locality": candidate.get("query_locality"),
+                "candidate_locality": candidate.get("candidate_locality"),
+                "locality_mismatch": candidate.get("locality_mismatch"),
             }
         )
 

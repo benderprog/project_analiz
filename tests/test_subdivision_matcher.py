@@ -9,6 +9,7 @@ from apps.analysis_app.subdivision_matcher import (
     match_subdivision,
 )
 from apps.analysis_app.utils.subdivision_norm import normalize_text
+from apps.analysis_app import views as analysis_views
 
 
 class SubdivisionMatcherTests(TestCase):
@@ -58,3 +59,75 @@ class SubdivisionMatcherTests(TestCase):
         candidates = match_subdivision("службой ПЗ1 (с. Полярное) выявлено", top_k=2)
 
         self.assertEqual(candidates[0]["name"], "ПЗ №1 (с. Полярное)")
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_match_subdivision_prefers_locality_for_unit_code(self):
+        lesnoe = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПОГЗ №1 (с. Лесное)",
+            normalized_name=normalize_text("ПОГЗ №1 (с. Лесное)"),
+            aliases=[],
+            embedding=None,
+        )
+        polyarnoe = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПОГЗ №1 (с. Полярное)",
+            normalized_name=normalize_text("ПОГЗ №1 (с. Полярное)"),
+            aliases=[],
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=lesnoe,
+            alias_text="ПОГЗ №1 (с. Лесное)",
+            normalized_alias=normalize_text("ПОГЗ №1 (с. Лесное)"),
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=polyarnoe,
+            alias_text="ПОГЗ №1 (с. Полярное)",
+            normalized_alias=normalize_text("ПОГЗ №1 (с. Полярное)"),
+            embedding=None,
+        )
+        invalidate_subdivision_cache()
+
+        candidates = match_subdivision("службой ПОГЗ №1 (с. Лесное) выявлено", top_k=2)
+
+        self.assertEqual(candidates[0]["name"], "ПОГЗ №1 (с. Лесное)")
+        self.assertFalse(candidates[0]["locality_mismatch"])
+        self.assertGreaterEqual(candidates[0]["score_percent"], candidates[1]["score_percent"])
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_match_subdivision_marks_locality_mismatch_when_missing(self):
+        polyarnoe = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПОГЗ №1 (с. Полярное)",
+            normalized_name=normalize_text("ПОГЗ №1 (с. Полярное)"),
+            aliases=[],
+            embedding=None,
+        )
+        CachedSubdivisionAlias.objects.create(
+            subdivision=polyarnoe,
+            alias_text="ПОГЗ №1 (с. Полярное)",
+            normalized_alias=normalize_text("ПОГЗ №1 (с. Полярное)"),
+            embedding=None,
+        )
+        invalidate_subdivision_cache()
+
+        candidates = match_subdivision("службой ПОГЗ №1 (с. Лесное) выявлено", top_k=1)
+
+        self.assertEqual(candidates[0]["name"], "ПОГЗ №1 (с. Полярное)")
+        self.assertTrue(candidates[0]["locality_mismatch"])
+        self.assertLess(candidates[0]["score_percent"], 85)
+
+    def test_build_comments_includes_locality_mismatch(self):
+        comments = analysis_views._build_comments(
+            {
+                "matched": True,
+                "diffs": {},
+                "subdivision_locality_mismatch": True,
+                "subdivision_locality_query": {"type": "с", "name": "лесное"},
+                "subdivision_locality_candidate": {"type": "с", "name": "полярное"},
+            }
+        )
+
+        self.assertTrue(any("Населённый пункт не совпадает" in comment for comment in comments))
