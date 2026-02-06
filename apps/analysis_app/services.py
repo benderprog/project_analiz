@@ -468,6 +468,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             }
 
     if not best_event:
+        unit_type_conflict = bool(
+            best_candidate.get("flags", {}).get("unit_type_conflict") if best_candidate else False
+        )
         return {
             "matched": False,
             "score_percent": 0,
@@ -488,6 +491,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "subdivision_locality_mismatch": bool(
                 best_candidate.get("locality_mismatch") if best_candidate else False
             ),
+            "subdivision_unit_type_conflict": unit_type_conflict,
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
@@ -550,6 +554,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         for offender in best_event.offenders.all()
     ]
     subdivision_match_percent = subdivision_confidence_percent
+    unit_type_conflict = bool(
+        best_candidate.get("flags", {}).get("unit_type_conflict") if best_candidate else False
+    )
 
     return {
         "matched": True,
@@ -574,6 +581,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_locality_mismatch": bool(
             best_candidate.get("locality_mismatch") if best_candidate else False
         ),
+        "subdivision_unit_type_conflict": unit_type_conflict,
         "portal": {
             "timestamp": format_local_naive(best_event.date_detection),
             "subdivision_name": best_event.find_subdivision_unit.name

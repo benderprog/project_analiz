@@ -5,8 +5,9 @@ import re
 _DASH_REGEX = re.compile(r"[—–−]")
 _QUOTES_REGEX = re.compile(r"[«»\"“”]")
 _NO_NUMBER_REGEX = re.compile(r"\b(?:no|n)\s*\.?\s*(\d+)\b", re.IGNORECASE)
-_UNIT_NUMBER_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого)\s*[-№]?\s*(\d+)\b")
+_UNIT_NUMBER_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого|погк)\s*[-№]?\s*(\d+)\b")
 _LOCALITY_REGEX = re.compile(r"\((г\.|с\.|пгт\.?)\s*([^)]+)\)", re.IGNORECASE)
+_UNIT_TOKEN_REGEX = re.compile(r"\b(опк|оп|пз|погз|пого|погк)\b")
 
 
 def normalize_text(value: str) -> str:
@@ -36,3 +37,24 @@ def extract_locality(value: str) -> tuple[str | None, str | None]:
     if not locality:
         return None, None
     return prefix, locality
+
+
+def unit_type_group(text: str) -> str:
+    if not text:
+        return "UNKNOWN"
+    normalized = normalize_text(text)
+    match = _UNIT_TOKEN_REGEX.search(normalized)
+    if not match:
+        return "UNKNOWN"
+    token = match.group(1)
+    if token in {"оп", "опк"}:
+        return "OP"
+    if token == "пз":
+        return "PZ"
+    if token == "погз":
+        return "POGZ"
+    if token == "пого":
+        return "POGO"
+    if token == "погк":
+        return "POGK"
+    return "UNKNOWN"
