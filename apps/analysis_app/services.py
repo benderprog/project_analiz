@@ -16,6 +16,7 @@ from apps.analysis_app.utils.dt_display import format_local_naive
 from apps.portaldb import repository
 from apps.portaldb.models import Event
 
+from .offender_extractor import extract_offenders, normalize_name_part
 from .semantic import get_sentence_model
 from .subdivision_matcher import (
     SUBDIVISION_MATCH_THRESHOLD,
@@ -165,29 +166,6 @@ def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
     return aware_dt, time_found
 
 
-def _extract_names(text: str) -> list[dict]:
-    """Extract offender names and optional birth years."""
-    from natasha import NamesExtractor
-
-    extractor = NamesExtractor(_get_morph())
-    offenders = []
-    for match in extractor(text):
-        name = match.fact
-        full_name = " ".join(filter(None, [name.last, name.first, name.middle]))
-        end_idx = _match_end_index(match)
-        year = _find_birth_year(text, end_idx) if end_idx is not None else None
-        offenders.append(
-            {
-                "full_name": full_name,
-                "first_name": name.first,
-                "second_name": name.last,
-                "patronymic_name": name.middle,
-                "birth_year": year,
-            }
-        )
-    return offenders
-
-
 def _match_end_index(match) -> int | None:
     span_attr = getattr(match, "span", None)
     if span_attr is not None:
@@ -222,12 +200,6 @@ def _match_start_index(match) -> int | None:
     if hasattr(match, "begin"):
         return int(match.begin)
     return None
-
-
-def _find_birth_year(text: str, start_idx: int) -> int | None:
-    snippet = text[start_idx : start_idx + 20]
-    match = re.search(r"(19\d{2}|20\d{2})", snippet)
-    return int(match.group(1)) if match else None
 
 
 def _find_datetime_span(text: str) -> tuple[int, int] | None:
@@ -292,7 +264,7 @@ def highlight_text(text: str, spans: list[tuple[int, int, str]]) -> SafeString:
 def extract_attributes(text: str) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
-    offenders = _extract_names(text)
+    offenders = extract_offenders(text)
     subdivision_candidates = match_subdivision(text, top_k=5)
     best_candidate = subdivision_candidates[0] if subdivision_candidates else None
     if best_candidate and best_candidate["score"] >= SUBDIVISION_MATCH_THRESHOLD:
@@ -331,28 +303,42 @@ def _offender_similarity(text_a: str, text_b: str) -> float:
     return SequenceMatcher(None, text_a, text_b).ratio()
 
 
-def _match_offenders(extracted: list[dict], event: Event) -> tuple[float, int]:
-    if not extracted or not event.offenders.all():
-        return 0.0, 0
+def _match_offenders(extracted: list[dict], event: Event) -> tuple[float, dict]:
+    portal_offenders = list(event.offenders.all())
+    counts = {
+        "extracted": len(extracted),
+        "portal": len(portal_offenders),
+        "matched": 0,
+    }
+    if not extracted or not portal_offenders:
+        return 0.0, counts
 
     scores = []
-    matched_count = 0
-    for offender in event.offenders.all():
+    for offender in portal_offenders:
         portal_name = " ".join(
             filter(None, [offender.second_name, offender.first_name, offender.patronymic_name])
         )
+        portal_last = normalize_name_part(offender.second_name)
         best = 0.0
         for candidate in extracted:
             candidate_name = candidate.get("full_name", "")
             similarity = _offender_similarity(candidate_name.lower(), portal_name.lower())
-            if candidate.get("birth_year") and offender.date_of_birth:
-                if offender.date_of_birth.year == candidate["birth_year"]:
+            candidate_last = normalize_name_part(candidate.get("second_name"))
+            if portal_last and candidate_last and portal_last == candidate_last:
+                similarity += 0.1
+            if offender.date_of_birth:
+                candidate_birth_date = candidate.get("birth_date")
+                candidate_birth_year = candidate.get("birth_year")
+                if candidate_birth_date and candidate_birth_date == offender.date_of_birth:
+                    similarity += 0.15
+                elif candidate_birth_year and offender.date_of_birth.year == candidate_birth_year:
                     similarity += 0.1
+            similarity = min(similarity, 1.0)
             best = max(best, similarity)
         if best >= 0.6:
-            matched_count += 1
+            counts["matched"] += 1
         scores.append(best)
-    return sum(scores) / len(scores), matched_count
+    return sum(scores) / len(scores), counts
 
 
 def _looks_like_regex(pattern: str) -> bool:
@@ -434,7 +420,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_id
             and str(event.find_subdivision_unit_id) == attributes.subdivision_id
         )
-        offenders_score, offenders_matched = _match_offenders(attributes.offenders, event)
+        offenders_score, offenders_counts = _match_offenders(attributes.offenders, event)
         offenders_ok = offenders_score >= 0.6
 
         flags = {
@@ -457,7 +443,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             best_event = event
             best_score = score
             best_delta = delta_minutes
-            best_offenders_matched = offenders_matched
+            best_offenders_matched = offenders_counts.get("matched", 0)
             best_flags = {
                 **flags,
                 "type_match": type_ok,
@@ -465,6 +451,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "predicted_type": predicted_type,
                 "predicted_article": predicted_article,
                 "offenders_score": round(offenders_score * 100, 2),
+                "offenders_counts": offenders_counts,
             }
 
     if not best_event:
@@ -566,7 +553,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "portal_timestamp_display": format_local_naive(best_event.date_detection),
         "time_delta_minutes": best_delta,
         "offenders_score_percent": best_flags.get("offenders_score", 0),
-        "offenders_counts": {
+        "offenders_counts": best_flags.get("offenders_counts")
+        or {
             "extracted": len(attributes.offenders),
             "portal": len(portal_offenders),
             "matched": best_offenders_matched,
