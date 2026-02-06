@@ -80,7 +80,26 @@
             </tr>
             <tr data-row="subdivision">
               <td>Подразделение</td>
-              <td id="attr-subdivision">{{ selected_event.extracted.subdivision_name|default:"—" }}</td>
+              <td id="attr-subdivision">
+                <div id="attr-subdivision-value">
+                  {{ selected_event.extracted.subdivision_name|default:"—" }}
+                </div>
+                <details class="subdivision-candidates" id="subdivision-candidates">
+                  <summary>Кандидаты</summary>
+                  <ul>
+                    {% for candidate in selected_event.extracted.subdivision_candidates %}
+                      <li>
+                        {{ candidate.name|default:"—" }}
+                        {% if candidate.score is not None %}
+                          — {{ candidate.score }}%
+                        {% endif %}
+                      </li>
+                    {% empty %}
+                      <li>—</li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              </td>
               <td>
                 <span class="badge badge-{{ selected_event.status.subdivision }}" data-badge="subdivision">
                   {% if selected_event.status.subdivision == "green" %}
@@ -92,7 +111,7 @@
                   {% endif %}
                 </span>
                 <span class="attr-metric" id="metric-subdivision">
-                  {% if selected_event.match.subdivision_match_percent %}
+                  {% if selected_event.match.subdivision_match_percent is not None %}
                     {{ selected_event.match.subdivision_match_percent }}%
                   {% else %}
                     —
@@ -194,6 +213,8 @@
       score: document.querySelector(".detail-score"),
       attrTimestamp: document.getElementById("attr-timestamp"),
       attrSubdivision: document.getElementById("attr-subdivision"),
+      attrSubdivisionValue: document.getElementById("attr-subdivision-value"),
+      subdivisionCandidates: document.getElementById("subdivision-candidates"),
       attrOffenders: document.getElementById("attr-offenders"),
       portalTimestamp: document.getElementById("portal-timestamp"),
       portalSubdivision: document.getElementById("portal-subdivision"),
@@ -235,12 +256,31 @@
       return items.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     };
 
+    const renderCandidates = (candidates) => {
+      if (!candidates || !candidates.length) {
+        return "<li>—</li>";
+      }
+      return candidates
+        .map(
+          (candidate) =>
+            `<li>${escapeHtml(candidate.name || "—")}${
+              candidate.score !== null && candidate.score !== undefined
+                ? ` — ${candidate.score}%`
+                : ""
+            }</li>`
+        )
+        .join("");
+    };
+
     const renderEvent = (event) => {
       dom.title.textContent = `Событие ${event.idx}`;
       dom.text.innerHTML = event.highlighted_html;
       dom.score.textContent = `Совпадение: ${event.match.score_percent ?? 0}%`;
       dom.attrTimestamp.textContent = event.extracted_timestamp_display || "—";
-      dom.attrSubdivision.textContent = event.extracted.subdivision_name || "—";
+      dom.attrSubdivisionValue.textContent = event.extracted.subdivision_name || "—";
+      dom.subdivisionCandidates.querySelector("ul").innerHTML = renderCandidates(
+        event.extracted.subdivision_candidates
+      );
       dom.attrOffenders.innerHTML = renderList(event.extracted.offenders);
       dom.portalTimestamp.textContent = event.portal_timestamp_display || "—";
       dom.portalSubdivision.textContent = event.portal.subdivision_name || "—";
@@ -250,6 +290,7 @@
       dom.metricTimestamp.textContent =
         delta === null || delta === undefined ? "—" : `Δ ${delta} мин`;
       dom.metricSubdivision.textContent = event.match.subdivision_match_percent
+        !== null && event.match.subdivision_match_percent !== undefined
         ? `${event.match.subdivision_match_percent}%`
         : "—";
       const offendersCounts = event.match.offenders_counts || {};
