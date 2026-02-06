@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
 from functools import lru_cache
 
@@ -14,7 +14,6 @@ from apps.portaldb import repository
 from apps.portaldb.models import Event
 
 from .semantic import get_sentence_model
-from .utils.datetime_normalize import to_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,37 @@ def _get_morph():
     return MorphVocab()
 
 
+def _fact_to_datetime(fact) -> datetime | None:
+    if fact is None:
+        return None
+    if isinstance(fact, datetime):
+        return fact
+    if isinstance(fact, date):
+        return datetime.combine(fact, time(0, 0))
+
+    if hasattr(fact, "as_datetime"):
+        try:
+            dt = fact.as_datetime()
+        except Exception:
+            dt = None
+        if dt is not None:
+            return dt
+
+    if hasattr(fact, "year") and hasattr(fact, "month") and hasattr(fact, "day"):
+        try:
+            year = int(getattr(fact, "year"))
+            month = int(getattr(fact, "month"))
+            day = int(getattr(fact, "day"))
+            hour = int(getattr(fact, "hour", 0) or 0)
+            minute = int(getattr(fact, "minute", 0) or 0)
+            second = int(getattr(fact, "second", 0) or 0)
+            return datetime(year, month, day, hour, minute, second)
+        except (TypeError, ValueError):
+            return None
+
+    return None
+
+
 def _extract_date(text: str) -> datetime | None:
     """Extract date/time using Natasha; return timezone-aware datetime."""
     from natasha import DatesExtractor
@@ -56,7 +86,7 @@ def _extract_date(text: str) -> datetime | None:
     matches = list(extractor(text))
     if not matches:
         return None
-    dt = to_datetime(matches[0].fact)
+    dt = _fact_to_datetime(matches[0].fact)
     if dt is None:
         return None
     return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
