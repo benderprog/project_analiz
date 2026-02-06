@@ -77,7 +77,7 @@ class Command(BaseCommand):
                         "name": portal_subdivision.name,
                         "pu": cached_pus.get(portal_subdivision.parent_pu_id),
                         "normalized_name": normalized_name,
-                        "aliases": alias_texts,
+                        "legacy_aliases": alias_texts,
                         "embedding_source_hash": source_hash,
                     },
                 )
@@ -85,7 +85,7 @@ class Command(BaseCommand):
                     cached_subdivision.name = portal_subdivision.name
                     cached_subdivision.pu = cached_pus.get(portal_subdivision.parent_pu_id)
                     cached_subdivision.normalized_name = normalized_name
-                    cached_subdivision.aliases = alias_texts
+                    cached_subdivision.legacy_aliases = alias_texts
 
                 hash_changed = cached_subdivision.embedding_source_hash != source_hash
                 should_rebuild = (
