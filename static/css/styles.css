@@ -169,22 +169,6 @@ body {
   color: #555;
 }
 
-.subdivision-candidates {
-  margin-top: 6px;
-  font-size: 0.85rem;
-  color: #444;
-}
-
-.subdivision-candidates summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.subdivision-candidates ul {
-  margin-top: 6px;
-  padding-left: 18px;
-}
-
 .badge {
   display: inline-flex;
   align-items: center;

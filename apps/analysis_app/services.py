@@ -17,10 +17,6 @@ from apps.portaldb import repository
 from apps.portaldb.models import Event
 
 from .semantic import get_sentence_model
-from .subdivision_matcher import (
-    SUBDIVISION_MATCH_THRESHOLD,
-    match_subdivision,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +28,6 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
-    subdivision_candidates: list[dict]
 
 
 def parse_docx(file_path: str) -> list[str]:
@@ -288,25 +283,26 @@ def highlight_text(text: str, spans: list[tuple[int, int, str]]) -> SafeString:
     return mark_safe("".join(parts))
 
 
+def _detect_subdivision(text: str) -> tuple[str | None, str | None]:
+    subdivisions = list(repository.list_subdivisions())
+    lowered = text.lower()
+    for subdivision in subdivisions:
+        if subdivision.name.lower() in lowered:
+            return str(subdivision.subdivision_id), subdivision.name
+    return None, None
+
+
 def extract_attributes(text: str) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
     offenders = _extract_names(text)
-    subdivision_candidates = match_subdivision(text, top_k=5)
-    best_candidate = subdivision_candidates[0] if subdivision_candidates else None
-    if best_candidate and best_candidate["score"] >= SUBDIVISION_MATCH_THRESHOLD:
-        subdivision_id = best_candidate["portal_subdivision_id"]
-        subdivision_name = best_candidate["name"]
-    else:
-        subdivision_id = None
-        subdivision_name = None
+    subdivision_id, subdivision_name = _detect_subdivision(text)
     return ExtractedAttributes(
         date_time=date_time,
         time_found=time_found,
         subdivision_id=subdivision_id,
         offenders=offenders,
         subdivision_name=subdivision_name,
-        subdivision_candidates=subdivision_candidates,
     )
 
 
@@ -389,11 +385,6 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 
 def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     """Match extracted attributes to portal events and build comparison result."""
-    subdivision_confidence_percent = 0.0
-    if attributes.subdivision_candidates:
-        subdivision_confidence_percent = round(
-            attributes.subdivision_candidates[0]["score"] * 100, 2
-        )
     candidates = []
     if attributes.date_time:
         candidates = list(repository.find_close_events_by_date(attributes.date_time))
@@ -472,7 +463,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "portal": 0,
                 "matched": 0,
             },
-            "subdivision_match_percent": subdivision_confidence_percent,
+            "subdivision_match_percent": 0,
             "time_found": attributes.time_found,
             "date_time_present": bool(attributes.date_time),
             "portal": None,
@@ -536,7 +527,16 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
         for offender in best_event.offenders.all()
     ]
-    subdivision_match_percent = subdivision_confidence_percent
+    subdivision_match_percent = 0.0
+    if attributes.subdivision_name and best_event.find_subdivision_unit:
+        subdivision_match_percent = (
+            SequenceMatcher(
+                None,
+                attributes.subdivision_name.lower(),
+                best_event.find_subdivision_unit.name.lower(),
+            ).ratio()
+            * 100
+        )
 
     return {
         "matched": True,
