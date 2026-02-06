@@ -63,9 +63,16 @@ class ClassifierImportTests(TestCase):
         self.assertEqual(EventType.objects.count(), 1)
         self.assertEqual(EventTypePattern.objects.count(), 0)
 
-    def test_parse_skips_empty_row(self):
-        stream = self._build_workbook([["Событие A", "паттерн 1", "12.1"], [None, None, None]])
+    def test_parse_skips_empty_row_inside_used_range(self):
+        # Trailing fully-empty rows are not reliably included by openpyxl's used range.
+        stream = self._build_workbook(
+            [
+                ["Событие A", "паттерн 1", "12.1"],
+                [None, None, None],
+                ["Событие B", "паттерн 2", "12.2"],
+            ]
+        )
         rows, skipped = parse_classifier_xlsx(stream)
 
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(skipped, 1)
