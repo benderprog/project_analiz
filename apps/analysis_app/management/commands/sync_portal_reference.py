@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from apps.analysis_app.models import CachedPU, CachedSubdivision
+from apps.analysis_app.models import CachedPU, CachedSubdivision, CachedSubdivisionAlias
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache
 from apps.analysis_app.subdivision_utils import (
@@ -16,6 +16,7 @@ from apps.analysis_app.subdivision_utils import (
     normalize_subdivision_name,
     to_py_floats,
 )
+from apps.analysis_app.utils.subdivision_norm import normalize_text
 from apps.portaldb.models import Pu, Subdivision
 
 logger = logging.getLogger(__name__)
@@ -68,15 +69,15 @@ class Command(BaseCommand):
             )
             for portal_subdivision in portal_subdivisions:
                 normalized_name = normalize_subdivision_name(portal_subdivision.name)
-                aliases = build_subdivision_aliases(portal_subdivision.name)
-                source_hash = build_embedding_source_hash(normalized_name, aliases)
+                alias_texts = build_subdivision_aliases(portal_subdivision.name)
+                source_hash = build_embedding_source_hash(normalized_name, alias_texts)
                 cached_subdivision, created = CachedSubdivision.objects.get_or_create(
                     portal_subdivision_id=portal_subdivision.subdivision_id,
                     defaults={
                         "name": portal_subdivision.name,
                         "pu": cached_pus.get(portal_subdivision.parent_pu_id),
                         "normalized_name": normalized_name,
-                        "aliases": aliases,
+                        "aliases": alias_texts,
                         "embedding_source_hash": source_hash,
                     },
                 )
@@ -84,7 +85,7 @@ class Command(BaseCommand):
                     cached_subdivision.name = portal_subdivision.name
                     cached_subdivision.pu = cached_pus.get(portal_subdivision.parent_pu_id)
                     cached_subdivision.normalized_name = normalized_name
-                    cached_subdivision.aliases = aliases
+                    cached_subdivision.aliases = alias_texts
 
                 hash_changed = cached_subdivision.embedding_source_hash != source_hash
                 should_rebuild = (
@@ -100,11 +101,51 @@ class Command(BaseCommand):
                         embedding = model.encode([normalized_name])[0]
                         cached_subdivision.embedding = to_py_floats(embedding)
                         cached_subdivision.embedding_updated_at = timezone.now()
-                    else:
+                    elif rebuild_embeddings or cached_subdivision.embedding is None:
                         cached_subdivision.embedding = None
                         cached_subdivision.embedding_updated_at = None
 
                 cached_subdivision.save()
+
+                alias_map: dict[str, str] = {}
+                for alias_text in alias_texts:
+                    normalized_alias = normalize_text(alias_text)
+                    if not normalized_alias:
+                        continue
+                    alias_map.setdefault(normalized_alias, alias_text)
+
+                alias_embeddings: dict[str, list[float] | None] = {}
+                if model and not settings.SKIP_SEMANTIC_MODEL:
+                    embeddings = model.encode(list(alias_map.values()))
+                    for idx, normalized_alias in enumerate(alias_map.keys()):
+                        alias_embeddings[normalized_alias] = to_py_floats(embeddings[idx])
+
+                existing_aliases = {
+                    alias.normalized_alias: alias
+                    for alias in CachedSubdivisionAlias.objects.filter(
+                        subdivision=cached_subdivision
+                    )
+                }
+                for normalized_alias, alias_text in alias_map.items():
+                    alias_obj = existing_aliases.get(normalized_alias)
+                    defaults = {
+                        "alias_text": alias_text,
+                        "normalized_alias": normalized_alias,
+                    }
+                    if model and not settings.SKIP_SEMANTIC_MODEL:
+                        defaults["embedding"] = alias_embeddings.get(normalized_alias)
+                    elif alias_obj is None or rebuild_embeddings:
+                        defaults["embedding"] = None
+
+                    CachedSubdivisionAlias.objects.update_or_create(
+                        subdivision=cached_subdivision,
+                        normalized_alias=normalized_alias,
+                        defaults=defaults,
+                    )
+
+                CachedSubdivisionAlias.objects.filter(
+                    subdivision=cached_subdivision
+                ).exclude(normalized_alias__in=alias_map.keys()).delete()
 
         invalidate_subdivision_cache()
         self.stdout.write(

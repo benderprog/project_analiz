@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.core.management import call_command
 
-from apps.analysis_app.models import CachedPU, CachedSubdivision
+from apps.analysis_app.models import CachedPU, CachedSubdivision, CachedSubdivisionAlias
 
 
 @admin.action(description="Rebuild embeddings")
@@ -32,3 +32,10 @@ class CachedSubdivisionAdmin(admin.ModelAdmin):
     @admin.display(boolean=True)
     def embedding_present(self, obj):
         return bool(obj.embedding)
+
+
+@admin.register(CachedSubdivisionAlias)
+class CachedSubdivisionAliasAdmin(admin.ModelAdmin):
+    list_display = ("alias_text", "subdivision", "updated_at")
+    search_fields = ("alias_text", "normalized_alias")
+    list_select_related = ("subdivision",)

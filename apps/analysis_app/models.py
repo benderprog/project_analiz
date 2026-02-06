@@ -125,3 +125,27 @@ class CachedSubdivision(models.Model):
             kwargs["update_fields"] = update_fields
 
         super().save(*args, **kwargs)
+
+
+class CachedSubdivisionAlias(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subdivision = models.ForeignKey(
+        CachedSubdivision, on_delete=models.CASCADE, related_name="aliases"
+    )
+    alias_text = models.TextField()
+    normalized_alias = models.TextField(db_index=True)
+    embedding = models.JSONField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Cached Subdivision Alias"
+        verbose_name_plural = "Cached Subdivision Aliases"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["subdivision", "normalized_alias"],
+                name="uniq_cached_subdivision_alias",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return self.alias_text
