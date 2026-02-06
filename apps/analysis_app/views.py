@@ -18,6 +18,7 @@ from apps.analysis_app.subdivision_matcher import (
     SUBDIVISION_YELLOW_THRESHOLD,
 )
 from apps.analysis_app.utils.dt_display import format_local_naive
+from apps.analysis_app.utils.json_safe import offender_to_json
 
 
 def _format_offenders(offenders: list[dict]) -> list[str]:
@@ -271,7 +272,9 @@ class UploadView(View):
                         "subdivision_name": attributes.subdivision_name,
                         "subdivision_candidates": attributes.subdivision_candidates,
                         "subdivision_span": attributes.subdivision_span,
-                        "offenders": attributes.offenders,
+                        "offenders": [
+                            offender_to_json(offender) for offender in attributes.offenders
+                        ],
                     },
                     match_result=match_result,
                 )
