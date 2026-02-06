@@ -4,13 +4,14 @@ from apps.analysis_app import services
 
 
 class NatashaExtractorSmokeTests(SimpleTestCase):
-    def test_extract_date_smoke(self):
+    def test_extract_datetime_smoke(self):
         text = "Событие произошло 12.03.2024 в городе."
 
-        extracted = services._extract_date(text)
+        extracted, time_found = services._extract_datetime(text)
 
         self.assertIsNotNone(extracted)
         self.assertEqual(extracted.year, 2024)
+        self.assertFalse(time_found)
 
     def test_extract_names_smoke(self):
         text = "Иванов Иван Иванович находился на месте."
