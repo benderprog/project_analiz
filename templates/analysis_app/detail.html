@@ -1,0 +1,49 @@
+{% extends "analysis_app/base.html" %}
+
+{% block content %}
+<section class="card">
+  <h2>Результаты анализа</h2>
+  <p>Run ID: {{ run.run_id }}</p>
+  <p>Статус: {{ run.status }}</p>
+</section>
+
+{% for paragraph in paragraphs %}
+  <section class="result">
+    <div class="result-left">
+      <h3>Событие {{ paragraph.idx }}</h3>
+      <p>{{ paragraph.text }}</p>
+      <h4>Извлеченные атрибуты</h4>
+      <ul>
+        <li>Дата/время: {{ paragraph.result.extracted_attributes.date_time|default:"—" }}</li>
+        <li>Подразделение: {{ paragraph.result.extracted_attributes.subdivision_name|default:"—" }}</li>
+        <li>Нарушители:</li>
+        <ul>
+          {% for offender in paragraph.result.extracted_attributes.offenders %}
+            <li>{{ offender.full_name }} ({{ offender.birth_year|default:"—" }})</li>
+          {% empty %}
+            <li>—</li>
+          {% endfor %}
+        </ul>
+      </ul>
+    </div>
+    <div class="result-right">
+      <h4>Сопоставление с БД</h4>
+      {% if paragraph.result.match_result.matched %}
+        <p>Event ID: {{ paragraph.result.match_result.matched_event_id }}</p>
+        <p>Совпадение: {{ paragraph.result.match_result.score_percent }}%</p>
+        <p>Дельта времени: {{ paragraph.result.match_result.time_delta_minutes }} мин</p>
+        <h5>Расхождения</h5>
+        <ul>
+          {% for key, diff in paragraph.result.match_result.diffs.items %}
+            <li>{{ key }}: {{ diff }}</li>
+          {% empty %}
+            <li>Нет расхождений</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>{{ paragraph.result.match_result.diffs.message }}</p>
+      {% endif %}
+    </div>
+  </section>
+{% endfor %}
+{% endblock %}
