@@ -12,6 +12,7 @@ from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
+from apps.analysis_app.utils.dt_display import format_local_naive
 from apps.portaldb import repository
 from apps.portaldb.models import Event
 
@@ -541,6 +542,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "matched": True,
         "matched_event_id": str(best_event.event_id),
         "score_percent": round(best_score, 2),
+        "extracted_timestamp_display": format_local_naive(attributes.date_time),
+        "portal_timestamp_display": format_local_naive(best_event.date_detection),
         "time_delta_minutes": best_delta,
         "offenders_score_percent": best_flags.get("offenders_score", 0),
         "offenders_counts": {
@@ -552,7 +555,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "time_found": attributes.time_found,
         "date_time_present": bool(attributes.date_time),
         "portal": {
-            "timestamp": best_event.date_detection.isoformat(),
+            "timestamp": format_local_naive(best_event.date_detection),
             "subdivision_name": best_event.find_subdivision_unit.name
             if best_event.find_subdivision_unit
             else None,

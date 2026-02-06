@@ -53,7 +53,9 @@
           <tbody>
             <tr data-row="timestamp">
               <td>Дата/время</td>
-              <td id="attr-timestamp">{{ selected_event.extracted.date_time|default:"—" }}</td>
+              <td id="attr-timestamp">
+                {{ selected_event.extracted_timestamp_display|default:"—" }}
+              </td>
               <td>
                 <span class="badge badge-{{ selected_event.status.timestamp }}" data-badge="timestamp">
                   {% if selected_event.status.timestamp == "green" %}
@@ -72,7 +74,9 @@
                   {% endif %}
                 </span>
               </td>
-              <td id="portal-timestamp">{{ selected_event.portal.timestamp|default:"—" }}</td>
+              <td id="portal-timestamp">
+                {{ selected_event.portal_timestamp_display|default:"—" }}
+              </td>
             </tr>
             <tr data-row="subdivision">
               <td>Подразделение</td>
@@ -235,10 +239,10 @@
       dom.title.textContent = `Событие ${event.idx}`;
       dom.text.innerHTML = event.highlighted_html;
       dom.score.textContent = `Совпадение: ${event.match.score_percent ?? 0}%`;
-      dom.attrTimestamp.textContent = event.extracted.date_time || "—";
+      dom.attrTimestamp.textContent = event.extracted_timestamp_display || "—";
       dom.attrSubdivision.textContent = event.extracted.subdivision_name || "—";
       dom.attrOffenders.innerHTML = renderList(event.extracted.offenders);
-      dom.portalTimestamp.textContent = event.portal.timestamp || "—";
+      dom.portalTimestamp.textContent = event.portal_timestamp_display || "—";
       dom.portalSubdivision.textContent = event.portal.subdivision_name || "—";
       dom.portalOffenders.innerHTML = renderList(event.portal.offenders);
 

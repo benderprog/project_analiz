@@ -5,6 +5,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.analysis_app.services import extract_attributes, match_event, parse_docx
+from apps.analysis_app.utils.dt_display import format_local_naive
 
 
 class Command(BaseCommand):
@@ -27,9 +28,7 @@ class Command(BaseCommand):
             for idx, text in enumerate(paragraphs, start=1):
                 attributes = extract_attributes(text)
                 match_result = match_event(attributes, text)
-                date_label = (
-                    attributes.date_time.isoformat() if attributes.date_time else "<none>"
-                )
+                date_label = format_local_naive(attributes.date_time) or "<none>"
                 subdivision_label = attributes.subdivision_name or "<none>"
                 matched_label = "yes" if match_result.get("matched") else "no"
                 self.stdout.write(
