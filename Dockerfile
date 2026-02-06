@@ -2,7 +2,8 @@
 FROM python:3.11-slim AS web
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_DEFAULT_TIMEOUT=120
 
 WORKDIR /app
 
@@ -14,11 +15,28 @@ ARG TORCH_CHANNEL=cpu
 ARG TORCH_VERSION=""
 
 COPY requirements.txt /app/
+RUN python - <<'PY' || true
+import urllib.request
+url = "https://download.pytorch.org/whl/cpu/torch/"
+try:
+    urllib.request.urlopen(url, timeout=20).read(200)
+    print("PyTorch CPU index reachable:", url)
+except Exception as e:
+    print("PyTorch CPU index check failed:", e)
+PY
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ -z "$TORCH_VERSION" ]; then \
-        pip install --no-cache-dir --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}" torch torchvision torchaudio; \
+        pip install --no-cache-dir \
+            --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}" \
+            --extra-index-url "https://pypi.org/simple" \
+            --retries 10 --timeout 120 \
+            torch torchvision torchaudio; \
     else \
-        pip install --no-cache-dir --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}" torch=="${TORCH_VERSION}" torchvision torchaudio; \
+        pip install --no-cache-dir \
+            --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}" \
+            --extra-index-url "https://pypi.org/simple" \
+            --retries 10 --timeout 120 \
+            torch=="${TORCH_VERSION}" torchvision torchaudio; \
     fi
 
 RUN --mount=type=cache,target=/root/.cache/pip \

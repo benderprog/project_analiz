@@ -15,6 +15,9 @@ By default, the Docker images are CPU-only and do not include CUDA/NVIDIA
 libraries. A GPU-enabled build would require a separate, explicit profile and
 would significantly increase image size.
 
+If a build fails with timeouts to `download.pytorch.org`, rerun the build or
+ensure network access; pip now uses a 120s timeout to improve resilience.
+
 ## Option 1: lightweight image + mounted model directory (recommended)
 
 Prepare the model directory on the host and run with the offline override:
