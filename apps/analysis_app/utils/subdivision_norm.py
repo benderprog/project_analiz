@@ -25,12 +25,14 @@ def normalize_text(value: str) -> str:
     return normalized
 
 
-def extract_locality(value: str) -> str:
+def extract_locality(value: str) -> tuple[str | None, str | None]:
     if not value:
-        return ""
+        return None, None
     match = _LOCALITY_REGEX.search(value)
     if not match:
-        return ""
-    prefix = match.group(1).strip().lower()
-    locality = match.group(2).strip()
-    return normalize_text(f"{prefix} {locality}")
+        return None, None
+    prefix = match.group(1).strip().lower().replace(".", "")
+    locality = normalize_text(match.group(2).strip())
+    if not locality:
+        return None, None
+    return prefix, locality

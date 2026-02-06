@@ -395,6 +395,7 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     """Match extracted attributes to portal events and build comparison result."""
     subdivision_confidence_percent = 0.0
+    best_candidate = attributes.subdivision_candidates[0] if attributes.subdivision_candidates else None
     if attributes.subdivision_candidates:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
@@ -480,6 +481,13 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "subdivision_match_percent": subdivision_confidence_percent,
             "time_found": attributes.time_found,
             "date_time_present": bool(attributes.date_time),
+            "subdivision_locality_query": best_candidate.get("query_locality") if best_candidate else None,
+            "subdivision_locality_candidate": best_candidate.get("candidate_locality")
+            if best_candidate
+            else None,
+            "subdivision_locality_mismatch": bool(
+                best_candidate.get("locality_mismatch") if best_candidate else False
+            ),
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
@@ -559,6 +567,13 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_match_percent": round(subdivision_match_percent, 2),
         "time_found": attributes.time_found,
         "date_time_present": bool(attributes.date_time),
+        "subdivision_locality_query": best_candidate.get("query_locality") if best_candidate else None,
+        "subdivision_locality_candidate": best_candidate.get("candidate_locality")
+        if best_candidate
+        else None,
+        "subdivision_locality_mismatch": bool(
+            best_candidate.get("locality_mismatch") if best_candidate else False
+        ),
         "portal": {
             "timestamp": format_local_naive(best_event.date_detection),
             "subdivision_name": best_event.find_subdivision_unit.name
