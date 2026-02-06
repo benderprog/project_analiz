@@ -1,0 +1,12 @@
+{% extends "analysis_app/base.html" %}
+
+{% block content %}
+<section class="card">
+  <h2>Загрузка DOCX</h2>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="primary">Анализировать</button>
+  </form>
+</section>
+{% endblock %}
