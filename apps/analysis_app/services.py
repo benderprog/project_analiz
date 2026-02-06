@@ -8,8 +8,11 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 
 from django.utils import timezone
+from django.utils.html import escape
+from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
+from apps.analysis_app.utils.dt_display import format_local_naive
 from apps.portaldb import repository
 from apps.portaldb.models import Event
 
@@ -21,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExtractedAttributes:
     date_time: datetime | None
+    time_found: bool
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
@@ -78,18 +82,81 @@ def _fact_to_datetime(fact) -> datetime | None:
     return None
 
 
-def _extract_date(text: str) -> datetime | None:
-    """Extract date/time using Natasha; return timezone-aware datetime."""
+_DATETIME_REGEXES = [
+    re.compile(
+        r"(?:\bв\b\s*)?(?P<time>\d{1,2}[.:]\d{2})\s*(?P<date>\d{2}\.\d{2}\.\d{4})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?P<date>\d{2}\.\d{2}\.\d{4})\s*(?:,|;|—|-)?\s*(?:\bв\b\s*)?"
+        r"(?P<time>\d{1,2}[.:]\d{2})",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _find_datetime_regex_match(text: str) -> re.Match[str] | None:
+    for regex in _DATETIME_REGEXES:
+        match = regex.search(text)
+        if match:
+            return match
+    return None
+
+
+def _parse_time_value(time_str: str) -> tuple[int, int] | None:
+    normalized = time_str.replace(".", ":")
+    parts = normalized.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def _extract_datetime_regex(text: str) -> tuple[datetime | None, bool]:
+    match = _find_datetime_regex_match(text)
+    if not match:
+        return None, False
+
+    date_str = match.group("date")
+    time_str = match.group("time")
+    parsed_time = _parse_time_value(time_str)
+    if not parsed_time:
+        return None, False
+
+    try:
+        date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
+    except ValueError:
+        return None, False
+
+    hour, minute = parsed_time
+    return datetime.combine(date_obj, time(hour, minute)), True
+
+
+def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
+    """Extract date/time using regex first, then Natasha; return timezone-aware datetime."""
     from natasha import DatesExtractor
+
+    dt, time_found = _extract_datetime_regex(text)
+    if dt is not None:
+        aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        return aware_dt, time_found
 
     extractor = DatesExtractor(_get_morph())
     matches = list(extractor(text))
     if not matches:
-        return None
+        return None, False
     dt = _fact_to_datetime(matches[0].fact)
     if dt is None:
-        return None
-    return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        return None, False
+    time_found = dt.time() != time(0, 0)
+    aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    return aware_dt, time_found
 
 
 def _extract_names(text: str) -> list[dict]:
@@ -134,10 +201,86 @@ def _match_end_index(match) -> int | None:
     return None
 
 
+def _match_start_index(match) -> int | None:
+    span_attr = getattr(match, "span", None)
+    if span_attr is not None:
+        sp = span_attr() if callable(span_attr) else span_attr
+        if isinstance(sp, (tuple, list)) and len(sp) == 2:
+            return int(sp[0])
+        if hasattr(sp, "start"):
+            return int(sp.start)
+        if hasattr(sp, "begin"):
+            return int(sp.begin)
+    if hasattr(match, "start"):
+        return int(match.start)
+    if hasattr(match, "begin"):
+        return int(match.begin)
+    return None
+
+
 def _find_birth_year(text: str, start_idx: int) -> int | None:
     snippet = text[start_idx : start_idx + 20]
     match = re.search(r"(19\d{2}|20\d{2})", snippet)
     return int(match.group(1)) if match else None
+
+
+def _find_datetime_span(text: str) -> tuple[int, int] | None:
+    regex_match = _find_datetime_regex_match(text)
+    if regex_match:
+        return regex_match.start(), regex_match.end()
+
+    from natasha import DatesExtractor
+
+    extractor = DatesExtractor(_get_morph())
+    matches = list(extractor(text))
+    if not matches:
+        return None
+    match = matches[0]
+    start = _match_start_index(match)
+    end = _match_end_index(match)
+    if start is None or end is None:
+        return None
+    return start, end
+
+
+def _find_case_insensitive_span(text: str, needle: str) -> tuple[int, int] | None:
+    if not needle:
+        return None
+    match = re.search(re.escape(needle), text, re.IGNORECASE)
+    if not match:
+        return None
+    return match.start(), match.end()
+
+
+def highlight_text(text: str, spans: list[tuple[int, int, str]]) -> SafeString:
+    """Escape text and wrap spans in highlight classes."""
+    if not text:
+        return mark_safe("")
+
+    filtered: list[tuple[int, int, str]] = []
+    sorted_spans = sorted(spans, key=lambda item: (item[0], -(item[1] - item[0])))
+    last_end = -1
+    for start, end, css_class in sorted_spans:
+        if start < 0 or end <= start:
+            continue
+        if start < last_end:
+            continue
+        filtered.append((start, end, css_class))
+        last_end = end
+
+    if not filtered:
+        return mark_safe(escape(text))
+
+    parts: list[str] = []
+    cursor = len(text)
+    for start, end, css_class in reversed(filtered):
+        parts.append(escape(text[end:cursor]))
+        span_text = escape(text[start:end])
+        parts.append(f'<span class="hl {css_class}">{span_text}</span>')
+        cursor = start
+    parts.append(escape(text[:cursor]))
+    parts.reverse()
+    return mark_safe("".join(parts))
 
 
 def _detect_subdivision(text: str) -> tuple[str | None, str | None]:
@@ -151,11 +294,12 @@ def _detect_subdivision(text: str) -> tuple[str | None, str | None]:
 
 def extract_attributes(text: str) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
-    date_time = _extract_date(text)
+    date_time, time_found = _extract_datetime(text)
     offenders = _extract_names(text)
     subdivision_id, subdivision_name = _detect_subdivision(text)
     return ExtractedAttributes(
         date_time=date_time,
+        time_found=time_found,
         subdivision_id=subdivision_id,
         offenders=offenders,
         subdivision_name=subdivision_name,
@@ -178,11 +322,12 @@ def _offender_similarity(text_a: str, text_b: str) -> float:
     return SequenceMatcher(None, text_a, text_b).ratio()
 
 
-def _match_offenders(extracted: list[dict], event: Event) -> float:
+def _match_offenders(extracted: list[dict], event: Event) -> tuple[float, int]:
     if not extracted or not event.offenders.all():
-        return 0.0
+        return 0.0, 0
 
     scores = []
+    matched_count = 0
     for offender in event.offenders.all():
         portal_name = " ".join(
             filter(None, [offender.second_name, offender.first_name, offender.patronymic_name])
@@ -195,8 +340,10 @@ def _match_offenders(extracted: list[dict], event: Event) -> float:
                 if offender.date_of_birth.year == candidate["birth_year"]:
                     similarity += 0.1
             best = max(best, similarity)
+        if best >= 0.6:
+            matched_count += 1
         scores.append(best)
-    return sum(scores) / len(scores)
+    return sum(scores) / len(scores), matched_count
 
 
 def _looks_like_regex(pattern: str) -> bool:
@@ -244,6 +391,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     else:
         candidates = list(repository.find_candidate_events())
 
+    predicted_type, predicted_article = _classify_event_type(text)
+
     if attributes.subdivision_id:
         candidates = [
             event
@@ -255,6 +404,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     best_score = -1.0
     best_delta = None
     best_flags = {}
+    best_offenders_matched = 0
 
     for event in candidates:
         event = repository.get_event_with_offenders(event.event_id)
@@ -269,7 +419,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_id
             and str(event.find_subdivision_unit_id) == attributes.subdivision_id
         )
-        offenders_score = _match_offenders(attributes.offenders, event)
+        offenders_score, offenders_matched = _match_offenders(attributes.offenders, event)
         offenders_ok = offenders_score >= 0.6
 
         flags = {
@@ -280,7 +430,6 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         if sum(flags.values()) < 2:
             continue
 
-        predicted_type, predicted_article = _classify_event_type(text)
         type_ok = predicted_type and predicted_type == event.event_type
         article_ok = predicted_article and predicted_article == event.article_of_law
 
@@ -293,6 +442,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             best_event = event
             best_score = score
             best_delta = delta_minutes
+            best_offenders_matched = offenders_matched
             best_flags = {
                 **flags,
                 "type_match": type_ok,
@@ -307,6 +457,20 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "matched": False,
             "score_percent": 0,
             "time_delta_minutes": None,
+            "offenders_score_percent": 0,
+            "offenders_counts": {
+                "extracted": len(attributes.offenders),
+                "portal": 0,
+                "matched": 0,
+            },
+            "subdivision_match_percent": 0,
+            "time_found": attributes.time_found,
+            "date_time_present": bool(attributes.date_time),
+            "portal": None,
+            "predicted": {
+                "event_type": predicted_type,
+                "article_of_law": predicted_article,
+            },
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
         }
 
@@ -347,10 +511,61 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             ],
         }
 
+    portal_offenders = [
+        {
+            "full_name": " ".join(
+                filter(
+                    None,
+                    [
+                        offender.second_name,
+                        offender.first_name,
+                        offender.patronymic_name,
+                    ],
+                )
+            ),
+            "birth_year": offender.date_of_birth.year if offender.date_of_birth else None,
+        }
+        for offender in best_event.offenders.all()
+    ]
+    subdivision_match_percent = 0.0
+    if attributes.subdivision_name and best_event.find_subdivision_unit:
+        subdivision_match_percent = (
+            SequenceMatcher(
+                None,
+                attributes.subdivision_name.lower(),
+                best_event.find_subdivision_unit.name.lower(),
+            ).ratio()
+            * 100
+        )
+
     return {
         "matched": True,
         "matched_event_id": str(best_event.event_id),
         "score_percent": round(best_score, 2),
+        "extracted_timestamp_display": format_local_naive(attributes.date_time),
+        "portal_timestamp_display": format_local_naive(best_event.date_detection),
         "time_delta_minutes": best_delta,
+        "offenders_score_percent": best_flags.get("offenders_score", 0),
+        "offenders_counts": {
+            "extracted": len(attributes.offenders),
+            "portal": len(portal_offenders),
+            "matched": best_offenders_matched,
+        },
+        "subdivision_match_percent": round(subdivision_match_percent, 2),
+        "time_found": attributes.time_found,
+        "date_time_present": bool(attributes.date_time),
+        "portal": {
+            "timestamp": format_local_naive(best_event.date_detection),
+            "subdivision_name": best_event.find_subdivision_unit.name
+            if best_event.find_subdivision_unit
+            else None,
+            "offenders": portal_offenders,
+            "event_type": best_event.event_type,
+            "article_of_law": best_event.article_of_law,
+        },
+        "predicted": {
+            "event_type": best_flags.get("predicted_type"),
+            "article_of_law": best_flags.get("predicted_article"),
+        },
         "diffs": diffs,
     }

@@ -32,6 +32,7 @@ class MatchingTests(TestCase):
 
         attributes = ExtractedAttributes(
             date_time=event_time + timedelta(minutes=10),
+            time_found=True,
             subdivision_id=str(subdivision.subdivision_id),
             offenders=[
                 {
