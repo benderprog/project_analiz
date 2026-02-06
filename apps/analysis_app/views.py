@@ -13,6 +13,10 @@ from apps.analysis_app.services import (
     match_event,
     parse_docx,
 )
+from apps.analysis_app.subdivision_matcher import (
+    SUBDIVISION_GREEN_THRESHOLD,
+    SUBDIVISION_YELLOW_THRESHOLD,
+)
 from apps.analysis_app.utils.dt_display import format_local_naive
 
 
@@ -38,10 +42,14 @@ def _status_for_timestamp(match_result: dict) -> str:
 
 
 def _status_for_subdivision(match_result: dict) -> str:
-    if not match_result.get("matched"):
+    score = match_result.get("subdivision_match_percent")
+    if score is None:
         return "red"
-    diffs = match_result.get("diffs", {})
-    return "yellow" if "subdivision" in diffs else "green"
+    if score >= SUBDIVISION_GREEN_THRESHOLD * 100:
+        return "green"
+    if score >= SUBDIVISION_YELLOW_THRESHOLD * 100:
+        return "yellow"
+    return "red"
 
 
 def _status_for_offenders(match_result: dict) -> str:
@@ -130,6 +138,18 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         portal_dt
     )
 
+    subdivision_candidates = extracted.get("subdivision_candidates") or []
+    formatted_candidates = []
+    for candidate in subdivision_candidates:
+        score = candidate.get("score")
+        formatted_candidates.append(
+            {
+                "portal_subdivision_id": candidate.get("portal_subdivision_id"),
+                "name": candidate.get("name"),
+                "score": round(score * 100, 2) if score is not None else None,
+            }
+        )
+
     return {
         "idx": paragraph.idx,
         "preview": preview,
@@ -140,6 +160,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         "extracted": {
             "date_time": extracted_timestamp_display,
             "subdivision_name": extracted.get("subdivision_name"),
+            "subdivision_candidates": formatted_candidates,
             "offenders": _format_offenders(extracted.get("offenders") or []),
         },
         "match": {
@@ -198,6 +219,7 @@ class UploadView(View):
                         "time_found": attributes.time_found,
                         "subdivision_id": attributes.subdivision_id,
                         "subdivision_name": attributes.subdivision_name,
+                        "subdivision_candidates": attributes.subdivision_candidates,
                         "offenders": attributes.offenders,
                     },
                     match_result=match_result,
