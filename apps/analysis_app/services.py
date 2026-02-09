@@ -25,6 +25,7 @@ from .subdivision_matcher import (
 )
 
 logger = logging.getLogger(__name__)
+DEFAULT_DOB = date(1900, 1, 1)
 
 
 @dataclass
@@ -304,6 +305,20 @@ def _offender_similarity(text_a: str, text_b: str) -> float:
     return SequenceMatcher(None, text_a, text_b).ratio()
 
 
+def dob_matches(date_a: date | None, date_b: date | None) -> bool:
+    if not date_a or not date_b:
+        return False
+    if date_a == DEFAULT_DOB or date_b == DEFAULT_DOB:
+        return False
+    if date_a == date_b:
+        return True
+    if date_a.month == 1 and date_a.day == 1 and date_b.year == date_a.year:
+        return True
+    if date_b.month == 1 and date_b.day == 1 and date_a.year == date_b.year:
+        return True
+    return False
+
+
 def _match_offenders(extracted: list[dict], event: Event) -> tuple[float, dict]:
     portal_offenders = list(event.offenders.all())
     counts = {
@@ -330,9 +345,15 @@ def _match_offenders(extracted: list[dict], event: Event) -> tuple[float, dict]:
             if offender.date_of_birth:
                 candidate_birth_date = candidate.get("birth_date")
                 candidate_birth_year = candidate.get("birth_year")
-                if candidate_birth_date and candidate_birth_date == offender.date_of_birth:
+                if candidate_birth_date and dob_matches(
+                    candidate_birth_date, offender.date_of_birth
+                ):
                     similarity += 0.15
-                elif candidate_birth_year and offender.date_of_birth.year == candidate_birth_year:
+                elif (
+                    candidate_birth_year
+                    and offender.date_of_birth != DEFAULT_DOB
+                    and offender.date_of_birth.year == candidate_birth_year
+                ):
                     similarity += 0.1
             similarity = min(similarity, 1.0)
             best = max(best, similarity)
@@ -379,6 +400,25 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
     return best_match.event_type.event_type, best_match.article_of_law
 
 
+def _select_event_by_subdivision_time(
+    subdivision_id: str, target_dt: datetime, window_minutes: int = 30
+) -> tuple[Event | None, int | None]:
+    date_from = target_dt - timedelta(minutes=window_minutes)
+    date_to = target_dt + timedelta(minutes=window_minutes)
+    candidates = list(
+        repository.find_candidate_events(
+            date_from=date_from,
+            date_to=date_to,
+            subdivision_id=subdivision_id,
+        )
+    )
+    if not candidates:
+        return None, None
+    closest = min(candidates, key=lambda event: abs(event.date_detection - target_dt))
+    delta_minutes = int(abs(closest.date_detection - target_dt).total_seconds() / 60)
+    return repository.get_event_with_offenders(closest.event_id), delta_minutes
+
+
 def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     """Match extracted attributes to portal events and build comparison result."""
     subdivision_confidence_percent = 0.0
@@ -405,55 +445,62 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     best_event = None
     best_score = -1.0
     best_delta = None
-    best_flags = {}
+    best_flags: dict = {}
     best_offenders_matched = 0
 
-    for event in candidates:
-        event = repository.get_event_with_offenders(event.event_id)
-        date_ok = False
-        delta_minutes = None
-        if attributes.date_time:
-            delta = abs(event.date_detection - attributes.date_time)
-            delta_minutes = int(delta.total_seconds() / 60)
-            date_ok = delta <= timedelta(minutes=30)
-
-        subdivision_ok = (
-            attributes.subdivision_id
-            and str(event.find_subdivision_unit_id) == attributes.subdivision_id
+    if attributes.date_time and attributes.subdivision_id:
+        best_event, best_delta = _select_event_by_subdivision_time(
+            attributes.subdivision_id,
+            attributes.date_time,
         )
-        offenders_score, offenders_counts = _match_offenders(attributes.offenders, event)
-        offenders_ok = offenders_score >= 0.6
 
-        flags = {
-            "date_ok": date_ok,
-            "subdivision_ok": bool(subdivision_ok),
-            "offenders_ok": offenders_ok,
-        }
-        if sum(flags.values()) < 2:
-            continue
+    if not best_event:
+        for event in candidates:
+            event = repository.get_event_with_offenders(event.event_id)
+            date_ok = False
+            delta_minutes = None
+            if attributes.date_time:
+                delta = abs(event.date_detection - attributes.date_time)
+                delta_minutes = int(delta.total_seconds() / 60)
+                date_ok = delta <= timedelta(minutes=30)
 
-        type_ok = predicted_type and predicted_type == event.event_type
-        article_ok = predicted_article and predicted_article == event.article_of_law
+            subdivision_ok = (
+                attributes.subdivision_id
+                and str(event.find_subdivision_unit_id) == attributes.subdivision_id
+            )
+            offenders_score, offenders_counts = _match_offenders(attributes.offenders, event)
+            offenders_ok = offenders_score >= 0.6
 
-        score = 0.0
-        score += 40.0 if subdivision_ok else 0.0
-        score += offenders_score * 40.0
-        score += 20.0 if type_ok and article_ok else 0.0
-
-        if score > best_score:
-            best_event = event
-            best_score = score
-            best_delta = delta_minutes
-            best_offenders_matched = offenders_counts.get("matched", 0)
-            best_flags = {
-                **flags,
-                "type_match": type_ok,
-                "article_match": article_ok,
-                "predicted_type": predicted_type,
-                "predicted_article": predicted_article,
-                "offenders_score": round(offenders_score * 100, 2),
-                "offenders_counts": offenders_counts,
+            flags = {
+                "date_ok": date_ok,
+                "subdivision_ok": bool(subdivision_ok),
+                "offenders_ok": offenders_ok,
             }
+            if sum(flags.values()) < 2:
+                continue
+
+            type_ok = predicted_type and predicted_type == event.event_type
+            article_ok = predicted_article and predicted_article == event.article_of_law
+
+            score = 0.0
+            score += 40.0 if subdivision_ok else 0.0
+            score += offenders_score * 40.0
+            score += 20.0 if type_ok and article_ok else 0.0
+
+            if score > best_score:
+                best_event = event
+                best_score = score
+                best_delta = delta_minutes
+                best_offenders_matched = offenders_counts.get("matched", 0)
+                best_flags = {
+                    **flags,
+                    "type_match": type_ok,
+                    "article_match": article_ok,
+                    "predicted_type": predicted_type,
+                    "predicted_article": predicted_article,
+                    "offenders_score": round(offenders_score * 100, 2),
+                    "offenders_counts": offenders_counts,
+                }
 
     if not best_event:
         unit_type_conflict = bool(
@@ -488,6 +535,22 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
         }
 
+    offenders_score, offenders_counts = _match_offenders(attributes.offenders, best_event)
+    offenders_ok = offenders_score >= 0.6
+    if not best_flags:
+        type_ok = predicted_type and predicted_type == best_event.event_type
+        article_ok = predicted_article and predicted_article == best_event.article_of_law
+        best_flags = {
+            "date_ok": True,
+            "subdivision_ok": True,
+            "offenders_ok": offenders_ok,
+            "type_match": type_ok,
+            "article_match": article_ok,
+            "predicted_type": predicted_type,
+            "predicted_article": predicted_article,
+            "offenders_score": round(offenders_score * 100, 2),
+            "offenders_counts": offenders_counts,
+        }
     diffs = {}
     if not best_flags.get("type_match"):
         diffs["event_type"] = {
@@ -551,7 +614,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     return {
         "matched": True,
         "matched_event_id": str(best_event.event_id),
-        "score_percent": round(best_score, 2),
+        "score_percent": round(best_score if best_score >= 0 else offenders_score * 100, 2),
         "extracted_timestamp_display": format_local_naive(attributes.date_time),
         "portal_timestamp_display": format_local_naive(best_event.date_detection),
         "time_delta_minutes": best_delta,
