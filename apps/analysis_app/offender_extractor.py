@@ -4,6 +4,8 @@ import re
 from datetime import date, datetime
 from functools import lru_cache
 
+from apps.analysis_app.offender_validation import is_valid_person_candidate
+
 STOPWORDS = {
     "в",
     "на",
@@ -174,6 +176,8 @@ def _extract_natasha(text: str) -> list[dict]:
         full_name = " ".join(filter(None, [name.last, name.first, name.middle]))
         if not _looks_like_person(name.last, name.first, full_name):
             continue
+        if not is_valid_person_candidate(full_name):
+            continue
         span = _match_span(match)
         birth_date, birth_year = parse_birth_info(text, span[1] if span else None)
         offenders.append(
@@ -200,6 +204,8 @@ def _extract_initials(text: str) -> list[dict]:
         full_name = _initial_full_name(last, first, middle)
         if not _looks_like_person(last, first, full_name, allow_initials=True):
             continue
+        if not is_valid_person_candidate(full_name):
+            continue
         span = _match_span(match)
         birth_date, birth_year = parse_birth_info(text, span[1] if span else None)
         offenders.append(
@@ -225,6 +231,8 @@ def _extract_context(text: str) -> list[dict]:
         middle = match.group("middle")
         full_name = " ".join(filter(None, [last, first, middle]))
         if not _looks_like_person(last, first, full_name):
+            continue
+        if not is_valid_person_candidate(full_name):
             continue
         span = _span_for_match(match, "last", "middle" if middle else "first")
         birth_date, birth_year = parse_birth_info(text, span[1] if span else None)
