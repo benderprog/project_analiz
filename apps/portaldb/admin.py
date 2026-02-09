@@ -7,7 +7,9 @@ from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
 class OffenderInline(admin.TabularInline):
     model = Offender
-    extra = 1
+    fields = ("second_name", "first_name", "patronymic_name", "date_of_birth")
+    extra = 0
+    show_change_link = True
 
 
 class EventAdminForm(forms.ModelForm):
@@ -39,6 +41,7 @@ class EventAdminForm(forms.ModelForm):
             choices.append((instance_event_type, instance_event_type))
 
         self.fields["event_type"].choices = choices
+
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
@@ -75,6 +78,14 @@ class SubdivisionAdmin(admin.ModelAdmin):
 
 @admin.register(Offender)
 class OffenderAdmin(admin.ModelAdmin):
-    list_display = ("offender_id", "second_name", "first_name", "date_of_birth", "event")
-    search_fields = ("second_name", "first_name")
+    list_display = (
+        "second_name",
+        "first_name",
+        "patronymic_name",
+        "date_of_birth",
+        "event",
+    )
+    ordering = ("second_name", "first_name", "patronymic_name")
+    search_fields = ("second_name", "first_name", "patronymic_name")
     list_filter = ("date_of_birth",)
+    fields = ("second_name", "first_name", "patronymic_name", "date_of_birth", "event")
