@@ -3,8 +3,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_datetime
 from django.views import View
 
-from apps.analysis_app.forms import UploadDocxForm
-from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun
+from apps.analysis_app.forms import PuSelectionForm, UploadDocxForm
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
+from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
     _find_case_insensitive_span,
     _find_datetime_span,
@@ -314,22 +315,54 @@ class UploadView(View):
     template_name = "analysis_app/upload.html"
 
     def get(self, request):
-        return render(request, self.template_name, {"form": UploadDocxForm()})
+        return render(request, self.template_name, {"upload_form": UploadDocxForm()})
 
     def post(self, request):
-        form = UploadDocxForm(request.POST, request.FILES)
-        if not form.is_valid():
-            return render(request, self.template_name, {"form": form})
+        if request.FILES.get("file"):
+            upload_form = UploadDocxForm(request.POST, request.FILES)
+            if not upload_form.is_valid():
+                return render(request, self.template_name, {"upload_form": upload_form})
 
-        run = AnalysisRun.objects.create(
-            uploaded_by=request.user if request.user.is_authenticated else None,
-            file=form.cleaned_data["file"],
-        )
+            run = AnalysisRun.objects.create(
+                uploaded_by=request.user if request.user.is_authenticated else None,
+                file=upload_form.cleaned_data["file"],
+            )
+            from docx import Document
+
+            document = Document(run.file.path)
+            detection = detect_pu_from_docx(document)
+            initial_pu_id = str(detection.pu.portal_pu_id) if detection.pu else ""
+            selection_form = PuSelectionForm(
+                initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
+            )
+            return render(
+                request,
+                self.template_name,
+                {
+                    "upload_form": UploadDocxForm(),
+                    "selection_form": selection_form,
+                    "detection": detection,
+                },
+            )
+
+        selection_form = PuSelectionForm(request.POST)
+        if not selection_form.is_valid():
+            return render(
+                request,
+                self.template_name,
+                {"upload_form": UploadDocxForm(), "selection_form": selection_form},
+            )
+
+        run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
+        selected_pu_id = selection_form.cleaned_data["selected_pu_id"] or None
+        run.selected_pu_id = selected_pu_id
+        run.save(update_fields=["selected_pu_id"])
+
         try:
             paragraphs = parse_docx(run.file.path)
             for idx, text in enumerate(paragraphs, start=1):
                 paragraph = AnalysisParagraph.objects.create(run=run, idx=idx, text=text)
-                attributes = extract_attributes(text)
+                attributes = extract_attributes(text, selected_pu_id=selected_pu_id)
                 match_result = match_event(attributes, text)
                 AnalysisResult.objects.create(
                     paragraph=paragraph,
@@ -373,6 +406,15 @@ class AnalysisDetailView(View):
             (event for event in events if event["idx"] == selected_idx),
             events[0] if events else None,
         )
+        selected_pu = None
+        if run.selected_pu_id:
+            selected_pu = CachedPU.objects.filter(
+                portal_pu_id=run.selected_pu_id
+            ).first()
+        pu_label = "Общая сводка"
+        if selected_pu:
+            label_parts = [part for part in [selected_pu.short_name, selected_pu.full_name] if part]
+            pu_label = " — ".join(label_parts) if label_parts else pu_label
         return render(
             request,
             self.template_name,
@@ -381,5 +423,6 @@ class AnalysisDetailView(View):
                 "paragraphs": paragraphs,
                 "events": events,
                 "selected_event": selected_event,
+                "selected_pu_label": pu_label,
             },
         )

@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.analysis_app.models import CachedPU, CachedSubdivision
+from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_utils import (
     build_embedding_source_hash,
@@ -56,13 +57,7 @@ def upsert_subdivision_cache(portal_subdivision: Subdivision, rebuild_embeddings
     if parent_pu is None and portal_subdivision.parent_pu_id:
         parent_pu = Pu.objects.using("portal").get(pk=portal_subdivision.parent_pu_id)
     if parent_pu is not None:
-        cached_pu, _ = CachedPU.objects.update_or_create(
-            portal_pu_id=parent_pu.pu_id,
-            defaults={
-                "short_name": parent_pu.short_name,
-                "full_name": parent_pu.full_name,
-            },
-        )
+        cached_pu = upsert_pu_cache(parent_pu)
 
     _upsert_cached_subdivision(
         portal_subdivision,
@@ -75,13 +70,7 @@ def upsert_subdivision_cache(portal_subdivision: Subdivision, rebuild_embeddings
 def _sync_cached_pus(portal_pus: list[Pu]) -> dict:
     cached_pus: dict[str, CachedPU] = {}
     for portal_pu in portal_pus:
-        cached_pu, _ = CachedPU.objects.update_or_create(
-            portal_pu_id=portal_pu.pu_id,
-            defaults={
-                "short_name": portal_pu.short_name,
-                "full_name": portal_pu.full_name,
-            },
-        )
+        cached_pu = upsert_pu_cache(portal_pu)
         cached_pus[portal_pu.pu_id] = cached_pu
     return cached_pus
 
@@ -103,6 +92,7 @@ def _upsert_cached_subdivision(
         defaults={
             "name": portal_subdivision.name,
             "pu": cached_pu,
+            "parent_pu_id": portal_subdivision.parent_pu_id,
             "normalized_name": normalized_name,
             "legacy_aliases": alias_texts,
             "embedding_source_hash": source_hash,
@@ -111,6 +101,7 @@ def _upsert_cached_subdivision(
     if not created:
         cached_subdivision.name = portal_subdivision.name
         cached_subdivision.pu = cached_pu
+        cached_subdivision.parent_pu_id = portal_subdivision.parent_pu_id
         cached_subdivision.normalized_name = normalized_name
         cached_subdivision.legacy_aliases = alias_texts
     cached_subdivision.embedding_source_text = embedding_text

@@ -5,8 +5,24 @@
   <h2>Загрузка DOCX</h2>
   <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit" class="primary">Анализировать</button>
+    {{ upload_form.as_p }}
+    <button type="submit" class="primary">Загрузить</button>
   </form>
 </section>
+
+{% if selection_form %}
+  <section class="card">
+    <h2>Пограничное управление</h2>
+    {% if detection and detection.pu %}
+      <p>Определено автоматически: {{ detection.pu.short_name }} — {{ detection.pu.full_name }}</p>
+    {% elif detection %}
+      <p>Автоопределение не нашло ПУ. Можно выбрать вручную.</p>
+    {% endif %}
+    <form method="post">
+      {% csrf_token %}
+      {{ selection_form.as_p }}
+      <button type="submit" class="primary">Анализировать</button>
+    </form>
+  </section>
+{% endif %}
 {% endblock %}
