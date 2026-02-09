@@ -40,7 +40,7 @@ class PuDetectionTests(TestCase):
             full_name="Пограничное управление А",
             normalized_short_name=normalize_subdivision_text("ПУ А"),
             normalized_full_name=normalize_subdivision_text("Пограничное управление А"),
-            embedding=[1.0, 0.0],
+            embedding_short=[1.0, 0.0],
         )
         CachedPU.objects.create(
             portal_pu_id=uuid.uuid4(),
@@ -48,7 +48,7 @@ class PuDetectionTests(TestCase):
             full_name="Пограничное управление Б",
             normalized_short_name=normalize_subdivision_text("ПУ Б"),
             normalized_full_name=normalize_subdivision_text("Пограничное управление Б"),
-            embedding=[0.0, 1.0],
+            embedding_full=[0.0, 1.0],
         )
 
         title_text = "Служебная записка без явного упоминания"

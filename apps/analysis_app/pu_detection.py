@@ -99,11 +99,16 @@ def detect_pu_from_text(title_blob: str) -> PuDetectionResult:
     if not model:
         return PuDetectionResult(pu=None, method="none")
 
-    candidates = [
-        {"pu": pu, "embedding": to_py_floats(pu.embedding)}
-        for pu in cached_pus
-        if pu.embedding
-    ]
+    candidates = []
+    for pu in cached_pus:
+        if pu.embedding_short:
+            candidates.append(
+                {"pu": pu, "embedding": to_py_floats(pu.embedding_short)}
+            )
+        if pu.embedding_full:
+            candidates.append(
+                {"pu": pu, "embedding": to_py_floats(pu.embedding_full)}
+            )
     if not candidates:
         return PuDetectionResult(pu=None, method="none")
 
