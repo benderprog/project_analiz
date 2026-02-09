@@ -23,7 +23,9 @@ to make false positives easier to trace.
 
 After selecting the portal event, offenders are compared in two steps:
 
-1. **Exact match** — strict name key (normalized `second_name + first_name + patronymic`).
+1. **Exact match** — strict name key in `Фамилия Имя Отчество` order (normalized
+   `second_name + first_name + patronymic`). Portal offender fields are reordered into
+   surname-first before comparison.
    DOB rules:
    - Full DOBs must match exactly.
    - A surrogate year date `01.01.YYYY` matches a full DOB of the same year.
@@ -36,7 +38,8 @@ Remaining offenders are categorized as:
 - `missing_in_portal` — present in the svodka but missing in the portal DB.
 - `missing_in_svodka` — present in the portal DB but missing in the svodka.
 
-The UI report shows:
+The UI report shows offender names in surname-first order (`Фамилия Имя Отчество`),
+with full portal DOBs rendered as `dd.mm.yyyy` when available.
 
 - `Совпало нарушителей: X из Y` (Y = portal total),
 - `ФИО совпало, но ДР отличается` (with DOB from svodka as-is, DOB from portal as full date),

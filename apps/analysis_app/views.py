@@ -1,5 +1,3 @@
-from datetime import date, datetime
-
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_datetime
@@ -21,33 +19,11 @@ from apps.analysis_app.subdivision_matcher import (
 )
 from apps.analysis_app.utils.dt_display import format_local_naive
 from apps.analysis_app.utils.json_safe import offender_to_json
+from apps.analysis_app.utils.offender_format import offender_display
 
 
-def _format_offenders(offenders: list[dict]) -> list[str]:
-    formatted = []
-    for offender in offenders or []:
-        name = offender.get("full_name") or "—"
-        birth_date = offender.get("birth_date")
-        birth_year = offender.get("birth_year")
-        display_date = None
-        if isinstance(birth_date, datetime):
-            birth_date = birth_date.date()
-        if isinstance(birth_date, date):
-            display_date = birth_date.strftime("%d.%m.%Y")
-        elif isinstance(birth_date, str):
-            try:
-                parsed = datetime.strptime(birth_date, "%Y-%m-%d").date()
-            except ValueError:
-                parsed = None
-            if parsed:
-                display_date = parsed.strftime("%d.%m.%Y")
-        if display_date and display_date != "01.01.1900":
-            formatted.append(f"{name} ({display_date})")
-        elif birth_year:
-            formatted.append(f"{name} ({birth_year})")
-        else:
-            formatted.append(name)
-    return formatted
+def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
+    return [offender_display(offender, source=source) for offender in offenders or []]
 
 
 def _status_for_timestamp(match_result: dict) -> str:
@@ -108,19 +84,23 @@ def _build_offender_report(match_result: dict) -> dict:
 
     dob_mismatch_pairs = matches.get("dob_mismatch_pairs") or []
     for pair in dob_mismatch_pairs:
-        svodka_display = _format_offenders([pair.get("svodka_offender")])[0]
-        portal_display = _format_offenders([pair.get("portal_offender")])[0]
+        svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
+        portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
         details.append(
             f"ФИО совпало, но ДР отличается: {svodka_display} / {portal_display}"
         )
 
-    missing_in_portal = _format_offenders(matches.get("missing_in_portal") or [])
+    missing_in_portal = _format_offenders(
+        matches.get("missing_in_portal") or [], source="svodka"
+    )
     if missing_in_portal:
         details.append(
             "В сводке есть, в БД нет: " + ", ".join(missing_in_portal)
         )
 
-    missing_in_svodka = _format_offenders(matches.get("missing_in_svodka") or [])
+    missing_in_svodka = _format_offenders(
+        matches.get("missing_in_svodka") or [], source="portal"
+    )
     if missing_in_svodka:
         details.append(
             "В БД есть, в сводке нет: " + ", ".join(missing_in_svodka)
@@ -232,8 +212,6 @@ def _build_comments(match_result: dict) -> list[str]:
     offender_report = _build_offender_report(match_result)
     if offender_report.get("summary"):
         comments.append(f"{offender_report['summary']}.")
-    for item in offender_report.get("details", []):
-        comments.append(item)
     if match_result.get("date_time_present") and not match_result.get("time_found"):
         comments.append("Не определилось время (использована только дата).")
     return comments
@@ -287,7 +265,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "date_time": extracted_timestamp_display,
             "subdivision_name": extracted.get("subdivision_name"),
             "subdivision_candidates": formatted_candidates,
-            "offenders": _format_offenders(extracted.get("offenders") or []),
+            "offenders": _format_offenders(extracted.get("offenders") or [], source="svodka"),
         },
         "match": {
             "matched": bool(match_result.get("matched")),
@@ -302,7 +280,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         "portal": {
             "timestamp": portal_timestamp_display,
             "subdivision_name": portal.get("subdivision_name"),
-            "offenders": _format_offenders(portal.get("offenders") or []),
+            "offenders": _format_offenders(portal.get("offenders") or [], source="portal"),
             "event_type": portal.get("event_type"),
             "article_of_law": portal.get("article_of_law"),
         },
