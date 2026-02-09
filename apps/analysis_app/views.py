@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_datetime
@@ -25,8 +27,23 @@ def _format_offenders(offenders: list[dict]) -> list[str]:
     formatted = []
     for offender in offenders or []:
         name = offender.get("full_name") or "—"
+        birth_date = offender.get("birth_date")
         birth_year = offender.get("birth_year")
-        if birth_year:
+        display_date = None
+        if isinstance(birth_date, datetime):
+            birth_date = birth_date.date()
+        if isinstance(birth_date, date):
+            display_date = birth_date.strftime("%d.%m.%Y")
+        elif isinstance(birth_date, str):
+            try:
+                parsed = datetime.strptime(birth_date, "%Y-%m-%d").date()
+            except ValueError:
+                parsed = None
+            if parsed:
+                display_date = parsed.strftime("%d.%m.%Y")
+        if display_date and display_date != "01.01.1900":
+            formatted.append(f"{name} ({display_date})")
+        elif birth_year:
             formatted.append(f"{name} ({birth_year})")
         else:
             formatted.append(name)
