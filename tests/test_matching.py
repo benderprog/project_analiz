@@ -280,7 +280,8 @@ class OffenderDisplayTests(TestCase):
                     "full_name": "Климов Андрей Олегович",
                     "birth_date": "1990-03-03",
                 }
-            ]
+            ],
+            source="portal",
         )
         self.assertEqual(formatted, ["Климов Андрей Олегович (03.03.1990)"])
 

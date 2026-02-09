@@ -15,6 +15,11 @@ from django.utils.safestring import SafeString, mark_safe
 from apps.classifier.models import EventTypePattern
 from apps.analysis_app.utils.dt_display import format_local_naive, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
+from apps.analysis_app.utils.offender_format import (
+    normalize_name_key,
+    portal_offender_fullname,
+    svodka_offender_fullname,
+)
 from apps.portaldb import repository
 from apps.portaldb.models import Event, Offender
 
@@ -354,17 +359,11 @@ def _extract_name_parts(offender: dict) -> tuple[str, str, str]:
 
 
 def _name_matches(candidate: dict, offender: Offender) -> bool:
-    candidate_last, candidate_first, candidate_middle = _extract_name_parts(candidate)
-    portal_last = normalize_name_part(offender.second_name)
-    portal_first = normalize_name_part(offender.first_name)
-    portal_middle = normalize_name_part(offender.patronymic_name)
-    if not candidate_last or not candidate_first:
+    candidate_key = normalize_name_key(svodka_offender_fullname(candidate))
+    portal_key = normalize_name_key(portal_offender_fullname(offender))
+    if not candidate_key or not portal_key:
         return False
-    if candidate_last != portal_last or candidate_first != portal_first:
-        return False
-    if candidate_middle and portal_middle and candidate_middle != portal_middle:
-        return False
-    return True
+    return candidate_key == portal_key
 
 
 def _portal_offender_payload(offender: Offender) -> dict:
@@ -372,9 +371,10 @@ def _portal_offender_payload(offender: Offender) -> dict:
     if birth_date == DEFAULT_DOB:
         birth_date = None
     return {
-        "full_name": " ".join(
-            filter(None, [offender.second_name, offender.first_name, offender.patronymic_name])
-        ),
+        "full_name": portal_offender_fullname(offender),
+        "second_name": offender.second_name,
+        "first_name": offender.first_name,
+        "patronymic_name": offender.patronymic_name,
         "birth_year": birth_date.year if birth_date else None,
         "birth_date": date_to_str(birth_date),
     }
@@ -402,19 +402,11 @@ def match_offenders(
     def is_full_dob(dob: date | None) -> bool:
         return bool(dob and dob != DEFAULT_DOB and not is_year_only(dob))
 
-    def offender_key_from_parts(last: str, first: str, middle: str) -> str:
-        return f"{last}|{first}|{middle}"
-
     def offender_key_from_candidate(candidate: dict) -> str:
-        last, first, middle = _extract_name_parts(candidate)
-        return offender_key_from_parts(last, first, middle)
+        return normalize_name_key(svodka_offender_fullname(candidate))
 
     def offender_key_from_portal(offender: Offender) -> str:
-        return offender_key_from_parts(
-            normalize_name_part(offender.second_name),
-            normalize_name_part(offender.first_name),
-            normalize_name_part(offender.patronymic_name),
-        )
+        return normalize_name_key(portal_offender_fullname(offender))
 
     candidate_records = []
     for idx, candidate in enumerate(extracted):
@@ -425,7 +417,7 @@ def match_offenders(
             {
                 "idx": idx,
                 "offender": candidate,
-                "key": offender_key_from_candidate(candidate),
+                "key": offender_key_from_candidate(candidate) or f"__missing_candidate_{idx}",
                 "dob": dob,
             }
         )
@@ -439,7 +431,7 @@ def match_offenders(
             {
                 "idx": idx,
                 "offender": offender,
-                "key": offender_key_from_portal(offender),
+                "key": offender_key_from_portal(offender) or f"__missing_portal_{idx}",
                 "dob": dob,
             }
         )
