@@ -1,6 +1,11 @@
+import logging
+import uuid
+
 from django import forms
 
 from apps.analysis_app.models import CachedPU
+
+logger = logging.getLogger(__name__)
 
 
 class UploadDocxForm(forms.Form):
@@ -24,3 +29,13 @@ class PuSelectionForm(forms.Form):
                 label = " — ".join(label_parts)
                 pu_choices.append((str(pu.portal_pu_id), label))
         self.fields["selected_pu_id"].choices = [("", "Общая сводка"), *pu_choices]
+
+    def clean_selected_pu_id(self):
+        value = self.cleaned_data.get("selected_pu_id")
+        if not value or value == "general":
+            return None
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            logger.debug("Invalid PU selection value %s; treating as general summary.", value)
+            return None

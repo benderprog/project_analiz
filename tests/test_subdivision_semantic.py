@@ -71,7 +71,7 @@ class SubdivisionSemanticTests(TestCase):
         ), mock.patch(
             "apps.analysis_app.subdivision_matcher._cosine_similarity", return_value=float_value
         ):
-            candidates = match_subdivision("Unknown subdivision here", top_k=1)
+            candidates, _ = match_subdivision("Unknown subdivision here", top_k=1)
 
         self.assertEqual(len(candidates), 1)
         self.assertIsInstance(candidates[0]["score"], float)

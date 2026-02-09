@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
@@ -46,6 +47,10 @@ class ExtractedAttributes:
     subdivision_name: str | None
     subdivision_candidates: list[dict] = field(default_factory=list)
     subdivision_span: list[int] | None = None
+    selected_pu_id: uuid.UUID | None = None
+    subdivision_candidates_total: int = 0
+    subdivision_candidates_after_pu_filter: int = 0
+    pu_filter_fallback_used: bool = False
 
 
 def parse_docx(file_path: str) -> list[str]:
@@ -272,11 +277,13 @@ def highlight_text(text: str, spans: list[tuple[int, int, str]]) -> SafeString:
     return mark_safe("".join(parts))
 
 
-def extract_attributes(text: str, selected_pu_id: str | None = None) -> ExtractedAttributes:
+def extract_attributes(
+    text: str, selected_pu_id: uuid.UUID | None = None
+) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
     offenders = extract_offenders(text)
-    subdivision_candidates = match_subdivision(
+    subdivision_candidates, candidate_meta = match_subdivision(
         text,
         top_k=5,
         selected_pu_id=selected_pu_id,
@@ -299,6 +306,12 @@ def extract_attributes(text: str, selected_pu_id: str | None = None) -> Extracte
         subdivision_name=subdivision_name,
         subdivision_candidates=subdivision_candidates,
         subdivision_span=subdivision_span,
+        selected_pu_id=selected_pu_id,
+        subdivision_candidates_total=candidate_meta.get("subdivision_candidates_total", 0),
+        subdivision_candidates_after_pu_filter=candidate_meta.get(
+            "subdivision_candidates_after_pu_filter", 0
+        ),
+        pu_filter_fallback_used=candidate_meta.get("pu_filter_fallback_used", False),
     )
 
 
@@ -802,6 +815,14 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "candidates_A": len(candidates_a),
         "candidates_C": len(candidates_c),
         "candidates_B": len(candidates_b),
+        "subdivision_candidates_total": attributes.subdivision_candidates_total,
+        "subdivision_candidates_after_pu_filter": (
+            attributes.subdivision_candidates_after_pu_filter
+        ),
+        "pu_filter_fallback_used": attributes.pu_filter_fallback_used,
+        "selected_pu_id": str(attributes.selected_pu_id)
+        if attributes.selected_pu_id
+        else None,
         "top_overlaps": {
             "stage_c": top_overlap_c,
             "stage_b": top_overlap_b,

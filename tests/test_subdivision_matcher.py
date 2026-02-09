@@ -21,7 +21,7 @@ class SubdivisionMatcherTests(TestCase):
         invalidate_subdivision_cache()
 
         paragraph = "На КПП №2 \"Ухтомское\" выявлено нарушение."
-        candidates = match_subdivision(paragraph, top_k=1)
+        candidates, _ = match_subdivision(paragraph, top_k=1)
 
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["portal_subdivision_id"], str(subdivision.portal_subdivision_id))
@@ -51,7 +51,7 @@ class SubdivisionMatcherTests(TestCase):
         with mock.patch(
             "apps.analysis_app.subdivision_matcher.get_sentence_model", return_value=StubModel()
         ):
-            candidates = match_subdivision(
+            candidates, _ = match_subdivision(
                 "Службой выявлено нарушение на пункте Северном.", top_k=1
             )
 

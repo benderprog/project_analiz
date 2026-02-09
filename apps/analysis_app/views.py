@@ -204,6 +204,11 @@ def _build_comments(match_result: dict) -> list[str]:
                 f"A={debug_meta.get('candidates_A', 0)}, "
                 f"C={debug_meta.get('candidates_C', 0)}, "
                 f"B={debug_meta.get('candidates_B', 0)}; "
+                "subdivision candidates "
+                f"total={debug_meta.get('subdivision_candidates_total', 0)}, "
+                f"after PU={debug_meta.get('subdivision_candidates_after_pu_filter', 0)}, "
+                f"fallback={debug_meta.get('pu_filter_fallback_used', False)}, "
+                f"pu={debug_meta.get('selected_pu_id') or '—'}; "
                 f"overlap C={top_overlaps.get('stage_c', 0)}, "
                 f"B={top_overlaps.get('stage_b', 0)}; "
                 f"method={debug_meta.get('chosen_method') or '—'}."
@@ -354,7 +359,7 @@ class UploadView(View):
             )
 
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
-        selected_pu_id = selection_form.cleaned_data["selected_pu_id"] or None
+        selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
         run.selected_pu_id = selected_pu_id
         run.save(update_fields=["selected_pu_id"])
 

@@ -143,9 +143,13 @@ class SubdivisionMatchPuFilterTests(TestCase):
         )
         invalidate_subdivision_cache()
 
-        matches = match_subdivision("Доклад по отделу Альфа", selected_pu_id=str(pu_a_id))
+        matches, _ = match_subdivision(
+            "Доклад по отделу Альфа", selected_pu_id=pu_a_id
+        )
         self.assertTrue(matches)
         self.assertEqual(matches[0]["name"], "Отдел Альфа")
 
-        matches = match_subdivision("Доклад по отделу Альфа", selected_pu_id=str(pu_b_id))
+        matches, _ = match_subdivision(
+            "Доклад по отделу Альфа", selected_pu_id=pu_b_id
+        )
         self.assertFalse(matches)
