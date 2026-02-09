@@ -3,7 +3,7 @@ from unittest import mock
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 
-from apps.analysis_app.subdivision_utils import normalize_subdivision_name
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 from apps.portaldb.models import Pu, Subdivision
 
 
@@ -38,18 +38,15 @@ class SubdivisionEmbeddingTextTests(TestCase):
         stub_model = StubSentenceModel()
 
         with mock.patch(
-            "apps.analysis_app.management.commands.sync_portal_reference.get_sentence_model",
+            "apps.analysis_app.subdivision_cache.get_sentence_model",
             return_value=stub_model,
-        ), mock.patch(
-            "apps.analysis_app.management.commands.sync_portal_reference.build_subdivision_aliases",
-            return_value=[],
         ):
-            call_command("sync_portal_reference", rebuild_embeddings=True)
+            call_command("sync_subdivision_cache", rebuild_embeddings=True)
 
         called_texts = [text for call in stub_model.calls for text in call]
         expected_texts = [
-            normalize_subdivision_name("Васильковое"),
-            normalize_subdivision_name("ПОГК «Солнечное» (пгт Солнечное)"),
+            normalize_subdivision_text("Васильковое"),
+            normalize_subdivision_text("ПОГК «Солнечное» (пгт Солнечное)"),
         ]
 
         self.assertCountEqual(called_texts, expected_texts)

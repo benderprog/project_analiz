@@ -13,9 +13,9 @@ from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache
 from apps.analysis_app.subdivision_utils import (
     build_embedding_source_hash,
     build_subdivision_aliases,
-    normalize_subdivision_name,
     to_py_floats,
 )
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 from apps.analysis_app.utils.subdivision_norm import normalize_text
 from apps.portaldb.models import Pu, Subdivision
 
@@ -72,7 +72,7 @@ class Command(BaseCommand):
                     (portal_subdivision.short_name or "").strip()
                     or portal_subdivision.name.strip()
                 )
-                normalized_name = normalize_subdivision_name(embedding_text)
+                normalized_name = normalize_subdivision_text(embedding_text)
                 alias_texts = build_subdivision_aliases(portal_subdivision.name)
                 source_hash = build_embedding_source_hash(normalized_name, alias_texts)
                 cached_subdivision, created = CachedSubdivision.objects.get_or_create(
@@ -109,6 +109,7 @@ class Command(BaseCommand):
                     elif rebuild_embeddings or cached_subdivision.embedding is None:
                         cached_subdivision.embedding = None
                         cached_subdivision.embedding_updated_at = None
+                cached_subdivision._skip_embedding_rebuild = True
 
                 cached_subdivision.save()
 

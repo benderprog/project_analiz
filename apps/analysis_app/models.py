@@ -5,11 +5,8 @@ from django.db import models
 from django.utils import timezone
 
 from apps.analysis_app.semantic import get_sentence_model
-from apps.analysis_app.subdivision_utils import (
-    build_embedding_source_hash,
-    normalize_subdivision_name,
-    to_py_floats,
-)
+from apps.analysis_app.subdivision_utils import build_embedding_source_hash, to_py_floats
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 
 
 class AnalysisRun(models.Model):
@@ -87,11 +84,18 @@ class CachedSubdivision(models.Model):
     def save(self, *args, **kwargs) -> None:
         update_fields = kwargs.get("update_fields")
         embedding_text = getattr(self, "embedding_source_text", None)
-        if embedding_text is None:
-            embedding_text = self.name
-        embedding_text = (embedding_text or "").strip()
-        if embedding_text:
-            self.normalized_name = normalize_subdivision_name(embedding_text)
+        normalized_source = None
+        if embedding_text is not None:
+            embedding_text = (embedding_text or "").strip()
+            normalized_source = normalize_subdivision_text(embedding_text)
+        elif self.normalized_name:
+            normalized_source = self.normalized_name
+        elif self.name:
+            normalized_source = normalize_subdivision_text(self.name)
+
+        if normalized_source is not None:
+            self.normalized_name = normalized_source
+
         new_hash = build_embedding_source_hash(self.normalized_name, self.legacy_aliases)
         existing_hash = None
         if self.pk:
@@ -108,10 +112,12 @@ class CachedSubdivision(models.Model):
         )
         self.embedding_source_hash = new_hash
 
+        skip_rebuild = getattr(self, "_skip_embedding_rebuild", False)
+
         if should_rebuild and settings.SKIP_SEMANTIC_MODEL:
             self.embedding = None
             self.embedding_updated_at = None
-        elif should_rebuild:
+        elif should_rebuild and not skip_rebuild:
             try:
                 model = get_sentence_model()
             except RuntimeError:
