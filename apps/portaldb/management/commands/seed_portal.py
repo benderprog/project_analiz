@@ -159,20 +159,44 @@ class Command(BaseCommand):
         if not rows:
             raise CommandError("XLSX file is empty.")
 
-        headers = [str(value).strip().lower() if value is not None else "" for value in rows[0]]
-        required = {"short_name", "full_name", "pu"}
-        missing = required - set(headers)
-        if missing:
-            raise CommandError(f"XLSX file missing required columns: {', '.join(sorted(missing))}")
+        headers = [self._normalize_header(value) for value in rows[0]]
+        header_index = self._map_headers(headers)
 
-        header_index = {header: idx for idx, header in enumerate(headers)}
         data_rows: list[dict[str, str]] = []
-        for row in rows[1:]:
-            short_name = self._cell_value(row, header_index["short_name"])
-            full_name = self._cell_value(row, header_index["full_name"])
-            pu_name = self._cell_value(row, header_index["pu"])
-            if not (short_name or full_name or pu_name):
+        if header_index:
+            for row in rows[1:]:
+                short_name = self._cell_value(row, header_index.get("short_name", -1))
+                full_name = self._cell_value(row, header_index.get("full_name", -1))
+                pu_name = self._cell_value(row, header_index.get("pu", -1))
+                if not (short_name or full_name or pu_name):
+                    continue
+                if not full_name:
+                    full_name = short_name
+                if not short_name:
+                    short_name = full_name
+                data_rows.append(
+                    {
+                        "short_name": short_name,
+                        "full_name": full_name,
+                        "pu": pu_name,
+                    }
+                )
+            return data_rows
+
+        for row in rows:
+            first = self._cell_value(row, 0)
+            second = self._cell_value(row, 1)
+            third = self._cell_value(row, 2)
+            if not (first or second or third):
                 continue
+            if third:
+                short_name = first
+                full_name = second
+                pu_name = third
+            else:
+                full_name = first
+                pu_name = second
+                short_name = first
             data_rows.append(
                 {
                     "short_name": short_name,
@@ -182,7 +206,40 @@ class Command(BaseCommand):
             )
         return data_rows
 
+    def _normalize_header(self, value: object) -> str:
+        if value is None:
+            return ""
+        return str(value).strip().lower()
+
+    def _map_headers(self, headers: list[str]) -> dict[str, int]:
+        aliases = {
+            "short_name": "short_name",
+            "shortname": "short_name",
+            "short": "short_name",
+            "abbr": "short_name",
+            "abbr_name": "short_name",
+            "full_name": "full_name",
+            "fullname": "full_name",
+            "name": "full_name",
+            "subdivision": "full_name",
+            "subdivision_name": "full_name",
+            "pu": "pu",
+            "pu_name": "pu",
+            "parent_pu": "pu",
+        }
+        mapped: dict[str, int] = {}
+        for idx, header in enumerate(headers):
+            key = aliases.get(header)
+            if key and key not in mapped:
+                mapped[key] = idx
+        if "pu" not in mapped:
+            return {}
+        if "full_name" not in mapped and "short_name" not in mapped:
+            return {}
+        return mapped
     def _cell_value(self, row: tuple, index: int) -> str:
+        if index < 0:
+            return ""
         try:
             value = row[index]
         except IndexError:
@@ -224,7 +281,8 @@ class Command(BaseCommand):
                         pu = Pu(short_name=pu_name, full_name=pu_name)
                 pu_cache[pu_name] = pu
 
-            subdivision_name = row["full_name"].strip() or row["short_name"].strip()
+            subdivision_short_name = row["short_name"].strip()
+            subdivision_name = row["full_name"].strip() or subdivision_short_name
             if not subdivision_name:
                 continue
             subdivision_key = (subdivision_name, pu_name)
@@ -236,20 +294,33 @@ class Command(BaseCommand):
             ).first()
             if subdivision:
                 subdivision_existing += 1
+                if (
+                    not dry_run
+                    and subdivision_short_name
+                    and subdivision.short_name != subdivision_short_name
+                ):
+                    subdivision.short_name = subdivision_short_name
+                    subdivision.save(update_fields=["short_name"])
             else:
                 subdivision_created += 1
                 if not dry_run:
                     subdivision = Subdivision.objects.using(PORTAL_DB_ALIAS).create(
-                        name=subdivision_name, parent_pu=pu
+                        name=subdivision_name,
+                        short_name=subdivision_short_name,
+                        parent_pu=pu,
                     )
                 else:
-                    subdivision = Subdivision(name=subdivision_name, parent_pu=pu)
+                    subdivision = Subdivision(
+                        name=subdivision_name,
+                        short_name=subdivision_short_name,
+                        parent_pu=pu,
+                    )
 
             planned_subdivision_keys.add(subdivision_key)
             subdivision_candidates.append(
                 {
                     "name": subdivision_name,
-                    "short_name": row["short_name"].strip(),
+                    "short_name": subdivision_short_name,
                     "subdivision": subdivision,
                 }
             )
