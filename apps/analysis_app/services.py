@@ -862,6 +862,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 subdivision_candidate.get("locality_mismatch") if subdivision_candidate else False
             ),
             "subdivision_unit_type_conflict": unit_type_conflict,
+            "extracted_subdivision_name": attributes.subdivision_name,
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
@@ -970,6 +971,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             subdivision_candidate.get("locality_mismatch") if subdivision_candidate else False
         ),
         "subdivision_unit_type_conflict": unit_type_conflict,
+        "extracted_subdivision_name": attributes.subdivision_name,
         "portal": {
             "timestamp": format_local_naive(best_event.date_detection),
             "subdivision_name": best_event.find_subdivision_unit.name

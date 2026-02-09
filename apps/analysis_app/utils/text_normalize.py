@@ -6,7 +6,7 @@ from typing import Iterable
 _QUOTE_CHARS = {"\u00ab", "\u00bb", "\"", "\u201c", "\u201d"}
 _DASH_CHARS = {"\u2013", "\u2014", "\u2212"}
 _TRAILING_PUNCT = {".", ",", ";", ":", ")", "]", "}"}
-_PUNCT_AS_SPACE = {"(", ")", "[", "]", "{", "}", ".", ",", ";", ":", "\u2116"} | _QUOTE_CHARS
+_PUNCT_AS_SPACE = {"(", ")", "[", "]", "{", "}", ".", ",", ";", ":"} | _QUOTE_CHARS
 
 
 def normalize_subdivision_text(value: str) -> str:
@@ -36,6 +36,20 @@ def _normalize_with_mapping(value: str) -> tuple[str, list[int]]:
 
         if lower in _DASH_CHARS:
             lower = "-"
+
+        if ch == "\u2116":
+            result.append("\u2116")
+            mapping.append(index)
+            index += 1
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index < len(text) and text[index].isdigit():
+                while index < len(text) and text[index].isdigit():
+                    result.append(text[index])
+                    mapping.append(index)
+                    index += 1
+            last_was_space = False
+            continue
 
         if lower == "n":
             next_index = _match_number_symbol(text, index)
