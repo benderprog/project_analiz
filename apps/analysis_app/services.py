@@ -12,7 +12,7 @@ from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
-from apps.analysis_app.utils.dt_display import format_local_naive
+from apps.analysis_app.utils.dt_display import format_local_naive, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.portaldb import repository
 from apps.portaldb.models import Event
@@ -26,6 +26,7 @@ from .subdivision_matcher import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_DOB = date(1900, 1, 1)
+MATCH_TIME_DELTA_MINUTES = 30
 
 
 @dataclass
@@ -401,21 +402,33 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 
 
 def _select_event_by_subdivision_time(
-    subdivision_id: str, target_dt: datetime, window_minutes: int = 30
+    subdivision_id: str, target_dt: datetime
 ) -> tuple[Event | None, int | None]:
-    date_from = target_dt - timedelta(minutes=window_minutes)
-    date_to = target_dt + timedelta(minutes=window_minutes)
+    target_local = to_local_naive(target_dt)
+    if target_local is None:
+        return None, None
+    date_from = target_local.date() - timedelta(days=1)
+    date_to = target_local.date() + timedelta(days=1)
     candidates = list(
-        repository.find_candidate_events(
-            date_from=date_from,
-            date_to=date_to,
-            subdivision_id=subdivision_id,
+        Event.objects.using("portal").filter(
+            find_subdivision_unit_id=subdivision_id,
+            date_detection__date__range=(date_from, date_to),
         )
     )
     if not candidates:
         return None, None
-    closest = min(candidates, key=lambda event: abs(event.date_detection - target_dt))
-    delta_minutes = int(abs(closest.date_detection - target_dt).total_seconds() / 60)
+    closest = min(
+        candidates,
+        key=lambda event: abs(to_local_naive(event.date_detection) - target_local),
+    )
+    delta_minutes = int(
+        abs(
+            to_local_naive(closest.date_detection) - target_local
+        ).total_seconds()
+        / 60
+    )
+    if delta_minutes > MATCH_TIME_DELTA_MINUTES:
+        return None, None
     return repository.get_event_with_offenders(closest.event_id), delta_minutes
 
 
