@@ -48,6 +48,15 @@ class EventAdmin(admin.ModelAdmin):
     inlines = [OffenderInline]
     form = EventAdminForm
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name == "find_subdivision_unit" and formfield is not None:
+            # Keep the human-readable label (full name + PU) even if __str__ changes later.
+            formfield.label_from_instance = (
+                lambda obj: obj.display_label() if hasattr(obj, "display_label") else str(obj)
+            )
+        return formfield
+
 
 @admin.register(Pu)
 class PuAdmin(admin.ModelAdmin):

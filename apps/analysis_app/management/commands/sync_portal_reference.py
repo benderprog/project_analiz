@@ -68,7 +68,11 @@ class Command(BaseCommand):
                 Subdivision.objects.using("portal").select_related("parent_pu")
             )
             for portal_subdivision in portal_subdivisions:
-                normalized_name = normalize_subdivision_name(portal_subdivision.name)
+                embedding_text = (
+                    (portal_subdivision.short_name or "").strip()
+                    or portal_subdivision.name.strip()
+                )
+                normalized_name = normalize_subdivision_name(embedding_text)
                 alias_texts = build_subdivision_aliases(portal_subdivision.name)
                 source_hash = build_embedding_source_hash(normalized_name, alias_texts)
                 cached_subdivision, created = CachedSubdivision.objects.get_or_create(
@@ -86,6 +90,7 @@ class Command(BaseCommand):
                     cached_subdivision.pu = cached_pus.get(portal_subdivision.parent_pu_id)
                     cached_subdivision.normalized_name = normalized_name
                     cached_subdivision.legacy_aliases = alias_texts
+                cached_subdivision.embedding_source_text = embedding_text
 
                 hash_changed = cached_subdivision.embedding_source_hash != source_hash
                 should_rebuild = (

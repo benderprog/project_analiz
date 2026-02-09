@@ -86,8 +86,12 @@ class CachedSubdivision(models.Model):
 
     def save(self, *args, **kwargs) -> None:
         update_fields = kwargs.get("update_fields")
-        if self.name:
-            self.normalized_name = normalize_subdivision_name(self.name)
+        embedding_text = getattr(self, "embedding_source_text", None)
+        if embedding_text is None:
+            embedding_text = self.name
+        embedding_text = (embedding_text or "").strip()
+        if embedding_text:
+            self.normalized_name = normalize_subdivision_name(embedding_text)
         new_hash = build_embedding_source_hash(self.normalized_name, self.legacy_aliases)
         existing_hash = None
         if self.pk:
