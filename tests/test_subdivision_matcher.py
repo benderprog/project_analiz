@@ -15,6 +15,7 @@ class SubdivisionMatcherTests(TestCase):
         subdivision = CachedSubdivision.objects.create(
             portal_subdivision_id=uuid.uuid4(),
             name="КПП-2 «Ухтомское»",
+            normalized_short_name=normalize_subdivision_text("КПП-2 «Ухтомское»"),
             normalized_name=normalize_subdivision_text("КПП-2 «Ухтомское»"),
             embedding=None,
         )
@@ -28,18 +29,58 @@ class SubdivisionMatcherTests(TestCase):
         self.assertEqual(candidates[0]["match_method"], "substring")
         self.assertIsNotNone(candidates[0]["normalized_span"])
 
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_subdivision_substring_matches_by_name_when_short_name_not_present(self):
+        subdivision = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ОПК «Пятницкая» (г. Цветочный)",
+            normalized_short_name=normalize_subdivision_text("ПОГЗ №1"),
+            normalized_name=normalize_subdivision_text("ОПК «Пятницкая» (г. Цветочный)"),
+            embedding=None,
+        )
+        invalidate_subdivision_cache()
+
+        paragraph = "В ОПК «Пятницкая» (г. Цветочный) выявлено нарушение."
+        candidates, _ = match_subdivision(paragraph, top_k=1)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["portal_subdivision_id"], str(subdivision.portal_subdivision_id))
+        self.assertEqual(candidates[0]["match_method"], "substring")
+        self.assertEqual(candidates[0]["match_token"], "name")
+        self.assertEqual(candidates[0]["score"], 1.0)
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_subdivision_substring_matches_by_short_name(self):
+        subdivision = CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name="ПОГЗ №1 (Пятницкая)",
+            normalized_short_name=normalize_subdivision_text("ПОГЗ №1"),
+            normalized_name=normalize_subdivision_text("ПОГЗ №1 (Пятницкая)"),
+            embedding=None,
+        )
+        invalidate_subdivision_cache()
+
+        paragraph = "ПОГЗ № 1 задержало нарушителя."
+        candidates, _ = match_subdivision(paragraph, top_k=1)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["portal_subdivision_id"], str(subdivision.portal_subdivision_id))
+        self.assertEqual(candidates[0]["match_method"], "substring")
+        self.assertEqual(candidates[0]["match_token"], "short_name")
+        self.assertEqual(candidates[0]["score"], 1.0)
+
     @override_settings(SKIP_SEMANTIC_MODEL=False, SUBDIVISION_SEMANTIC_THRESHOLD=0.5)
     def test_match_subdivision_semantic_fallback_uses_windows(self):
         CachedSubdivision.objects.create(
             portal_subdivision_id=uuid.uuid4(),
             name="ПОГК Северная",
-            normalized_name=normalize_subdivision_text("Северная"),
+            normalized_name=normalize_subdivision_text("ПОГК Северная"),
             embedding=[1.0, 0.0],
         )
         CachedSubdivision.objects.create(
             portal_subdivision_id=uuid.uuid4(),
             name="ПОГК Южная",
-            normalized_name=normalize_subdivision_text("Южная"),
+            normalized_name=normalize_subdivision_text("ПОГК Южная"),
             embedding=[0.0, 1.0],
         )
         invalidate_subdivision_cache()

@@ -77,6 +77,7 @@ def _load_cached_subdivisions(
         "id",
         "portal_subdivision_id",
         "name",
+        "normalized_short_name",
         "normalized_name",
         "embedding",
         "pu_id",
@@ -157,29 +158,35 @@ def _substring_matches(
     cached, _ = _load_cached_subdivisions(_cache_version, selected_pu_id)
     matches: list[dict] = []
     for subdivision in cached:
-        search_key = subdivision.get("normalized_name") or ""
-        if not search_key:
-            continue
-        pos = normalized_text.find(search_key)
-        if pos == -1:
-            continue
-        span = (pos, pos + len(search_key))
-        matches.append(
-            {
-                "portal_subdivision_id": str(subdivision["portal_subdivision_id"]),
-                "name": subdivision["name"],
-                "score": 1.0,
-                "score_percent": 100.0,
-                "match_method": "substring",
-                "query_span": _map_normalized_span(span, mapping),
-                "normalized_span": span,
-                "flags": {},
-                "query_locality": None,
-                "candidate_locality": None,
-                "locality_mismatch": False,
-                "match_text": search_key,
-            }
-        )
+        candidates = [
+            ("short_name", subdivision.get("normalized_short_name") or ""),
+            ("name", subdivision.get("normalized_name") or ""),
+        ]
+        for token_type, token in candidates:
+            if not token:
+                continue
+            pos = normalized_text.find(token)
+            if pos == -1:
+                continue
+            span = (pos, pos + len(token))
+            matches.append(
+                {
+                    "portal_subdivision_id": str(subdivision["portal_subdivision_id"]),
+                    "name": subdivision["name"],
+                    "score": 1.0,
+                    "score_percent": 100.0,
+                    "match_method": "substring",
+                    "match_token": token_type,
+                    "query_span": _map_normalized_span(span, mapping),
+                    "normalized_span": span,
+                    "flags": {},
+                    "query_locality": None,
+                    "candidate_locality": None,
+                    "locality_mismatch": False,
+                    "match_text": token,
+                }
+            )
+            break
 
     matches.sort(
         key=lambda item: (

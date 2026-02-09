@@ -15,3 +15,9 @@ class NormalizeSubdivisionTextTests(SimpleTestCase):
 
         self.assertEqual(len(normalized), 1)
         self.assertIn("кпп-2", next(iter(normalized)))
+
+    def test_normalize_number_sign_equivalence(self):
+        self.assertEqual(
+            normalize_subdivision_text("ПОГЗ №1"),
+            normalize_subdivision_text("ПОГЗ № 1"),
+        )

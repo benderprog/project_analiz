@@ -189,11 +189,14 @@ def _locality_mismatch_comment(match_result: dict) -> str:
 
 def _build_comments(match_result: dict) -> list[str]:
     comments = []
+    extracted_subdivision_name = match_result.get("extracted_subdivision_name")
     if not match_result.get("matched"):
         message = match_result.get("diffs", {}).get("message") or "Событие не найдено."
         comments.append(message)
         if match_result.get("date_time_present") and not match_result.get("time_found"):
             comments.append("Не определилось время (использована только дата).")
+        if extracted_subdivision_name is None:
+            comments.append("Подразделение не определено в сводке.")
         if match_result.get("subdivision_locality_mismatch"):
             comments.append(_locality_mismatch_comment(match_result))
         debug_meta = match_result.get("debug") or {}
@@ -218,8 +221,10 @@ def _build_comments(match_result: dict) -> list[str]:
     diffs = match_result.get("diffs", {})
     if not diffs:
         comments.append("Расхождений не обнаружено.")
-    if "subdivision" in diffs:
+    if "subdivision" in diffs and extracted_subdivision_name:
         comments.append("Подразделение не совпадает с БД.")
+    elif extracted_subdivision_name is None:
+        comments.append("Подразделение не определено в сводке.")
     if match_result.get("subdivision_locality_mismatch"):
         comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:

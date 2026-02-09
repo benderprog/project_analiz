@@ -73,6 +73,7 @@ class CachedSubdivision(models.Model):
     name = models.CharField(max_length=255)
     pu = models.ForeignKey(CachedPU, null=True, blank=True, on_delete=models.SET_NULL)
     parent_pu_id = models.UUIDField(null=True, blank=True)
+    normalized_short_name = models.TextField(blank=True, default="")
     normalized_name = models.TextField()
     legacy_aliases = models.JSONField(blank=True, null=True)
     embedding = models.JSONField(blank=True, null=True)
@@ -94,15 +95,14 @@ class CachedSubdivision(models.Model):
         if embedding_text is not None:
             embedding_text = (embedding_text or "").strip()
             normalized_source = normalize_subdivision_text(embedding_text)
-        elif self.normalized_name:
-            normalized_source = self.normalized_name
-        elif self.name:
-            normalized_source = normalize_subdivision_text(self.name)
+        if not self.normalized_name and self.name:
+            self.normalized_name = normalize_subdivision_text(self.name)
+        if normalized_source is None:
+            normalized_source = (
+                self.normalized_short_name or self.normalized_name or ""
+            )
 
-        if normalized_source is not None:
-            self.normalized_name = normalized_source
-
-        new_hash = build_embedding_source_hash(self.normalized_name, self.legacy_aliases)
+        new_hash = build_embedding_source_hash(normalized_source, self.legacy_aliases)
         existing_hash = None
         if self.pk:
             existing_hash = (
@@ -129,13 +129,15 @@ class CachedSubdivision(models.Model):
             except RuntimeError:
                 model = None
             if model:
-                embedding = model.encode([self.normalized_name])[0]
+                embedding = model.encode([normalized_source])[0]
                 self.embedding = to_py_floats(embedding)
                 self.embedding_updated_at = timezone.now()
 
         if update_fields is not None:
             update_fields = set(update_fields)
-            update_fields.update({"normalized_name", "embedding_source_hash", "updated_at"})
+            update_fields.update(
+                {"normalized_name", "normalized_short_name", "embedding_source_hash", "updated_at"}
+            )
             if should_rebuild:
                 update_fields.update({"embedding", "embedding_updated_at"})
             kwargs["update_fields"] = update_fields
