@@ -28,8 +28,15 @@ class Subdivision(models.Model):
         verbose_name = "Subdivision"
         verbose_name_plural = "Subdivisions"
 
+    def display_label(self) -> str:
+        parent_pu = getattr(self, "parent_pu", None)
+        pu_label = ""
+        if parent_pu:
+            pu_label = parent_pu.short_name or parent_pu.full_name
+        return f"{self.name} {pu_label}".strip()
+
     def __str__(self) -> str:
-        return self.short_name or self.name
+        return self.display_label()
 
 
 class Event(models.Model):
