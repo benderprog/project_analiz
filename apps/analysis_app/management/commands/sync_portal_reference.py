@@ -8,6 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.analysis_app.models import CachedPU, CachedSubdivision, CachedSubdivisionAlias
+from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache
 from apps.analysis_app.subdivision_utils import (
@@ -53,16 +54,7 @@ class Command(BaseCommand):
                 CachedPU.objects.all().delete()
 
             portal_pus = list(Pu.objects.using("portal").all())
-            cached_pus = {}
-            for portal_pu in portal_pus:
-                cached_pu, _ = CachedPU.objects.update_or_create(
-                    portal_pu_id=portal_pu.pu_id,
-                    defaults={
-                        "short_name": portal_pu.short_name,
-                        "full_name": portal_pu.full_name,
-                    },
-                )
-                cached_pus[portal_pu.pu_id] = cached_pu
+            cached_pus = {portal_pu.pu_id: upsert_pu_cache(portal_pu) for portal_pu in portal_pus}
 
             portal_subdivisions = list(
                 Subdivision.objects.using("portal").select_related("parent_pu")
@@ -80,6 +72,7 @@ class Command(BaseCommand):
                     defaults={
                         "name": portal_subdivision.name,
                         "pu": cached_pus.get(portal_subdivision.parent_pu_id),
+                        "parent_pu_id": portal_subdivision.parent_pu_id,
                         "normalized_name": normalized_name,
                         "legacy_aliases": alias_texts,
                         "embedding_source_hash": source_hash,
@@ -88,6 +81,7 @@ class Command(BaseCommand):
                 if not created:
                     cached_subdivision.name = portal_subdivision.name
                     cached_subdivision.pu = cached_pus.get(portal_subdivision.parent_pu_id)
+                    cached_subdivision.parent_pu_id = portal_subdivision.parent_pu_id
                     cached_subdivision.normalized_name = normalized_name
                     cached_subdivision.legacy_aliases = alias_texts
                 cached_subdivision.embedding_source_text = embedding_text

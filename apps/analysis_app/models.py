@@ -20,6 +20,7 @@ class AnalysisRun(models.Model):
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
     )
     file = models.FileField(upload_to="uploads/")
+    selected_pu_id = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
@@ -52,6 +53,10 @@ class CachedPU(models.Model):
     portal_pu_id = models.UUIDField(unique=True)
     short_name = models.CharField(max_length=255)
     full_name = models.CharField(max_length=255)
+    normalized_short_name = models.TextField(blank=True, default="")
+    normalized_full_name = models.TextField(blank=True, default="")
+    embedding = models.JSONField(blank=True, null=True)
+    embedding_updated_at = models.DateTimeField(null=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -67,6 +72,7 @@ class CachedSubdivision(models.Model):
     portal_subdivision_id = models.UUIDField(unique=True)
     name = models.CharField(max_length=255)
     pu = models.ForeignKey(CachedPU, null=True, blank=True, on_delete=models.SET_NULL)
+    parent_pu_id = models.UUIDField(null=True, blank=True)
     normalized_name = models.TextField()
     legacy_aliases = models.JSONField(blank=True, null=True)
     embedding = models.JSONField(blank=True, null=True)

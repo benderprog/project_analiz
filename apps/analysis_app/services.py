@@ -272,11 +272,15 @@ def highlight_text(text: str, spans: list[tuple[int, int, str]]) -> SafeString:
     return mark_safe("".join(parts))
 
 
-def extract_attributes(text: str) -> ExtractedAttributes:
+def extract_attributes(text: str, selected_pu_id: str | None = None) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
     offenders = extract_offenders(text)
-    subdivision_candidates = match_subdivision(text, top_k=5)
+    subdivision_candidates = match_subdivision(
+        text,
+        top_k=5,
+        selected_pu_id=selected_pu_id,
+    )
     best_candidate = subdivision_candidates[0] if subdivision_candidates else None
     if best_candidate and best_candidate["score"] >= SUBDIVISION_MATCH_THRESHOLD:
         subdivision_id = best_candidate["portal_subdivision_id"]

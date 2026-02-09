@@ -32,18 +32,20 @@ def invalidate_subdivision_cache() -> None:
     _load_cached_subdivisions.cache_clear()
 
 
-@lru_cache(maxsize=2)
-def _load_cached_subdivisions(version: int) -> list[dict]:
-    return list(
-        CachedSubdivision.objects.values(
-            "id",
-            "portal_subdivision_id",
-            "name",
-            "normalized_name",
-            "embedding",
-            "pu_id",
-        )
+@lru_cache(maxsize=8)
+def _load_cached_subdivisions(version: int, selected_pu_id: str | None) -> list[dict]:
+    queryset = CachedSubdivision.objects.values(
+        "id",
+        "portal_subdivision_id",
+        "name",
+        "normalized_name",
+        "embedding",
+        "pu_id",
+        "parent_pu_id",
     )
+    if selected_pu_id:
+        queryset = queryset.filter(parent_pu_id=selected_pu_id)
+    return list(queryset)
 
 
 def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -112,8 +114,10 @@ def _build_windows(tokens: list[tuple[str, int, int]]) -> list[dict]:
     return windows
 
 
-def _substring_matches(normalized_text: str, mapping: list[int]) -> list[dict]:
-    cached = _load_cached_subdivisions(_cache_version)
+def _substring_matches(
+    normalized_text: str, mapping: list[int], selected_pu_id: str | None
+) -> list[dict]:
+    cached = _load_cached_subdivisions(_cache_version, selected_pu_id)
     matches: list[dict] = []
     for subdivision in cached:
         search_key = subdivision.get("normalized_name") or ""
@@ -153,8 +157,9 @@ def _substring_matches(normalized_text: str, mapping: list[int]) -> list[dict]:
 def _semantic_window_matches(
     normalized_text: str,
     mapping: list[int],
+    selected_pu_id: str | None,
 ) -> list[dict]:
-    cached = _load_cached_subdivisions(_cache_version)
+    cached = _load_cached_subdivisions(_cache_version, selected_pu_id)
     if not cached:
         return []
 
@@ -223,7 +228,9 @@ def _semantic_window_matches(
     return results
 
 
-def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
+def match_subdivision(
+    text: str, top_k: int = 5, selected_pu_id: str | None = None
+) -> list[dict]:
     if not text:
         return []
 
@@ -231,11 +238,11 @@ def match_subdivision(text: str, top_k: int = 5) -> list[dict]:
     if not normalized_text:
         return []
 
-    matches = _substring_matches(normalized_text, mapping)
+    matches = _substring_matches(normalized_text, mapping, selected_pu_id)
     if matches:
         return matches[:top_k]
 
-    semantic_matches = _semantic_window_matches(normalized_text, mapping)
+    semantic_matches = _semantic_window_matches(normalized_text, mapping, selected_pu_id)
     return semantic_matches[:top_k]
 
 

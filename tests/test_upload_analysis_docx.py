@@ -32,7 +32,15 @@ class UploadAnalysisDocxTests(TestCase):
             with override_settings(MEDIA_ROOT=tmp_dir):
                 response = self.client.post(reverse("analysis-upload"), {"file": upload})
 
+                self.assertEqual(response.status_code, 200)
+                run = AnalysisRun.objects.first()
+                self.assertIsNotNone(run)
+
+                response = self.client.post(
+                    reverse("analysis-upload"),
+                    {"upload_id": run.run_id, "selected_pu_id": ""},
+                )
+
         self.assertIn(response.status_code, {200, 302})
-        run = AnalysisRun.objects.first()
-        self.assertIsNotNone(run)
+        run.refresh_from_db()
         self.assertEqual(run.status, AnalysisRun.Status.COMPLETED)
