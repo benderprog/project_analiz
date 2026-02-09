@@ -6,6 +6,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+`requirements.txt` включает WhiteNoise, необходимый для работы middleware статических файлов при локальном запуске.
 
 ## Переменные окружения
 Скопируйте `.env.example` в `.env` и настройте параметры БД.
