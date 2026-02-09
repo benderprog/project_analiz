@@ -1,6 +1,8 @@
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 from django.conf import settings
+from django.template.loader import render_to_string
 from django.test import TestCase
 from django.utils import timezone
 
@@ -100,8 +102,8 @@ class MatchingTests(TestCase):
         self.assertTrue(result["matched"])
         self.assertEqual(result["matched_event_id"], str(event.event_id))
         self.assertEqual(result["offenders_counts"]["matched"], 1)
-        self.assertEqual(result["offenders_counts"]["extracted"], 2)
-        self.assertEqual(result["offenders_counts"]["portal"], 1)
+        self.assertEqual(result["offenders_counts"]["svodka_total"], 2)
+        self.assertEqual(result["offenders_counts"]["portal_total"], 1)
 
     def test_match_event_local_naive_time_delta(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
@@ -267,7 +269,7 @@ class OffenderOverlapTests(TestCase):
 
         self.assertGreater(score, 0)
         self.assertEqual(counts["matched"], 1)
-        self.assertTrue(any(match["dob_match"] for match in matches))
+        self.assertTrue(matches["matched_pairs"])
 
 
 class OffenderDisplayTests(TestCase):
@@ -295,3 +297,117 @@ class DobMatchingTests(TestCase):
 
     def test_dob_matches_default_dob_ignored(self):
         self.assertFalse(dob_matches(DEFAULT_DOB, date(1990, 3, 3)))
+
+
+class OffenderMatchingRulesTests(TestCase):
+    databases = {"default", "portal"}
+
+    def test_offender_full_dob_mismatch_not_matched(self):
+        extracted = [
+            {
+                "full_name": "Тарасов Илья Петрович",
+                "birth_date": date(1993, 4, 12),
+            }
+        ]
+        portal = [
+            Offender(
+                first_name="Илья",
+                second_name="Тарасов",
+                patronymic_name="Петрович",
+                date_of_birth=date(1994, 4, 4),
+            )
+        ]
+
+        score, counts, matches = match_offenders(extracted, portal)
+
+        self.assertEqual(score, 0)
+        self.assertEqual(counts["matched"], 0)
+        self.assertEqual(counts["dob_mismatch"], 1)
+        self.assertEqual(len(matches["dob_mismatch_pairs"]), 1)
+
+    def test_offender_missing_in_portal_detected(self):
+        extracted = [
+            {
+                "full_name": "Смирнова Мария Сергеевна",
+                "birth_year": 1996,
+            }
+        ]
+        score, counts, matches = match_offenders(extracted, [])
+
+        self.assertEqual(score, 0)
+        self.assertEqual(counts["missing_in_portal"], 1)
+        self.assertEqual(len(matches["missing_in_portal"]), 1)
+
+    def test_offender_year_only_matches_full_date_same_year(self):
+        extracted = [
+            {
+                "full_name": "Климов Андрей Олегович",
+                "birth_date": date(1990, 1, 1),
+            }
+        ]
+        portal = [
+            Offender(
+                first_name="Андрей",
+                second_name="Климов",
+                patronymic_name="Олегович",
+                date_of_birth=date(1990, 3, 3),
+            )
+        ]
+
+        score, counts, matches = match_offenders(extracted, portal)
+
+        self.assertGreater(score, 0)
+        self.assertEqual(counts["matched"], 1)
+        self.assertEqual(len(matches["matched_pairs"]), 1)
+
+
+class TemplateRenderingTests(TestCase):
+    def test_detail_template_has_no_raw_offender_counts_markup(self):
+        event = {
+            "idx": 1,
+            "preview": "preview",
+            "highlighted_html": "text",
+            "extracted_timestamp_display": "—",
+            "portal_timestamp_display": "—",
+            "extracted": {
+                "subdivision_name": None,
+                "subdivision_candidates": [],
+                "offenders": [],
+            },
+            "portal": {
+                "subdivision_name": None,
+                "offenders": [],
+                "event_type": None,
+                "article_of_law": None,
+            },
+            "predicted": {"event_type": None, "article_of_law": None},
+            "status": {"timestamp": "red", "subdivision": "red", "offenders": "green"},
+            "match": {
+                "matched": True,
+                "score_percent": 0,
+                "time_delta_minutes": None,
+                "subdivision_match_percent": None,
+                "offenders_summary": "Совпало нарушителей: 0 из 0",
+                "offenders_details": [],
+                "offenders_counts": {
+                    "matched": 0,
+                    "portal_total": 0,
+                    "svodka_total": 0,
+                    "dob_mismatch": 0,
+                    "missing_in_portal": 0,
+                    "missing_in_svodka": 0,
+                },
+            },
+            "comments": [],
+        }
+        run = SimpleNamespace(run_id="run-1", status="done")
+        html = render_to_string(
+            "analysis_app/detail.html",
+            {
+                "run": run,
+                "events": [event],
+                "selected_event": event,
+            },
+        )
+
+        self.assertNotIn("{{ selected_event.match.offenders_counts", html)

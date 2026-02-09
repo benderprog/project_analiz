@@ -386,54 +386,171 @@ def _portal_offenders(event: Event) -> list[Offender]:
 
 def match_offenders(
     extracted: list[dict], portal_offenders: list[Offender]
-) -> tuple[float, dict, list[dict]]:
+) -> tuple[float, dict, dict]:
     counts = {
-        "extracted": len(extracted),
-        "portal": len(portal_offenders),
         "matched": 0,
+        "portal_total": len(portal_offenders),
+        "svodka_total": len(extracted),
+        "dob_mismatch": 0,
+        "missing_in_portal": 0,
+        "missing_in_svodka": 0,
     }
-    if not extracted or not portal_offenders:
-        return 0.0, counts, []
 
-    matches = []
-    scores = []
-    for offender in portal_offenders:
-        portal_name = " ".join(
-            filter(None, [offender.second_name, offender.first_name, offender.patronymic_name])
+    def is_year_only(dob: date | None) -> bool:
+        return bool(dob and dob != DEFAULT_DOB and dob.month == 1 and dob.day == 1)
+
+    def is_full_dob(dob: date | None) -> bool:
+        return bool(dob and dob != DEFAULT_DOB and not is_year_only(dob))
+
+    def offender_key_from_parts(last: str, first: str, middle: str) -> str:
+        return f"{last}|{first}|{middle}"
+
+    def offender_key_from_candidate(candidate: dict) -> str:
+        last, first, middle = _extract_name_parts(candidate)
+        return offender_key_from_parts(last, first, middle)
+
+    def offender_key_from_portal(offender: Offender) -> str:
+        return offender_key_from_parts(
+            normalize_name_part(offender.second_name),
+            normalize_name_part(offender.first_name),
+            normalize_name_part(offender.patronymic_name),
         )
-        portal_last = normalize_name_part(offender.second_name)
-        best = 0.0
-        matched_any = False
-        for candidate in extracted:
-            candidate_name = candidate.get("full_name", "")
-            similarity = _offender_similarity(candidate_name.lower(), portal_name.lower())
-            candidate_last = normalize_name_part(candidate.get("second_name"))
-            if portal_last and candidate_last and portal_last == candidate_last:
-                similarity += 0.1
-            candidate_birth_date = _candidate_birth_date(candidate)
-            dob_match = bool(
-                candidate_birth_date and dob_matches(candidate_birth_date, offender.date_of_birth)
-            )
-            if offender.date_of_birth and dob_match:
-                similarity += 0.15
-            similarity = min(similarity, 1.0)
-            best = max(best, similarity)
 
-            name_match = _name_matches(candidate, offender)
-            if name_match or dob_match:
-                matches.append(
-                    {
-                        "svodka_offender": offender_to_json(candidate),
-                        "portal_offender": _portal_offender_payload(offender),
-                        "name_match": name_match,
-                        "dob_match": dob_match,
-                    }
-                )
-                matched_any = True
-        if matched_any:
-            counts["matched"] += 1
-        scores.append(best)
-    return sum(scores) / len(scores), counts, matches
+    candidate_records = []
+    for idx, candidate in enumerate(extracted):
+        dob = _candidate_birth_date(candidate)
+        if dob == DEFAULT_DOB:
+            dob = None
+        candidate_records.append(
+            {
+                "idx": idx,
+                "offender": candidate,
+                "key": offender_key_from_candidate(candidate),
+                "dob": dob,
+            }
+        )
+
+    portal_records = []
+    for idx, offender in enumerate(portal_offenders):
+        dob = offender.date_of_birth
+        if dob == DEFAULT_DOB:
+            dob = None
+        portal_records.append(
+            {
+                "idx": idx,
+                "offender": offender,
+                "key": offender_key_from_portal(offender),
+                "dob": dob,
+            }
+        )
+
+    candidates_by_key: dict[str, list[dict]] = {}
+    portals_by_key: dict[str, list[dict]] = {}
+    for candidate in candidate_records:
+        candidates_by_key.setdefault(candidate["key"], []).append(candidate)
+    for portal in portal_records:
+        portals_by_key.setdefault(portal["key"], []).append(portal)
+
+    matched_pairs = []
+    dob_mismatch_pairs = []
+    used_candidates: set[int] = set()
+    used_portals: set[int] = set()
+
+    def mark_match(candidate: dict, portal: dict) -> None:
+        used_candidates.add(candidate["idx"])
+        used_portals.add(portal["idx"])
+        matched_pairs.append(
+            {
+                "svodka_offender": offender_to_json(candidate["offender"]),
+                "portal_offender": _portal_offender_payload(portal["offender"]),
+            }
+        )
+
+    def mark_mismatch(candidate: dict, portal: dict) -> None:
+        used_candidates.add(candidate["idx"])
+        used_portals.add(portal["idx"])
+        dob_mismatch_pairs.append(
+            {
+                "svodka_offender": offender_to_json(candidate["offender"]),
+                "portal_offender": _portal_offender_payload(portal["offender"]),
+                "svodka_dob": date_to_str(candidate["dob"]),
+                "portal_dob": date_to_str(portal["dob"]),
+            }
+        )
+
+    for key in set(candidates_by_key) | set(portals_by_key):
+        candidates = [c for c in candidates_by_key.get(key, []) if c["idx"] not in used_candidates]
+        portals = [p for p in portals_by_key.get(key, []) if p["idx"] not in used_portals]
+        if not candidates or not portals:
+            continue
+
+        for portal in portals:
+            if portal["idx"] in used_portals:
+                continue
+            for candidate in candidates:
+                if candidate["idx"] in used_candidates:
+                    continue
+                if candidate["dob"] and portal["dob"] and candidate["dob"] == portal["dob"]:
+                    mark_match(candidate, portal)
+                    break
+
+        for portal in portals:
+            if portal["idx"] in used_portals:
+                continue
+            for candidate in candidates:
+                if candidate["idx"] in used_candidates:
+                    continue
+                if dob_matches(candidate["dob"], portal["dob"]):
+                    mark_match(candidate, portal)
+                    break
+
+    for key in set(candidates_by_key) | set(portals_by_key):
+        candidates = [c for c in candidates_by_key.get(key, []) if c["idx"] not in used_candidates]
+        portals = [p for p in portals_by_key.get(key, []) if p["idx"] not in used_portals]
+        if not candidates or not portals:
+            continue
+        for portal in portals:
+            if portal["idx"] in used_portals:
+                continue
+            if not is_full_dob(portal["dob"]):
+                continue
+            for candidate in candidates:
+                if candidate["idx"] in used_candidates:
+                    continue
+                if not is_full_dob(candidate["dob"]):
+                    continue
+                if candidate["dob"] != portal["dob"]:
+                    mark_mismatch(candidate, portal)
+                    break
+
+    missing_in_portal = [
+        offender_to_json(record["offender"])
+        for record in candidate_records
+        if record["idx"] not in used_candidates
+    ]
+    missing_in_svodka = [
+        _portal_offender_payload(record["offender"])
+        for record in portal_records
+        if record["idx"] not in used_portals
+    ]
+
+    counts["matched"] = len(matched_pairs)
+    counts["dob_mismatch"] = len(dob_mismatch_pairs)
+    counts["missing_in_portal"] = len(missing_in_portal)
+    counts["missing_in_svodka"] = len(missing_in_svodka)
+
+    score = counts["matched"] / counts["portal_total"] if counts["portal_total"] else 0.0
+
+    return (
+        score,
+        counts,
+        {
+            "matched_pairs": matched_pairs,
+            "dob_mismatch_pairs": dob_mismatch_pairs,
+            "missing_in_portal": missing_in_portal,
+            "missing_in_svodka": missing_in_svodka,
+        },
+    )
 
 
 def _looks_like_regex(pattern: str) -> bool:
@@ -708,9 +825,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "time_delta_minutes": None,
             "offenders_score_percent": 0,
             "offenders_counts": {
-                "extracted": len(attributes.offenders),
-                "portal": 0,
+                "svodka_total": len(attributes.offenders),
+                "portal_total": 0,
                 "matched": 0,
+                "dob_mismatch": 0,
+                "missing_in_portal": len(attributes.offenders),
+                "missing_in_svodka": 0,
             },
             "subdivision_match_percent": subdivision_confidence_percent,
             "time_found": attributes.time_found,
@@ -741,7 +861,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     offenders_score, offenders_counts, offender_matches = match_offenders(
         attributes.offenders, portal_offenders
     )
-    offenders_ok = offenders_score >= 0.6
+    offenders_ok = (
+        offenders_counts.get("matched", 0) == offenders_counts.get("portal_total", 0)
+        and offenders_counts.get("dob_mismatch", 0) == 0
+        and offenders_counts.get("missing_in_portal", 0) == 0
+        and offenders_counts.get("missing_in_svodka", 0) == 0
+    )
     type_ok = predicted_type and predicted_type == best_event.event_type
     article_ok = predicted_article and predicted_article == best_event.article_of_law
     if not best_flags:
@@ -817,9 +942,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "offenders_score_percent": best_flags.get("offenders_score", 0),
         "offenders_counts": best_flags.get("offenders_counts")
         or {
-            "extracted": len(attributes.offenders),
-            "portal": len(portal_offenders_payload),
+            "svodka_total": len(attributes.offenders),
+            "portal_total": len(portal_offenders_payload),
             "matched": offenders_counts.get("matched", 0),
+            "dob_mismatch": offenders_counts.get("dob_mismatch", 0),
+            "missing_in_portal": offenders_counts.get("missing_in_portal", 0),
+            "missing_in_svodka": offenders_counts.get("missing_in_svodka", 0),
         },
         "subdivision_match_percent": round(subdivision_match_percent, 2),
         "time_found": attributes.time_found,

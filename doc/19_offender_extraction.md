@@ -18,3 +18,27 @@ that look like abbreviations or actions instead of names.
 
 Each extracted offender includes a `source` field (`natasha`, `regex_initials`, `regex_context`)
 to make false positives easier to trace.
+
+## Offender matching (post-extraction)
+
+After selecting the portal event, offenders are compared in two steps:
+
+1. **Exact match** — strict name key (normalized `second_name + first_name + patronymic`).
+   DOB rules:
+   - Full DOBs must match exactly.
+   - A surrogate year date `01.01.YYYY` matches a full DOB of the same year.
+2. **Name match, DOB mismatch** — for remaining offenders with the same name key where
+   **both DOBs are full and different**, the pair is recorded as `dob_mismatch` and is not
+   counted as matched.
+
+Remaining offenders are categorized as:
+
+- `missing_in_portal` — present in the svodka but missing in the portal DB.
+- `missing_in_svodka` — present in the portal DB but missing in the svodka.
+
+The UI report shows:
+
+- `Совпало нарушителей: X из Y` (Y = portal total),
+- `ФИО совпало, но ДР отличается` (with DOB from svodka as-is, DOB from portal as full date),
+- `В сводке есть, в БД нет`,
+- `В БД есть, в сводке нет`.

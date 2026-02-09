@@ -19,8 +19,14 @@
 
 - `score_percent` — итоговая оценка совпадения.
 - `time_delta_minutes` — дельта между извлеченным временем и временем в БД.
-- `offenders_score_percent` — средняя похожесть нарушителей (0–100).
-- `offenders_counts`: `extracted`, `portal`, `matched` (совпадения >= 0.6).
+- `offenders_score_percent` — доля совпавших нарушителей (0–100).
+- `offenders_counts`:
+  - `svodka_total` — количество нарушителей в сводке,
+  - `portal_total` — количество нарушителей в БД,
+  - `matched` — совпавшие нарушители по строгим правилам,
+  - `dob_mismatch` — ФИО совпало, но полные даты рождения разные,
+  - `missing_in_portal` — есть в сводке, но нет в БД,
+  - `missing_in_svodka` — есть в БД, но нет в сводке.
 - `subdivision_match_percent` — похожесть названия подразделения (SequenceMatcher).
 - `portal` — срез БД (дата, подразделение, нарушители, тип события, статья).
 - `predicted` — результат классификации (тип и статья).
@@ -58,7 +64,7 @@
 | --- | --- | --- | --- |
 | Дата/время | `matched` и `time_delta_minutes <= 30` | `matched` и `time_delta_minutes > 30` | `not matched` или время отсутствует |
 | Подразделение | `matched` и нет `diffs["subdivision"]` | `matched` и есть `diffs["subdivision"]` | `not matched` |
-| Нарушители | `matched` и нет `diffs["offenders"]` | `matched` и `offenders_score_percent > 0` | `not matched` или `offenders_score_percent == 0` |
+| Нарушители | `matched == portal_total` и нет `dob_mismatch/missing` | `0 < matched < portal_total` или есть `dob_mismatch/missing` | `matched == 0` и `portal_total > 0` (или есть `dob_mismatch/missing`) |
 
 ## Подсветка атрибутов в тексте
 
