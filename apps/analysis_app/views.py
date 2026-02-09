@@ -26,6 +26,17 @@ def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
     return [offender_display(offender, source=source) for offender in offenders or []]
 
 
+def _dedupe_items(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
 def _status_for_timestamp(match_result: dict) -> str:
     if not match_result.get("matched"):
         return "red"
@@ -93,6 +104,7 @@ def _build_offender_report(match_result: dict) -> dict:
     missing_in_portal = _format_offenders(
         matches.get("missing_in_portal") or [], source="svodka"
     )
+    missing_in_portal = _dedupe_items(missing_in_portal)
     if missing_in_portal:
         details.append(
             "В сводке есть, в БД нет: " + ", ".join(missing_in_portal)
@@ -101,6 +113,7 @@ def _build_offender_report(match_result: dict) -> dict:
     missing_in_svodka = _format_offenders(
         matches.get("missing_in_svodka") or [], source="portal"
     )
+    missing_in_svodka = _dedupe_items(missing_in_svodka)
     if missing_in_svodka:
         details.append(
             "В БД есть, в сводке нет: " + ", ".join(missing_in_svodka)

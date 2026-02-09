@@ -13,7 +13,7 @@ from apps.analysis_app.services import (
     match_event,
     match_offenders,
 )
-from apps.analysis_app.views import _format_offenders
+from apps.analysis_app.views import _build_offender_report, _format_offenders
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
 
@@ -412,3 +412,27 @@ class TemplateRenderingTests(TestCase):
         )
 
         self.assertNotIn("{{ selected_event.match.offenders_counts", html)
+
+
+class OffenderReportDeduplicationTests(TestCase):
+    def test_missing_in_svodka_report_is_deduplicated(self):
+        match_result = {
+            "offenders_counts": {"matched": 0, "portal_total": 1},
+            "offender_matches": {
+                "missing_in_svodka": [
+                    {
+                        "full_name": "Зайцев Павел",
+                        "birth_date": "1980-12-12",
+                    },
+                    {
+                        "full_name": "Зайцев Павел",
+                        "birth_date": "1980-12-12",
+                    },
+                ]
+            },
+        }
+
+        report = _build_offender_report(match_result)
+
+        self.assertEqual(len(report["details"]), 1)
+        self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
