@@ -380,13 +380,46 @@ def _portal_offender_payload(offender: Offender) -> dict:
     }
 
 
-def _build_offender_matches(extracted: list[dict], portal_offenders: list[Offender]) -> list[dict]:
+def _portal_offenders(event: Event) -> list[Offender]:
+    return list(event.offenders.using("portal").all())
+
+
+def match_offenders(
+    extracted: list[dict], portal_offenders: list[Offender]
+) -> tuple[float, dict, list[dict]]:
+    counts = {
+        "extracted": len(extracted),
+        "portal": len(portal_offenders),
+        "matched": 0,
+    }
+    if not extracted or not portal_offenders:
+        return 0.0, counts, []
+
     matches = []
+    scores = []
     for offender in portal_offenders:
+        portal_name = " ".join(
+            filter(None, [offender.second_name, offender.first_name, offender.patronymic_name])
+        )
+        portal_last = normalize_name_part(offender.second_name)
+        best = 0.0
+        matched_any = False
         for candidate in extracted:
-            name_match = _name_matches(candidate, offender)
+            candidate_name = candidate.get("full_name", "")
+            similarity = _offender_similarity(candidate_name.lower(), portal_name.lower())
+            candidate_last = normalize_name_part(candidate.get("second_name"))
+            if portal_last and candidate_last and portal_last == candidate_last:
+                similarity += 0.1
             candidate_birth_date = _candidate_birth_date(candidate)
-            dob_match = bool(candidate_birth_date and dob_matches(candidate_birth_date, offender.date_of_birth))
+            dob_match = bool(
+                candidate_birth_date and dob_matches(candidate_birth_date, offender.date_of_birth)
+            )
+            if offender.date_of_birth and dob_match:
+                similarity += 0.15
+            similarity = min(similarity, 1.0)
+            best = max(best, similarity)
+
+            name_match = _name_matches(candidate, offender)
             if name_match or dob_match:
                 matches.append(
                     {
@@ -396,58 +429,11 @@ def _build_offender_matches(extracted: list[dict], portal_offenders: list[Offend
                         "dob_match": dob_match,
                     }
                 )
-    return matches
-
-
-def _offender_overlap_count(extracted: list[dict], portal_offenders: list[Offender]) -> int:
-    if not extracted or not portal_offenders:
-        return 0
-    overlap = 0
-    for offender in portal_offenders:
-        for candidate in extracted:
-            if not _name_matches(candidate, offender):
-                continue
-            candidate_birth_date = _candidate_birth_date(candidate)
-            if candidate_birth_date and not dob_matches(candidate_birth_date, offender.date_of_birth):
-                continue
-            overlap += 1
-            break
-    return overlap
-
-
-def _match_offenders(extracted: list[dict], event: Event) -> tuple[float, dict]:
-    portal_offenders = list(event.offenders.all())
-    counts = {
-        "extracted": len(extracted),
-        "portal": len(portal_offenders),
-        "matched": 0,
-    }
-    if not extracted or not portal_offenders:
-        return 0.0, counts
-
-    scores = []
-    for offender in portal_offenders:
-        portal_name = " ".join(
-            filter(None, [offender.second_name, offender.first_name, offender.patronymic_name])
-        )
-        portal_last = normalize_name_part(offender.second_name)
-        best = 0.0
-        for candidate in extracted:
-            candidate_name = candidate.get("full_name", "")
-            similarity = _offender_similarity(candidate_name.lower(), portal_name.lower())
-            candidate_last = normalize_name_part(candidate.get("second_name"))
-            if portal_last and candidate_last and portal_last == candidate_last:
-                similarity += 0.1
-            if offender.date_of_birth:
-                candidate_birth_date = _candidate_birth_date(candidate)
-                if candidate_birth_date and dob_matches(candidate_birth_date, offender.date_of_birth):
-                    similarity += 0.15
-            similarity = min(similarity, 1.0)
-            best = max(best, similarity)
-        if best >= 0.6:
+                matched_any = True
+        if matched_any:
             counts["matched"] += 1
         scores.append(best)
-    return sum(scores) / len(scores), counts
+    return sum(scores) / len(scores), counts, matches
 
 
 def _looks_like_regex(pattern: str) -> bool:
@@ -524,9 +510,9 @@ def _prefetch_portal_events(queryset):
     )
 
 
-def _select_event_by_subdivision_offenders(
+def _build_subdivision_offender_candidates(
     subdivision_id: str, extracted_offenders: list[dict], target_dt: datetime | None
-) -> tuple[Event | None, int | None]:
+) -> list[dict]:
     candidates = list(
         _prefetch_portal_events(
             Event.objects.using("portal")
@@ -534,13 +520,12 @@ def _select_event_by_subdivision_offenders(
             .order_by("-date_detection")[:MATCH_STAGE_SUBDIVISION_LIMIT]
         )
     )
-    if not candidates:
-        return None, None
-    best_event = None
-    best_overlap = 0
-    best_delta = None
+    if not candidates or not extracted_offenders:
+        return []
+    scored_candidates = []
     for event in candidates:
-        overlap = _offender_overlap_count(extracted_offenders, list(event.offenders.all()))
+        _, counts, _ = match_offenders(extracted_offenders, _portal_offenders(event))
+        overlap = counts["matched"]
         if overlap < 1:
             continue
         delta_minutes = None
@@ -549,27 +534,18 @@ def _select_event_by_subdivision_offenders(
             event_local = to_local_naive(event.date_detection)
             if target_local and event_local:
                 delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
-        should_replace = False
-        if overlap > best_overlap:
-            should_replace = True
-        elif overlap == best_overlap and delta_minutes is not None:
-            if best_delta is None or delta_minutes < best_delta:
-                should_replace = True
-        if should_replace:
-            best_event = event
-            best_overlap = overlap
-            best_delta = delta_minutes
-    if best_event is None:
-        return None, None
-    return best_event, best_delta
+        scored_candidates.append(
+            {"event": event, "overlap": overlap, "delta_minutes": delta_minutes}
+        )
+    return scored_candidates
 
 
-def _select_event_by_time_offenders(
+def _build_time_offender_candidates(
     target_dt: datetime, extracted_offenders: list[dict]
-) -> tuple[Event | None, int | None]:
+) -> list[dict]:
     target_local = to_local_naive(target_dt)
     if target_local is None:
-        return None, None
+        return []
     date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     candidates = list(
@@ -579,85 +555,152 @@ def _select_event_by_time_offenders(
             .order_by("-date_detection")[:MATCH_STAGE_TIME_LIMIT]
         )
     )
-    if not candidates:
-        return None, None
-    best_event = None
-    best_overlap = 0
-    best_delta = None
+    if not candidates or not extracted_offenders:
+        return []
+    scored_candidates = []
     for event in candidates:
-        overlap = _offender_overlap_count(extracted_offenders, list(event.offenders.all()))
+        _, counts, _ = match_offenders(extracted_offenders, _portal_offenders(event))
+        overlap = counts["matched"]
         if overlap < 1:
             continue
         event_local = to_local_naive(event.date_detection)
         if not event_local:
             continue
         delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
-        if overlap > best_overlap or (overlap == best_overlap and delta_minutes < (best_delta or 10**9)):
-            best_event = event
-            best_overlap = overlap
-            best_delta = delta_minutes
-    if best_event is None:
-        return None, None
-    return best_event, best_delta
+        scored_candidates.append(
+            {"event": event, "overlap": overlap, "delta_minutes": delta_minutes}
+        )
+    return scored_candidates
+
+
+def _build_subdivision_time_candidates(
+    subdivision_id: str, target_dt: datetime
+) -> list[dict]:
+    target_local = to_local_naive(target_dt)
+    if target_local is None:
+        return []
+    date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    candidates = list(
+        Event.objects.using("portal").filter(
+            find_subdivision_unit_id=subdivision_id,
+            date_detection__range=(date_from, date_to),
+        )
+    )
+    scored_candidates = []
+    for event in candidates:
+        event_local = to_local_naive(event.date_detection)
+        if not event_local:
+            continue
+        delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
+        if delta_minutes <= MATCH_TIME_DELTA_MINUTES:
+            scored_candidates.append({"event": event, "delta_minutes": delta_minutes})
+    return scored_candidates
 
 
 def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     """Match extracted attributes to portal events and build comparison result."""
     subdivision_confidence_percent = 0.0
-    best_candidate = attributes.subdivision_candidates[0] if attributes.subdivision_candidates else None
+    subdivision_candidate = (
+        attributes.subdivision_candidates[0] if attributes.subdivision_candidates else None
+    )
     if attributes.subdivision_candidates:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
     predicted_type, predicted_article = _classify_event_type(text)
 
-    best_event = None
+    candidates_a = []
+    candidates_b = []
+    candidates_c = []
+
+    if attributes.date_time and attributes.subdivision_id:
+        candidates_a = _build_subdivision_time_candidates(
+            attributes.subdivision_id,
+            attributes.date_time,
+        )
+    if attributes.date_time:
+        candidates_c = _build_time_offender_candidates(
+            attributes.date_time,
+            attributes.offenders,
+        )
+    if attributes.subdivision_id:
+        candidates_b = _build_subdivision_offender_candidates(
+            attributes.subdivision_id,
+            attributes.offenders,
+            attributes.date_time,
+        )
+
+    def _best_by_overlap(candidates: list[dict]) -> dict | None:
+        if not candidates:
+            return None
+        return min(
+            candidates,
+            key=lambda candidate: (
+                -candidate["overlap"],
+                candidate["delta_minutes"] if candidate["delta_minutes"] is not None else 10**9,
+            ),
+        )
+
+    def _best_by_delta(candidates: list[dict]) -> dict | None:
+        if not candidates:
+            return None
+        return min(candidates, key=lambda candidate: candidate["delta_minutes"])
+
+    best_candidate = None
+    match_method = None
     best_delta = None
     best_flags: dict = {}
-    match_method = None
     time_mismatch = False
     subdivision_mismatch = False
 
-    if attributes.date_time and attributes.subdivision_id:
-        best_event, best_delta = _select_event_by_subdivision_time(
-            attributes.subdivision_id,
-            attributes.date_time,
-        )
-        if best_event:
-            match_method = "subdivision+time"
+    if candidates_a:
+        best_candidate = _best_by_delta(candidates_a)
+        match_method = "subdivision+time"
+    elif candidates_c:
+        best_candidate = _best_by_overlap(candidates_c)
+        match_method = "time+offenders"
+        subdivision_mismatch = True
+        best_flags = {
+            "date_ok": True,
+            "subdivision_ok": False,
+            "offenders_ok": True,
+        }
+    elif candidates_b:
+        best_candidate = _best_by_overlap(candidates_b)
+        match_method = "subdivision+offenders"
+        time_mismatch = True
+        best_flags = {
+            "date_ok": False,
+            "subdivision_ok": True,
+            "offenders_ok": True,
+        }
 
-    if not best_event and attributes.subdivision_id:
-        best_event, best_delta = _select_event_by_subdivision_offenders(
-            attributes.subdivision_id,
-            attributes.offenders,
-            attributes.date_time,
-        )
-        if best_event:
-            match_method = "subdivision+offenders"
-            time_mismatch = True
-            best_flags = {
-                "date_ok": False,
-                "subdivision_ok": True,
-                "offenders_ok": True,
-            }
+    best_event = None
+    if best_candidate:
+        best_event = best_candidate["event"]
+        best_delta = best_candidate.get("delta_minutes")
+        if match_method == "subdivision+time":
+            best_event = repository.get_event_with_offenders(best_event.event_id)
 
-    if not best_event and attributes.date_time:
-        best_event, best_delta = _select_event_by_time_offenders(
-            attributes.date_time,
-            attributes.offenders,
-        )
-        if best_event:
-            match_method = "time+offenders"
-            subdivision_mismatch = True
-            best_flags = {
-                "date_ok": True,
-                "subdivision_ok": False,
-                "offenders_ok": True,
-            }
+    top_overlap_c = max((item["overlap"] for item in candidates_c), default=0)
+    top_overlap_b = max((item["overlap"] for item in candidates_b), default=0)
+    debug_meta = {
+        "candidates_A": len(candidates_a),
+        "candidates_C": len(candidates_c),
+        "candidates_B": len(candidates_b),
+        "top_overlaps": {
+            "stage_c": top_overlap_c,
+            "stage_b": top_overlap_b,
+        },
+        "chosen_method": match_method,
+    }
 
     if not best_event:
         unit_type_conflict = bool(
-            best_candidate.get("flags", {}).get("unit_type_conflict") if best_candidate else False
+            subdivision_candidate.get("flags", {}).get("unit_type_conflict")
+            if subdivision_candidate
+            else False
         )
         return {
             "matched": False,
@@ -672,12 +715,14 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "subdivision_match_percent": subdivision_confidence_percent,
             "time_found": attributes.time_found,
             "date_time_present": bool(attributes.date_time),
-            "subdivision_locality_query": best_candidate.get("query_locality") if best_candidate else None,
-            "subdivision_locality_candidate": best_candidate.get("candidate_locality")
-            if best_candidate
+            "subdivision_locality_query": subdivision_candidate.get("query_locality")
+            if subdivision_candidate
+            else None,
+            "subdivision_locality_candidate": subdivision_candidate.get("candidate_locality")
+            if subdivision_candidate
             else None,
             "subdivision_locality_mismatch": bool(
-                best_candidate.get("locality_mismatch") if best_candidate else False
+                subdivision_candidate.get("locality_mismatch") if subdivision_candidate else False
             ),
             "subdivision_unit_type_conflict": unit_type_conflict,
             "portal": None,
@@ -689,9 +734,13 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "time_mismatch": False,
             "subdivision_mismatch": False,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
+            "debug": debug_meta,
         }
 
-    offenders_score, offenders_counts = _match_offenders(attributes.offenders, best_event)
+    portal_offenders = _portal_offenders(best_event)
+    offenders_score, offenders_counts, offender_matches = match_offenders(
+        attributes.offenders, portal_offenders
+    )
     offenders_ok = offenders_score >= 0.6
     type_ok = predicted_type and predicted_type == best_event.event_type
     article_ok = predicted_article and predicted_article == best_event.article_of_law
@@ -744,15 +793,18 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                     "birth_year": offender.date_of_birth.year,
                     "birth_date": date_to_str(offender.date_of_birth),
                 }
-                for offender in best_event.offenders.all()
+                for offender in portal_offenders
             ],
         }
 
-    portal_offenders = [_portal_offender_payload(offender) for offender in best_event.offenders.all()]
-    offender_matches = _build_offender_matches(attributes.offenders, list(best_event.offenders.all()))
+    portal_offenders_payload = [
+        _portal_offender_payload(offender) for offender in portal_offenders
+    ]
     subdivision_match_percent = subdivision_confidence_percent
     unit_type_conflict = bool(
-        best_candidate.get("flags", {}).get("unit_type_conflict") if best_candidate else False
+        subdivision_candidate.get("flags", {}).get("unit_type_conflict")
+        if subdivision_candidate
+        else False
     )
 
     return {
@@ -766,18 +818,20 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "offenders_counts": best_flags.get("offenders_counts")
         or {
             "extracted": len(attributes.offenders),
-            "portal": len(portal_offenders),
+            "portal": len(portal_offenders_payload),
             "matched": offenders_counts.get("matched", 0),
         },
         "subdivision_match_percent": round(subdivision_match_percent, 2),
         "time_found": attributes.time_found,
         "date_time_present": bool(attributes.date_time),
-        "subdivision_locality_query": best_candidate.get("query_locality") if best_candidate else None,
-        "subdivision_locality_candidate": best_candidate.get("candidate_locality")
-        if best_candidate
+        "subdivision_locality_query": subdivision_candidate.get("query_locality")
+        if subdivision_candidate
+        else None,
+        "subdivision_locality_candidate": subdivision_candidate.get("candidate_locality")
+        if subdivision_candidate
         else None,
         "subdivision_locality_mismatch": bool(
-            best_candidate.get("locality_mismatch") if best_candidate else False
+            subdivision_candidate.get("locality_mismatch") if subdivision_candidate else False
         ),
         "subdivision_unit_type_conflict": unit_type_conflict,
         "portal": {
@@ -785,7 +839,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "subdivision_name": best_event.find_subdivision_unit.name
             if best_event.find_subdivision_unit
             else None,
-            "offenders": portal_offenders,
+            "offenders": portal_offenders_payload,
             "event_type": best_event.event_type,
             "article_of_law": best_event.article_of_law,
         },
@@ -798,4 +852,5 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "time_mismatch": time_mismatch,
         "subdivision_mismatch": subdivision_mismatch,
         "diffs": diffs,
+        "debug": debug_meta,
     }

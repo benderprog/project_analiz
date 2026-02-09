@@ -4,7 +4,13 @@ from django.conf import settings
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.analysis_app.services import DEFAULT_DOB, ExtractedAttributes, dob_matches, match_event
+from apps.analysis_app.services import (
+    DEFAULT_DOB,
+    ExtractedAttributes,
+    dob_matches,
+    match_event,
+    match_offenders,
+)
 from apps.analysis_app.views import _format_offenders
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
@@ -181,6 +187,87 @@ class MatchingTests(TestCase):
         self.assertEqual(result["matched_event_id"], str(event.event_id))
         self.assertEqual(result["match_method"], "time+offenders")
         self.assertTrue(result["subdivision_mismatch"])
+
+    def test_match_event_subdivision_and_offenders_when_date_mismatch(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="КПП-2", parent_pu=pu
+        )
+        event_dt = datetime(2020, 4, 5, 7, 35)
+        if settings.USE_TZ:
+            event_dt = timezone.make_aware(event_dt, timezone.get_current_timezone())
+        event = Event.objects.using("portal").create(
+            date_detection=event_dt,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Андрей",
+            second_name="Климов",
+            patronymic_name="Олегович",
+            date_of_birth=timezone.datetime(1990, 3, 3).date(),
+            event=event,
+        )
+
+        extracted_dt = datetime(2026, 2, 12, 10, 35)
+        attributes = ExtractedAttributes(
+            date_time=extracted_dt,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Климов Андрей Олегович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+        )
+
+        result = match_event(attributes, "Тестовый текст")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["matched_event_id"], str(event.event_id))
+        self.assertEqual(result["match_method"], "subdivision+offenders")
+        self.assertTrue(result["time_mismatch"])
+
+
+class OffenderOverlapTests(TestCase):
+    databases = {"default", "portal"}
+
+    def test_overlap_uses_year_only_dob(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="Отдел 5", parent_pu=pu
+        )
+        event = Event.objects.using("portal").create(
+            date_detection=timezone.now(),
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        offender = Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 3, 3).date(),
+            event=event,
+        )
+
+        extracted = [
+            {
+                "full_name": "Иванов Иван Иванович",
+                "birth_year": 1990,
+            }
+        ]
+
+        score, counts, matches = match_offenders(
+            extracted, list(event.offenders.using("portal").all())
+        )
+
+        self.assertGreater(score, 0)
+        self.assertEqual(counts["matched"], 1)
+        self.assertTrue(any(match["dob_match"] for match in matches))
 
 
 class OffenderDisplayTests(TestCase):

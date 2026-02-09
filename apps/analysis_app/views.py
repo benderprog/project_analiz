@@ -157,6 +157,18 @@ def _build_comments(match_result: dict) -> list[str]:
             comments.append("Не определилось время (использована только дата).")
         if match_result.get("subdivision_locality_mismatch"):
             comments.append(_locality_mismatch_comment(match_result))
+        debug_meta = match_result.get("debug") or {}
+        if debug_meta:
+            top_overlaps = debug_meta.get("top_overlaps") or {}
+            comments.append(
+                "Отладка подбора: "
+                f"A={debug_meta.get('candidates_A', 0)}, "
+                f"C={debug_meta.get('candidates_C', 0)}, "
+                f"B={debug_meta.get('candidates_B', 0)}; "
+                f"overlap C={top_overlaps.get('stage_c', 0)}, "
+                f"B={top_overlaps.get('stage_b', 0)}; "
+                f"method={debug_meta.get('chosen_method') or '—'}."
+            )
         return comments
 
     diffs = match_result.get("diffs", {})
