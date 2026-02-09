@@ -30,7 +30,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--rebuild-embeddings",
             action="store_true",
-            help="Recompute embeddings for cached subdivisions.",
+            help="Recompute embeddings for cached PUs and subdivisions.",
         )
         parser.add_argument(
             "--reset",
@@ -54,7 +54,12 @@ class Command(BaseCommand):
                 CachedPU.objects.all().delete()
 
             portal_pus = list(Pu.objects.using("portal").all())
-            cached_pus = {portal_pu.pu_id: upsert_pu_cache(portal_pu) for portal_pu in portal_pus}
+            cached_pus = {
+                portal_pu.pu_id: upsert_pu_cache(
+                    portal_pu, rebuild_embeddings=rebuild_embeddings
+                )
+                for portal_pu in portal_pus
+            }
 
             portal_subdivisions = list(
                 Subdivision.objects.using("portal").select_related("parent_pu")

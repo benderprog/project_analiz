@@ -50,13 +50,13 @@ class AnalysisResult(models.Model):
 
 class CachedPU(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    portal_pu_id = models.UUIDField(unique=True)
+    portal_pu_id = models.UUIDField(unique=True, db_index=True)
     short_name = models.CharField(max_length=255)
     full_name = models.CharField(max_length=255)
     normalized_short_name = models.TextField(blank=True, default="")
     normalized_full_name = models.TextField(blank=True, default="")
-    embedding = models.JSONField(blank=True, null=True)
-    embedding_updated_at = models.DateTimeField(null=True)
+    embedding_short = models.JSONField(blank=True, null=True)
+    embedding_full = models.JSONField(blank=True, null=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
