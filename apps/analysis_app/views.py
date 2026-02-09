@@ -77,11 +77,56 @@ def _status_for_subdivision(match_result: dict) -> str:
 def _status_for_offenders(match_result: dict) -> str:
     if not match_result.get("matched"):
         return "red"
-    offenders_score = match_result.get("offenders_score_percent") or 0
-    diffs = match_result.get("diffs", {})
-    if "offenders" not in diffs:
+    counts = match_result.get("offenders_counts") or {}
+    matched = counts.get("matched", 0)
+    portal_total = counts.get("portal_total", 0)
+    has_issues = any(
+        (
+            counts.get("dob_mismatch", 0),
+            counts.get("missing_in_portal", 0),
+            counts.get("missing_in_svodka", 0),
+        )
+    )
+    if matched == portal_total and not has_issues:
         return "green"
-    return "yellow" if offenders_score > 0 else "red"
+    if matched == 0 and (portal_total > 0 or has_issues):
+        return "red"
+    return "yellow"
+
+
+def _build_offender_report(match_result: dict) -> dict:
+    counts = match_result.get("offenders_counts") or {}
+    summary = None
+    if counts:
+        summary = (
+            "Совпало нарушителей: "
+            f"{counts.get('matched', 0)} из {counts.get('portal_total', 0)}"
+        )
+
+    details = []
+    matches = match_result.get("offender_matches") or {}
+
+    dob_mismatch_pairs = matches.get("dob_mismatch_pairs") or []
+    for pair in dob_mismatch_pairs:
+        svodka_display = _format_offenders([pair.get("svodka_offender")])[0]
+        portal_display = _format_offenders([pair.get("portal_offender")])[0]
+        details.append(
+            f"ФИО совпало, но ДР отличается: {svodka_display} / {portal_display}"
+        )
+
+    missing_in_portal = _format_offenders(matches.get("missing_in_portal") or [])
+    if missing_in_portal:
+        details.append(
+            "В сводке есть, в БД нет: " + ", ".join(missing_in_portal)
+        )
+
+    missing_in_svodka = _format_offenders(matches.get("missing_in_svodka") or [])
+    if missing_in_svodka:
+        details.append(
+            "В БД есть, в сводке нет: " + ", ".join(missing_in_svodka)
+        )
+
+    return {"summary": summary, "details": details}
 
 
 def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> str:
@@ -184,12 +229,11 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Тип события отличается от классификации.")
     if "article_of_law" in diffs:
         comments.append("Статья закона отличается от классификации.")
-    offenders_counts = match_result.get("offenders_counts", {})
-    if offenders_counts:
-        comments.append(
-            "Совпало нарушителей: "
-            f"{offenders_counts.get('matched', 0)} из {offenders_counts.get('portal', 0)}."
-        )
+    offender_report = _build_offender_report(match_result)
+    if offender_report.get("summary"):
+        comments.append(f"{offender_report['summary']}.")
+    for item in offender_report.get("details", []):
+        comments.append(item)
     if match_result.get("date_time_present") and not match_result.get("time_found"):
         comments.append("Не определилось время (использована только дата).")
     return comments
@@ -230,6 +274,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             }
         )
 
+    offender_report = _build_offender_report(match_result)
+
     return {
         "idx": paragraph.idx,
         "preview": preview,
@@ -249,6 +295,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "time_delta_minutes": match_result.get("time_delta_minutes"),
             "offenders_score_percent": match_result.get("offenders_score_percent"),
             "offenders_counts": match_result.get("offenders_counts") or {},
+            "offenders_summary": offender_report.get("summary"),
+            "offenders_details": offender_report.get("details"),
             "subdivision_match_percent": match_result.get("subdivision_match_percent"),
         },
         "portal": {
