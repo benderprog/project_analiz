@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import math
+import uuid
 from functools import lru_cache
 
 from django.conf import settings
+from django.db import models
 
 from apps.analysis_app.models import CachedSubdivision
 from apps.analysis_app.semantic import get_sentence_model
@@ -26,6 +28,40 @@ _WINDOW_SIZES = (1, 2, 3, 4, 5, 6)
 _cache_version = 0
 
 
+def _build_subdivision_candidate_queryset(
+    selected_pu_portal_id: uuid.UUID | None,
+) -> tuple[models.QuerySet, dict]:
+    qs = CachedSubdivision.objects.all()
+    total = qs.count()
+    filtered_count = total
+    fallback_used = False
+    if selected_pu_portal_id is not None:
+        filtered = qs.filter(parent_pu_id=selected_pu_portal_id)
+        filtered_count = filtered.count()
+        if filtered_count:
+            qs = filtered
+        else:
+            fallback_used = True
+            logger.debug(
+                "PU filter %s returned no subdivisions; falling back to all.",
+                selected_pu_portal_id,
+            )
+    meta = {
+        "subdivision_candidates_total": total,
+        "subdivision_candidates_after_pu_filter": filtered_count,
+        "pu_filter_fallback_used": fallback_used,
+        "selected_pu_id": str(selected_pu_portal_id) if selected_pu_portal_id else None,
+    }
+    return qs, meta
+
+
+def get_subdivision_candidates(
+    selected_pu_portal_id: uuid.UUID | None,
+) -> models.QuerySet:
+    qs, _ = _build_subdivision_candidate_queryset(selected_pu_portal_id)
+    return qs
+
+
 def invalidate_subdivision_cache() -> None:
     global _cache_version
     _cache_version += 1
@@ -33,8 +69,11 @@ def invalidate_subdivision_cache() -> None:
 
 
 @lru_cache(maxsize=8)
-def _load_cached_subdivisions(version: int, selected_pu_id: str | None) -> list[dict]:
-    queryset = CachedSubdivision.objects.values(
+def _load_cached_subdivisions(
+    version: int, selected_pu_id: uuid.UUID | None
+) -> tuple[list[dict], dict]:
+    queryset, meta = _build_subdivision_candidate_queryset(selected_pu_id)
+    queryset = queryset.values(
         "id",
         "portal_subdivision_id",
         "name",
@@ -43,9 +82,7 @@ def _load_cached_subdivisions(version: int, selected_pu_id: str | None) -> list[
         "pu_id",
         "parent_pu_id",
     )
-    if selected_pu_id:
-        queryset = queryset.filter(parent_pu_id=selected_pu_id)
-    return list(queryset)
+    return list(queryset), meta
 
 
 def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -115,9 +152,9 @@ def _build_windows(tokens: list[tuple[str, int, int]]) -> list[dict]:
 
 
 def _substring_matches(
-    normalized_text: str, mapping: list[int], selected_pu_id: str | None
+    normalized_text: str, mapping: list[int], selected_pu_id: uuid.UUID | None
 ) -> list[dict]:
-    cached = _load_cached_subdivisions(_cache_version, selected_pu_id)
+    cached, _ = _load_cached_subdivisions(_cache_version, selected_pu_id)
     matches: list[dict] = []
     for subdivision in cached:
         search_key = subdivision.get("normalized_name") or ""
@@ -157,9 +194,9 @@ def _substring_matches(
 def _semantic_window_matches(
     normalized_text: str,
     mapping: list[int],
-    selected_pu_id: str | None,
+    selected_pu_id: uuid.UUID | None,
 ) -> list[dict]:
-    cached = _load_cached_subdivisions(_cache_version, selected_pu_id)
+    cached, _ = _load_cached_subdivisions(_cache_version, selected_pu_id)
     if not cached:
         return []
 
@@ -229,27 +266,29 @@ def _semantic_window_matches(
 
 
 def match_subdivision(
-    text: str, top_k: int = 5, selected_pu_id: str | None = None
-) -> list[dict]:
+    text: str, top_k: int = 5, selected_pu_id: uuid.UUID | None = None
+) -> tuple[list[dict], dict]:
+    cached, meta = _load_cached_subdivisions(_cache_version, selected_pu_id)
     if not text:
-        return []
+        return [], meta
 
     normalized_text, mapping = normalize_subdivision_text_with_mapping(text)
     if not normalized_text:
-        return []
+        return [], meta
 
     matches = _substring_matches(normalized_text, mapping, selected_pu_id)
     if matches:
-        return matches[:top_k]
+        return matches[:top_k], meta
 
     semantic_matches = _semantic_window_matches(normalized_text, mapping, selected_pu_id)
-    return semantic_matches[:top_k]
+    return semantic_matches[:top_k], meta
 
 
 __all__ = [
     "SUBDIVISION_MATCH_THRESHOLD",
     "SUBDIVISION_GREEN_THRESHOLD",
     "SUBDIVISION_YELLOW_THRESHOLD",
+    "get_subdivision_candidates",
     "invalidate_subdivision_cache",
     "match_subdivision",
 ]

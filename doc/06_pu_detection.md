@@ -47,7 +47,7 @@ If no match is found, detection returns `none` and the operator can select manua
 1. Upload a DOCX on `/upload`.
 2. The system auto-detects a PU from the title page and presents a dropdown:
    - “Общая сводка” (no PU constraint)
-   - All cached PUs
+   - All cached PUs (stored by portal UUID)
 3. Operator can override and submit “Анализировать”.
 
 The selected PU is stored with the analysis run and displayed in the result header.
@@ -55,8 +55,11 @@ The selected PU is stored with the analysis run and displayed in the result head
 ## Subdivision matching with PU filter
 
 When a PU is selected (not “Общая сводка”), subdivision candidate lookup is restricted to
-cached subdivisions with matching `parent_pu_id`, reducing the candidate pool and improving
-matching speed/precision.
+cached subdivisions with matching `parent_pu_id` (portal UUID), reducing the candidate pool
+and improving matching speed/precision. “Общая сводка” never applies a PU filter.
+
+If filtering by PU yields zero subdivision candidates, matching automatically falls back to
+the full subdivision cache and records debug info so the candidate pool is never silently empty.
 
 ## How to verify
 
@@ -74,3 +77,4 @@ python manage.py runserver
 2. Verify the dropdown appears with the detected PU preselected and “Общая сводка” present.
 3. Change the PU manually and run analysis.
 4. Confirm subdivision matching uses only subdivisions from the selected PU (unless “Общая сводка”).
+5. If the debug output reports an empty filtered pool, verify the fallback to the full pool.
