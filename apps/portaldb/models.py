@@ -20,6 +20,7 @@ class Pu(models.Model):
 class Subdivision(models.Model):
     subdivision_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
+    short_name = models.CharField(max_length=255, db_index=True, blank=True, default="")
     parent_pu = models.ForeignKey(Pu, on_delete=models.CASCADE)
 
     class Meta:
@@ -28,7 +29,7 @@ class Subdivision(models.Model):
         verbose_name_plural = "Subdivisions"
 
     def __str__(self) -> str:
-        return self.name
+        return self.short_name or self.name
 
 
 class Event(models.Model):

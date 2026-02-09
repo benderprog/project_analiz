@@ -24,8 +24,10 @@ class PuAdmin(admin.ModelAdmin):
 
 @admin.register(Subdivision)
 class SubdivisionAdmin(admin.ModelAdmin):
-    list_display = ("subdivision_id", "name", "parent_pu")
-    search_fields = ("name",)
+    # Show short_name to match the subdivision primer and admin requirements.
+    list_display = ("subdivision_id", "short_name", "name", "parent_pu")
+    # Allow searching by short_name, full name, and parent PU naming.
+    search_fields = ("short_name", "name", "parent_pu__short_name", "parent_pu__full_name")
     list_filter = ("parent_pu",)
 
 
