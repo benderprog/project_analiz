@@ -371,7 +371,7 @@ def _portal_offender_payload(offender: Offender) -> dict:
     if birth_date == DEFAULT_DOB:
         birth_date = None
     return {
-        "full_name": portal_offender_fullname(offender),
+        "full_name": offender.fio_surname_first,
         "second_name": offender.second_name,
         "first_name": offender.first_name,
         "patronymic_name": offender.patronymic_name,
@@ -897,16 +897,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "expected": [offender_to_json(offender) for offender in attributes.offenders],
             "actual": [
                 {
-                    "full_name": " ".join(
-                        filter(
-                            None,
-                            [
-                                offender.second_name,
-                                offender.first_name,
-                                offender.patronymic_name,
-                            ],
-                        )
-                    ),
+                    "full_name": offender.fio_surname_first,
                     "birth_year": offender.date_of_birth.year,
                     "birth_date": date_to_str(offender.date_of_birth),
                 }

@@ -27,6 +27,9 @@ def _parse_birth_date(value: Any) -> date | None:
 
 
 def portal_offender_fullname(offender: Any) -> str:
+    fio_surname_first = _get_value(offender, "fio_surname_first")
+    if fio_surname_first:
+        return str(fio_surname_first).strip()
     parts = [
         _get_value(offender, "second_name"),
         _get_value(offender, "first_name"),
@@ -59,6 +62,9 @@ def normalize_name_key(fullname: str) -> str:
 
 def offender_display(offender: Any, *, source: SourceType) -> str:
     if source == "portal":
+        fio_with_dob = _get_value(offender, "fio_surname_first_with_dob")
+        if fio_with_dob:
+            return str(fio_with_dob).strip()
         full_name = portal_offender_fullname(offender) or "—"
         birth_date = _parse_birth_date(
             _get_value(offender, "date_of_birth") or _get_value(offender, "birth_date")

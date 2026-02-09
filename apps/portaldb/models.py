@@ -1,3 +1,4 @@
+from datetime import date
 import uuid
 
 from django.db import models
@@ -68,5 +69,18 @@ class Offender(models.Model):
         verbose_name = "Offender"
         verbose_name_plural = "Offenders"
 
+    @property
+    def fio_surname_first(self) -> str:
+        parts = [self.second_name, self.first_name, self.patronymic_name]
+        return " ".join(part for part in parts if part).strip()
+
+    @property
+    def fio_surname_first_with_dob(self) -> str:
+        fio = self.fio_surname_first or "—"
+        birth_date = self.date_of_birth
+        if birth_date and birth_date != date(1900, 1, 1):
+            return f"{fio} ({birth_date.strftime('%d.%m.%Y')})"
+        return fio
+
     def __str__(self) -> str:
-        return f"{self.second_name} {self.first_name}"
+        return self.fio_surname_first
