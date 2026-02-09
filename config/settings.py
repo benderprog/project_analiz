@@ -101,3 +101,6 @@ SKIP_SEMANTIC_MODEL = os.getenv("SKIP_SEMANTIC_MODEL", "false").lower() in (
     "true",
     "yes",
 )
+SUBDIVISION_SEMANTIC_THRESHOLD = float(
+    os.getenv("SUBDIVISION_SEMANTIC_THRESHOLD", "0.6")
+)

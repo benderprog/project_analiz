@@ -4,6 +4,7 @@ import hashlib
 import re
 
 from apps.analysis_app.utils.subdivision_norm import normalize_text
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 
 
 _BRACKETS_REGEX = re.compile(r"\s*\([^)]*\)")
@@ -18,7 +19,7 @@ _ABBREVIATION_EXPANSIONS = {
 
 
 def normalize_subdivision_name(name: str) -> str:
-    return normalize_text(name)
+    return normalize_subdivision_text(name)
 
 
 def _strip_quotes(value: str) -> str:
