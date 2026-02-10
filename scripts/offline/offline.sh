@@ -200,6 +200,79 @@ compose_cmd() {
   docker compose -f "${compose_dir}/compose.yml" --env-file "${compose_dir}/.env" "$@"
 }
 
+load_compose_env() {
+  local compose_dir
+  compose_dir="$(resolve_compose_dir)"
+
+  # shellcheck disable=SC1090
+  set -a
+  source "${compose_dir}/.env"
+  set +a
+}
+
+service_network_name() {
+  local service="$1"
+  local container_id
+  container_id="$(compose_cmd ps -q "${service}")"
+  [[ -n "${container_id}" ]] || die "Container for service '${service}' is not running"
+
+  docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${container_id}" | head -n 1
+}
+
+wait_for_service_healthy() {
+  local service="$1"
+  local timeout_s="${2:-90}"
+  local waited=0
+
+  while (( waited < timeout_s )); do
+    local container_id health
+    container_id="$(compose_cmd ps -q "${service}")"
+    if [[ -n "${container_id}" ]]; then
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_id}")"
+      if [[ "${health}" == "healthy" || "${health}" == "running" ]]; then
+        return 0
+      fi
+    fi
+
+    sleep 2
+    waited=$((waited + 2))
+  done
+
+  die "Timed out waiting for service '${service}' to become healthy"
+}
+
+run_pg_restore_in_postgres15() {
+  local service="$1"
+  local db_host="$2"
+  local db_user="$3"
+  local db_name="$4"
+  local db_password="$5"
+  local dump_file="$6"
+  local compose_dir network_name
+
+  compose_dir="$(resolve_compose_dir)"
+  network_name="$(service_network_name "${service}")"
+
+  log "Restoring ${db_name} from ${dump_file} using postgres:15 on network ${network_name}"
+  docker run --rm \
+    --network "${network_name}" \
+    -v "${compose_dir}/db_dumps:/db_dumps:ro" \
+    -e "PGPASSWORD=${db_password}" \
+    postgres:15 \
+    sh -lc "pg_restore --version && pg_restore -h ${db_host} -p 5432 -U ${db_user} -d ${db_name} --clean --if-exists --no-owner --no-privileges /db_dumps/${dump_file}"
+}
+
+restore_cmd() {
+  load_compose_env
+  compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
+
+  wait_for_service_healthy "db_app"
+  wait_for_service_healthy "portal_db_test"
+
+  run_pg_restore_in_postgres15 "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump"
+  run_pg_restore_in_postgres15 "portal_db_test" "portal_db_test" "portal" "portal_db_test" "${PORTAL_DB_PASSWORD}" "portal_db.dump"
+}
+
 import_cmd() {
   require_cmd docker
 
@@ -248,17 +321,13 @@ main() {
       import_cmd
       ;;
     up)
-      compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
-      compose_cmd run --rm restore_app
-      compose_cmd run --rm restore_portal
+      restore_cmd
       compose_cmd run --rm migrate_app
       compose_cmd run --rm migrate_portal
       compose_cmd up -d --remove-orphans --no-build web
       ;;
     restore)
-      compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
-      compose_cmd run --rm restore_app
-      compose_cmd run --rm restore_portal
+      restore_cmd
       ;;
     logs)
       compose_cmd logs -f --tail=200 web db_app portal_db_test
