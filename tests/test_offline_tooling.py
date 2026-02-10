@@ -18,6 +18,17 @@ def test_offline_compose_web_uses_image_without_build():
     assert "build:" not in web_match.group(1)
 
 
+def test_offline_compose_has_restore_services_and_no_seed_service():
+    compose_path = REPO_ROOT / "docker" / "offline" / "compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+
+    assert "restore_app:" in content
+    assert "restore_portal:" in content
+    assert "pg_restore -h db_app" in content
+    assert "pg_restore -h portal_db_test" in content
+    assert "seed_portal:" not in content
+
+
 def test_offline_script_help():
     script_path = REPO_ROOT / "scripts" / "offline" / "offline.sh"
     result = subprocess.run(
@@ -29,3 +40,6 @@ def test_offline_script_help():
 
     assert result.returncode == 0
     assert "Offline bundle / runtime helper" in result.stdout
+    assert "--db-app-dump" in result.stdout
+    assert "restore" in result.stdout
+    assert "seed" not in result.stdout

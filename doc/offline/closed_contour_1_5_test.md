@@ -22,18 +22,18 @@ bash scripts/prefetch_model.sh
 ```bash
 ./scripts/offline/offline.sh bundle \
   --version 1.5_test \
+  --db-app-dump /ABS/PATH/app_db.dump \
+  --db-portal-dump /ABS/PATH/portal_db.dump \
   --with-model \
-  --seed-xlsx /ABS/PATH/subdivision_primer.xlsx \
-  --seed-docx /ABS/PATH/test_svodka_semantic.docx \
   --archive
 ```
 
 Bundle output:
 
 - `dist/offline_bundle_1_5_test/artifacts` (docker image archives)
-- `dist/offline_bundle_1_5_test/compose` (`compose.yml`, `.env`, `portal.yml`, optional `models/`, optional `seed/`)
+- `dist/offline_bundle_1_5_test/compose` (`compose.yml`, `.env`, `portal.yml`, optional `models/`, `db_dumps/`)
+- `dist/offline_bundle_1_5_test/db_dumps` (`app_db.dump`, `portal_db.dump`)
 - `dist/offline_bundle_1_5_test/models` (optional copy of local models)
-- `dist/offline_bundle_1_5_test/seed` (optional seed fixtures)
 - `dist/offline_bundle_1_5_test/doc` (this runbook)
 - `dist/offline_bundle_1_5_test/manifest.json` (sha256 list)
 
@@ -50,28 +50,28 @@ Copy the whole `dist/offline_bundle_1_5_test/` directory (or the `.tar.gz` archi
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh import
 ```
 
-## 5) Offline host: start stack (db + one-shot migrations + web)
+## 5) Offline host: start stack (restore + migrate + web)
 
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh up
 ```
 
-## 6) Offline host: optional portal seed
+`up` starts DB containers, restores both bundled dumps, runs Django migrations, then starts `web`.
 
-Only if bundle includes `seed/` files:
+If needed, run only restore phase explicitly:
 
 ```bash
-OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh seed
+OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh restore
 ```
 
-## 7) Verify app
+## 6) Verify app
 
 Open in browser:
 
 - `http://localhost:8000/admin/`
 - `http://localhost:8000/upload/`
 
-## 8) Logs and shutdown
+## 7) Logs and shutdown
 
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh logs

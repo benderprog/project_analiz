@@ -16,3 +16,6 @@ assets/models/
 wheelhouse/
 dist/
 models/
+# Database dump artifacts
+*.dump
+db_dumps/
