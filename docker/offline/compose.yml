@@ -1,0 +1,105 @@
+version: "3.9"
+
+services:
+  db_app:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${APP_DB_NAME}
+      POSTGRES_USER: ${APP_DB_USER}
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - app_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  portal_db_test:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${PORTAL_DB_NAME}
+      POSTGRES_USER: ${PORTAL_DB_USER}
+      POSTGRES_PASSWORD: ${PORTAL_DB_PASSWORD}
+    volumes:
+      - portal_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate_app:
+    image: project_analiz:web-ver-${VERSION}
+    env_file:
+      - .env
+    volumes:
+      - ./portal.yml:/app/configs/portal.yml:ro
+      - ./models:/opt/models:ro
+      - ./seed:/seed:ro
+    depends_on:
+      db_app:
+        condition: service_healthy
+    command: ["python", "manage.py", "migrate"]
+    restart: "no"
+
+  migrate_portal:
+    image: project_analiz:web-ver-${VERSION}
+    env_file:
+      - .env
+    volumes:
+      - ./portal.yml:/app/configs/portal.yml:ro
+      - ./models:/opt/models:ro
+      - ./seed:/seed:ro
+    depends_on:
+      portal_db_test:
+        condition: service_healthy
+    command: ["python", "manage.py", "migrate", "--database=portal"]
+    restart: "no"
+
+  web:
+    image: project_analiz:web-ver-${VERSION}
+    env_file:
+      - .env
+    volumes:
+      - ./portal.yml:/app/configs/portal.yml:ro
+      - ./models:/opt/models:ro
+      - ./seed:/seed:ro
+    depends_on:
+      migrate_app:
+        condition: service_completed_successfully
+      migrate_portal:
+        condition: service_completed_successfully
+    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  seed_portal:
+    image: project_analiz:web-ver-${VERSION}
+    env_file:
+      - .env
+    profiles: ["seed"]
+    volumes:
+      - ./portal.yml:/app/configs/portal.yml:ro
+      - ./models:/opt/models:ro
+      - ./seed:/seed:ro
+    depends_on:
+      migrate_portal:
+        condition: service_completed_successfully
+    command:
+      [
+        "python",
+        "manage.py",
+        "seed_portal",
+        "--reset",
+        "--xlsx",
+        "/seed/subdivision_primer.xlsx",
+        "--docx",
+        "/seed/test_svodka_semantic.docx"
+      ]
+    restart: "no"
+
+volumes:
+  app_db_data:
+  portal_db_data:
