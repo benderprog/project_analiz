@@ -15,7 +15,7 @@ from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
-from apps.analysis_app.utils.dt_display import format_local_naive, to_local_naive
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.analysis_app.utils.offender_format import (
     normalize_name_key,
@@ -1000,8 +1000,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "matched": True,
         "matched_event_id": str(best_event.event.event_id),
         "score_percent": round(offenders_score * 100, 2),
-        "extracted_timestamp_display": format_local_naive(attributes.date_time),
-        "portal_timestamp_display": format_local_naive(best_event.event.date_detection),
+        "extracted_timestamp_display": format_dt_dmy_hm(attributes.date_time),
+        "portal_timestamp_display": format_dt_dmy_hm(best_event.event.date_detection),
         "time_delta_minutes": best_delta,
         "offenders_score_percent": best_flags.get("offenders_score", 0),
         "offenders_counts": best_flags.get("offenders_counts")
@@ -1028,7 +1028,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_unit_type_conflict": unit_type_conflict,
         "extracted_subdivision_name": attributes.subdivision_name,
         "portal": {
-            "timestamp": format_local_naive(best_event.event.date_detection),
+            "timestamp": format_dt_dmy_hm(best_event.event.date_detection),
             "subdivision_name": portal_subdivision_name,
             "offenders": portal_offenders_payload,
             "event_type": best_event.event.event_type,

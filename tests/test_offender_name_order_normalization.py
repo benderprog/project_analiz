@@ -40,7 +40,7 @@ class OffenderNameOrderNormalizationTests(TestCase):
 
         display = offender_display(offender, source="portal")
 
-        self.assertEqual(display, "Иванов Иван Иванович (10.05.1991)")
+        self.assertEqual(display, "Иванов Иван Иванович (10-05-1991)")
 
     def test_display_portal_offender_surname_first_for_partial_name(self):
         offender = Offender(
@@ -52,4 +52,4 @@ class OffenderNameOrderNormalizationTests(TestCase):
 
         display = offender_display(offender, source="portal")
 
-        self.assertEqual(display, "Зайцев Павел (12.12.1980)")
+        self.assertEqual(display, "Зайцев Павел (12-12-1980)")
