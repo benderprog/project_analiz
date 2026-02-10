@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+  db_app:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: app_db
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    volumes:
+      - app_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  portal_db_test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: portal_db_test
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: portal
+    volumes:
+      - portal_db_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    image: project_analiz-web:1.5_test
+    environment:
+      APP_DB_HOST: db_app
+      APP_DB_PORT: "5432"
+      APP_DB_NAME: app_db
+      APP_DB_USER: app
+      APP_DB_PASSWORD: app
+      PORTAL_DB_HOST: portal_db_test
+      PORTAL_DB_PORT: "5432"
+      PORTAL_DB_NAME: portal_db_test
+      PORTAL_DB_USER: portal
+      PORTAL_DB_PASSWORD: portal
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      SENTENCE_TRANSFORMERS_HOME: /opt/models
+      HF_HOME: /opt/models/hf_home
+      SEMANTIC_MODEL_PATH: /opt/models/paraphrase-multilingual-MiniLM-L12-v2
+      PORTAL_CONFIG_PATH: /app/configs/portal.yml
+      PORTAL_PROFILE: ${PORTAL_PROFILE:-dev}
+      PORTAL_GATEWAY_BACKEND: ${PORTAL_GATEWAY_BACKEND:-orm}
+    ports:
+      - "8000:8000"
+    volumes:
+      - models_data:/opt/models:ro
+      - ./configs/portal.offline.yml:/app/configs/portal.yml:ro
+      - ./fixtures:/fixtures:ro
+    depends_on:
+      db_app:
+        condition: service_healthy
+      portal_db_test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/upload/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  app_db_data:
+  portal_db_test_data:
+  models_data:
