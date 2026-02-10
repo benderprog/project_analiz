@@ -74,15 +74,18 @@ DATABASES = {
     },
 }
 
-PORTAL_CONFIG_PATH = os.getenv("PORTAL_CONFIG_PATH")
-if PORTAL_CONFIG_PATH:
-    from apps.portaldb.portal_config import apply_portal_database_settings, load_yaml
+from apps.portaldb.portal_config import (
+    apply_portal_database_settings,
+    load_portal_config,
+)
 
-    portal_config_path = Path(PORTAL_CONFIG_PATH)
-    if not portal_config_path.exists():
-        raise RuntimeError(f"Portal config not found at {portal_config_path}.")
+try:
+    portal_cfg, _, _ = load_portal_config(project_root=BASE_DIR)
+except FileNotFoundError:
+    portal_cfg = None
+
+if portal_cfg and os.getenv("PORTAL_PROFILE"):
     try:
-        portal_cfg = load_yaml(portal_config_path)
         DATABASES["portal"] = apply_portal_database_settings(globals(), portal_cfg)
     except ValueError as exc:
         raise RuntimeError(f"Portal config error: {exc}") from exc
