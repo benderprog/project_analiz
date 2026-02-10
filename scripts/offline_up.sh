@@ -53,8 +53,19 @@ if [[ ! -f "compose/portal.yml" ]]; then
   exit 1
 fi
 
-log "Starting docker compose stack"
-docker compose --env-file compose/.env.docker -f compose/docker-compose.yml -f compose/docker-compose.offline.yml up -d
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="$(grep -E '^VERSION=' compose/.env.docker | head -n1 | cut -d= -f2-)"
+fi
+
+if [[ -z "${VERSION:-}" ]]; then
+  echo "Missing VERSION env var. Rebuild the release bundle with scripts/make_release_bundle.sh so compose/.env.docker includes VERSION." >&2
+  exit 1
+fi
+
+export VERSION
+
+log "Starting docker compose stack (VERSION=${VERSION})"
+docker compose --env-file compose/.env.docker -f compose/docker-compose.yml -f compose/docker-compose.offline.yml up -d --no-build
 
 wait_for_db() {
   local service="$1"

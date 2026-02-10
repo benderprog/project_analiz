@@ -2,6 +2,7 @@ version: "3.9"
 
 services:
   web:
+    image: project_analiz:web-ver-${VERSION}
     environment:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"

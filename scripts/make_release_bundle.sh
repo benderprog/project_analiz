@@ -110,7 +110,7 @@ cp scripts/import_images.sh scripts/offline_up.sh "${base_dir}/scripts/"
 
 log "Copying offline docs"
 cp doc/11_docker_offline.md doc/07_portal_seed.md doc/13_closed_contour_release.md "${base_dir}/doc/"
-cp doc/13_closed_contour_release.md "${base_dir}/README_OFFLINE.md"
+cp README_OFFLINE.md "${base_dir}/README_OFFLINE.md"
 
 log "Copying environment templates"
 cp .env.docker.example "${base_dir}/.env.docker.example"
@@ -150,6 +150,7 @@ required = {
     "SEMANTIC_MODEL_PATH": "/opt/models/${model_name}",
 }
 pairs.update(required)
+pairs["VERSION"] = "${version}"
 
 lines = [f"{k}={v}" for k, v in pairs.items()]
 env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

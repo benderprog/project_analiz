@@ -34,9 +34,11 @@ tar -xzf release_ver_1_5_test.tar.gz
 sudo systemctl stop postgresql || true
 nmcli networking off
 cd release_ver_1_5_test
-bash scripts/import_images.sh
+bash scripts/import_images.sh ./artifacts
 bash scripts/offline_up.sh
 ```
+
+`offline_up.sh` starts containers directly from imported images (`project_analiz:web-ver-${VERSION}`); no docker build is performed during offline startup.
 
 Optional bootstrap after stack is up:
 
