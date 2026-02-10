@@ -1,4 +1,10 @@
-SELECT *
-FROM offender
-WHERE event_id = %(event_id)s
-ORDER BY offender_id;
+select
+  o.offender_id,
+  o.event_id,
+  o.second_name,
+  o.first_name,
+  o.patronymic_name,
+  o.date_of_birth
+from offenders o
+where o.event_id = any(%(event_ids)s)
+order by o.event_id, o.offender_id;

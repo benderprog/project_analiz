@@ -9,6 +9,7 @@ from django.test import SimpleTestCase
 from apps.portaldb.portal_config import (
     apply_portal_database_settings,
     expand_env_vars,
+    get_gateway_settings,
     load_yaml,
     resolve_portal_config_path,
 )
@@ -29,6 +30,11 @@ class PortalConfigTests(SimpleTestCase):
         with self.assertRaises(ValueError) as context:
             expand_env_vars({"value": "${MISSING_VAR}"})
         self.assertIn("MISSING_VAR", str(context.exception))
+
+    def test_get_gateway_settings_defaults(self):
+        settings_data = get_gateway_settings({})
+        self.assertEqual(settings_data["backend"], "orm")
+        self.assertEqual(settings_data["alias"], "portal")
 
     def test_apply_portal_database_settings_from_yaml(self):
         fixture_path = Path(__file__).parent / "fixtures" / "portal_config.yml"

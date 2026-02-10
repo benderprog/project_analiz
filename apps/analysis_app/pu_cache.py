@@ -10,7 +10,8 @@ from apps.analysis_app.models import CachedPU
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_utils import to_py_floats
 from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
-from apps.portaldb.models import Pu
+from apps.analysis_app.portal_records import PortalPURecord
+from apps.portaldb.gateway import get_portal_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ def _normalize_pu_text(pu_text: str) -> str:
     return normalize_subdivision_text((pu_text or "").strip())
 
 
-def compute_pu_embeddings(pu: Pu, model=None) -> tuple[list[float] | None, list[float] | None]:
+def compute_pu_embeddings(pu: PortalPURecord, model=None) -> tuple[list[float] | None, list[float] | None]:
     short_source = (pu.short_name or "").strip() or (pu.full_name or "").strip()
     full_source = (pu.full_name or "").strip() or (pu.short_name or "").strip()
     short_text = _normalize_pu_text(short_source)
@@ -47,7 +48,7 @@ def compute_pu_embeddings(pu: Pu, model=None) -> tuple[list[float] | None, list[
 
 
 def compute_pu_embeddings_batch(
-    portal_pus: list[Pu], model=None
+    portal_pus: list[PortalPURecord], model=None
 ) -> dict[uuid.UUID, tuple[list[float] | None, list[float] | None]]:
     if not model or settings.SKIP_SEMANTIC_MODEL:
         return {portal_pu.pu_id: (None, None) for portal_pu in portal_pus}
@@ -89,7 +90,7 @@ def compute_pu_embeddings_batch(
 
 
 def upsert_pu_cache(
-    portal_pu: Pu,
+    portal_pu: PortalPURecord,
     rebuild_embeddings: bool = False,
     *,
     embeddings: tuple[list[float] | None, list[float] | None] | None = None,
@@ -137,7 +138,11 @@ def upsert_pu_cache(
 
 
 def sync_pu_cache(rebuild_embeddings: bool = False) -> int:
-    portal_pus = list(Pu.objects.using("portal").all())
+    gateway = get_portal_gateway()
+    portal_pus = [
+        PortalPURecord(pu_id=pu.pu_id, short_name=pu.short_name, full_name=pu.full_name)
+        for pu in gateway.list_pus()
+    ]
     try:
         model = get_sentence_model() if not settings.SKIP_SEMANTIC_MODEL else None
     except RuntimeError as exc:

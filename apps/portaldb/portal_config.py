@@ -95,6 +95,25 @@ def apply_portal_database_settings(settings_module, cfg):
     }
 
 
+def get_gateway_settings(cfg):
+    gateway_cfg = cfg.get("gateway") or {}
+    if not isinstance(gateway_cfg, dict):
+        raise ValueError("Portal config 'gateway' must be a mapping.")
+
+    expanded = dict(gateway_cfg)
+    backend_raw = expanded.get("backend", "orm")
+    if isinstance(backend_raw, str) and backend_raw == "${PORTAL_GATEWAY_BACKEND}":
+        backend_raw = os.getenv("PORTAL_GATEWAY_BACKEND", "orm")
+    else:
+        backend_raw = expand_env_vars(backend_raw)
+    backend = str(backend_raw).strip().lower() or "orm"
+    if backend not in {"orm", "sql"}:
+        raise ValueError("Portal gateway backend must be either 'orm' or 'sql'.")
+
+    alias = str(expand_env_vars(expanded.get("alias", "portal"))).strip() or "portal"
+    return {"backend": backend, "alias": alias}
+
+
 def _expand_env_in_string(value):
     def replace(match):
         var_name = match.group(1)

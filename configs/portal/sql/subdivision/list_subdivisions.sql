@@ -1,3 +1,8 @@
-SELECT subdivision_id, subdivision_short_name, subdivision_name, parent_pu_id
-FROM subdivision
-ORDER BY subdivision_name;
+select
+  s.subdivision_id,
+  s.name,
+  s.short_name,
+  s.parent_pu_id
+from subdivision s
+where (%(pu_id)s is null or s.parent_pu_id = %(pu_id)s)
+order by s.name;
