@@ -76,6 +76,7 @@ DATABASES = {
 
 from apps.portaldb.portal_config import (
     apply_portal_database_settings,
+    get_gateway_settings,
     load_portal_config,
 )
 
@@ -89,6 +90,20 @@ if portal_cfg and os.getenv("PORTAL_PROFILE"):
         DATABASES["portal"] = apply_portal_database_settings(globals(), portal_cfg)
     except ValueError as exc:
         raise RuntimeError(f"Portal config error: {exc}") from exc
+
+portal_gateway_settings = {"backend": os.getenv("PORTAL_GATEWAY_BACKEND", "orm"), "alias": "portal"}
+if portal_cfg:
+    try:
+        portal_gateway_settings = get_gateway_settings(portal_cfg)
+    except ValueError as exc:
+        raise RuntimeError(f"Portal config error: {exc}") from exc
+
+PORTAL_GATEWAY_BACKEND = (
+    os.getenv("PORTAL_GATEWAY_BACKEND")
+    or portal_gateway_settings["backend"]
+    or "orm"
+).strip().lower()
+PORTAL_DB_ALIAS = portal_gateway_settings["alias"] or "portal"
 
 DATABASE_ROUTERS = ["config.db_router.PortalDBRouter"]
 

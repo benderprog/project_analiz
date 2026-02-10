@@ -1,3 +1,7 @@
+gateway:
+  backend: ${PORTAL_GATEWAY_BACKEND}
+  alias: portal
+
 profiles:
   dev:
     database:
