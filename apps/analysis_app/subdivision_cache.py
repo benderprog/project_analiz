@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.analysis_app.models import CachedPU, CachedSubdivision
+from apps.analysis_app.portal_records import PortalPURecord, PortalSubdivisionRecord
 from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_utils import (
@@ -15,7 +16,7 @@ from apps.analysis_app.subdivision_utils import (
     to_py_floats,
 )
 from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
-from apps.portaldb.models import Pu, Subdivision
+from apps.portaldb.gateway import get_portal_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,22 @@ def sync_subdivision_cache(rebuild_embeddings: bool = False) -> int:
         logger.info("Semantic model unavailable: %s", exc)
         model = None
 
-    with transaction.atomic():
-        portal_pus = list(Pu.objects.using("portal").all())
-        cached_pus = _sync_cached_pus(portal_pus)
-
-        portal_subdivisions = list(
-            Subdivision.objects.using("portal").select_related("parent_pu")
+    gateway = get_portal_gateway()
+    portal_pus = [PortalPURecord(pu_id=pu.pu_id, short_name=pu.short_name, full_name=pu.full_name) for pu in gateway.list_pus()]
+    pus_by_id = {pu.pu_id: pu for pu in portal_pus}
+    portal_subdivisions = [
+        PortalSubdivisionRecord(
+            subdivision_id=s.subdivision_id,
+            name=s.name,
+            short_name=s.short_name,
+            parent_pu_id=s.parent_pu_id,
+            parent_pu=pus_by_id.get(s.parent_pu_id),
         )
+        for s in gateway.list_subdivisions()
+    ]
+
+    with transaction.atomic():
+        cached_pus = _sync_cached_pus(portal_pus)
         for portal_subdivision in portal_subdivisions:
             _upsert_cached_subdivision(
                 portal_subdivision,
@@ -45,7 +55,9 @@ def sync_subdivision_cache(rebuild_embeddings: bool = False) -> int:
     return len(portal_subdivisions)
 
 
-def upsert_subdivision_cache(portal_subdivision: Subdivision, rebuild_embeddings: bool = False) -> None:
+def upsert_subdivision_cache(
+    portal_subdivision: PortalSubdivisionRecord, rebuild_embeddings: bool = False
+) -> None:
     try:
         model = get_sentence_model() if not settings.SKIP_SEMANTIC_MODEL else None
     except RuntimeError as exc:
@@ -53,11 +65,8 @@ def upsert_subdivision_cache(portal_subdivision: Subdivision, rebuild_embeddings
         model = None
 
     cached_pu = None
-    parent_pu = getattr(portal_subdivision, "parent_pu", None)
-    if parent_pu is None and portal_subdivision.parent_pu_id:
-        parent_pu = Pu.objects.using("portal").get(pk=portal_subdivision.parent_pu_id)
-    if parent_pu is not None:
-        cached_pu = upsert_pu_cache(parent_pu)
+    if portal_subdivision.parent_pu is not None:
+        cached_pu = upsert_pu_cache(portal_subdivision.parent_pu)
 
     _upsert_cached_subdivision(
         portal_subdivision,
@@ -67,7 +76,7 @@ def upsert_subdivision_cache(portal_subdivision: Subdivision, rebuild_embeddings
     )
 
 
-def _sync_cached_pus(portal_pus: list[Pu]) -> dict:
+def _sync_cached_pus(portal_pus: list[PortalPURecord]) -> dict:
     cached_pus: dict[str, CachedPU] = {}
     for portal_pu in portal_pus:
         cached_pu = upsert_pu_cache(portal_pu)
@@ -76,7 +85,7 @@ def _sync_cached_pus(portal_pus: list[Pu]) -> dict:
 
 
 def _upsert_cached_subdivision(
-    portal_subdivision: Subdivision,
+    portal_subdivision: PortalSubdivisionRecord,
     cached_pu: CachedPU | None,
     *,
     model=None,
@@ -114,21 +123,21 @@ def _upsert_cached_subdivision(
 
     hash_changed = cached_subdivision.embedding_source_hash != source_hash
     should_rebuild = (
-        rebuild_embeddings
-        or cached_subdivision.embedding is None
+        created
+        or rebuild_embeddings
         or hash_changed
-        or created
+        or cached_subdivision.embedding is None
     )
-    cached_subdivision.embedding_source_hash = source_hash
 
-    if should_rebuild:
-        if model and not settings.SKIP_SEMANTIC_MODEL:
-            embedding = model.encode([normalized_embedding_source])[0]
-            cached_subdivision.embedding = to_py_floats(embedding)
-            cached_subdivision.embedding_updated_at = timezone.now()
-        else:
-            cached_subdivision.embedding = None
-            cached_subdivision.embedding_updated_at = None
+    if model and not settings.SKIP_SEMANTIC_MODEL and should_rebuild:
+        encoded = model.encode([normalized_embedding_source])[0]
+        cached_subdivision.embedding = to_py_floats(encoded)
+        cached_subdivision.embedding_source_hash = source_hash
+        cached_subdivision.embedding_updated_at = timezone.now()
+    elif should_rebuild:
+        cached_subdivision.embedding = None
+        cached_subdivision.embedding_source_hash = source_hash
+        cached_subdivision.embedding_updated_at = None
         cached_subdivision._skip_embedding_rebuild = True
 
     cached_subdivision.save()

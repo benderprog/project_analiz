@@ -5,7 +5,8 @@ from django.urls import path
 
 from apps.analysis_app.models import CachedPU, CachedSubdivision, CachedSubdivisionAlias
 from apps.analysis_app.pu_cache import upsert_pu_cache
-from apps.portaldb.models import Pu
+from apps.analysis_app.portal_records import PortalPURecord
+from apps.portaldb.gateway import get_portal_gateway
 
 
 @admin.action(description="Rebuild embeddings")
@@ -40,8 +41,15 @@ class CachedPUAdmin(admin.ModelAdmin):
     @admin.action(description="Recompute cache for selected PUs")
     def recompute_pu_cache(self, request, queryset):
         portal_ids = list(queryset.values_list("portal_pu_id", flat=True))
+        gateway = get_portal_gateway()
         portal_pus = {
-            pu.pu_id: pu for pu in Pu.objects.using("portal").filter(pu_id__in=portal_ids)
+            pu.pu_id: PortalPURecord(
+                pu_id=pu.pu_id,
+                short_name=pu.short_name,
+                full_name=pu.full_name,
+            )
+            for pu in gateway.list_pus()
+            if pu.pu_id in portal_ids
         }
         updated = 0
         for portal_pu_id in portal_ids:

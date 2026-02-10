@@ -18,7 +18,8 @@ from apps.analysis_app.subdivision_utils import (
 )
 from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 from apps.analysis_app.utils.subdivision_norm import normalize_text
-from apps.portaldb.models import Pu, Subdivision
+from apps.analysis_app.portal_records import PortalPURecord, PortalSubdivisionRecord
+from apps.portaldb.gateway import get_portal_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,11 @@ class Command(BaseCommand):
                 CachedSubdivision.objects.all().delete()
                 CachedPU.objects.all().delete()
 
-            portal_pus = list(Pu.objects.using("portal").all())
+            gateway = get_portal_gateway()
+            portal_pus = [
+                PortalPURecord(pu_id=pu.pu_id, short_name=pu.short_name, full_name=pu.full_name)
+                for pu in gateway.list_pus()
+            ]
             cached_pus = {
                 portal_pu.pu_id: upsert_pu_cache(
                     portal_pu, rebuild_embeddings=rebuild_embeddings
@@ -61,9 +66,15 @@ class Command(BaseCommand):
                 for portal_pu in portal_pus
             }
 
-            portal_subdivisions = list(
-                Subdivision.objects.using("portal").select_related("parent_pu")
-            )
+            portal_subdivisions = [
+                PortalSubdivisionRecord(
+                    subdivision_id=s.subdivision_id,
+                    name=s.name,
+                    short_name=s.short_name,
+                    parent_pu_id=s.parent_pu_id,
+                )
+                for s in gateway.list_subdivisions()
+            ]
             for portal_subdivision in portal_subdivisions:
                 short_name = (portal_subdivision.short_name or "").strip()
                 full_name = portal_subdivision.name.strip()

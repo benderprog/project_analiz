@@ -89,3 +89,9 @@ python manage.py shell -c "from apps.portaldb.sql_registry import get_sql_regist
 
 python manage.py test
 ```
+
+
+## Gateway backend
+
+`portal.yml` supports `gateway.backend` (`orm` or `sql`) and `gateway.alias` (ORM DB alias, default `portal`).
+Set `PORTAL_GATEWAY_BACKEND=sql` to switch to SQL gateway.

@@ -3,26 +3,27 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
 from functools import lru_cache
+from uuid import UUID
 
-from django.db.models import Prefetch
 from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
-from apps.analysis_app.utils.dt_display import format_local_naive, to_local_naive
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.analysis_app.utils.offender_format import (
     normalize_name_key,
     portal_offender_fullname,
     svodka_offender_fullname,
 )
-from apps.portaldb import repository
-from apps.portaldb.models import Event, Offender
+from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
+from apps.portaldb.gateway.factory import get_portal_gateway
 
 from .offender_extractor import extract_offenders, normalize_name_part
 from .semantic import get_sentence_model
@@ -51,6 +52,12 @@ class ExtractedAttributes:
     subdivision_candidates_total: int = 0
     subdivision_candidates_after_pu_filter: int = 0
     pu_filter_fallback_used: bool = False
+
+
+@dataclass(frozen=True)
+class HydratedEvent:
+    event: EventDTO
+    offenders: list[OffenderDTO]
 
 
 def parse_docx(file_path: str) -> list[str]:
@@ -375,7 +382,7 @@ def _extract_name_parts(offender: dict) -> tuple[str, str, str]:
     return last, first, middle
 
 
-def _name_matches(candidate: dict, offender: Offender) -> bool:
+def _name_matches(candidate: dict, offender: OffenderDTO) -> bool:
     candidate_key = normalize_name_key(svodka_offender_fullname(candidate))
     portal_key = normalize_name_key(portal_offender_fullname(offender))
     if not candidate_key or not portal_key:
@@ -383,12 +390,12 @@ def _name_matches(candidate: dict, offender: Offender) -> bool:
     return candidate_key == portal_key
 
 
-def _portal_offender_payload(offender: Offender) -> dict:
+def _portal_offender_payload(offender: OffenderDTO) -> dict:
     birth_date = offender.date_of_birth
     if birth_date == DEFAULT_DOB:
         birth_date = None
     return {
-        "full_name": offender.fio_surname_first,
+        "full_name": portal_offender_fullname(offender),
         "second_name": offender.second_name,
         "first_name": offender.first_name,
         "patronymic_name": offender.patronymic_name,
@@ -397,12 +404,12 @@ def _portal_offender_payload(offender: Offender) -> dict:
     }
 
 
-def _portal_offenders(event: Event) -> list[Offender]:
-    return list(event.offenders.using("portal").all())
+def _portal_offenders(event: HydratedEvent) -> list[OffenderDTO]:
+    return list(event.offenders)
 
 
 def match_offenders(
-    extracted: list[dict], portal_offenders: list[Offender]
+    extracted: list[dict], portal_offenders: list[OffenderDTO]
 ) -> tuple[float, dict, dict]:
     counts = {
         "matched": 0,
@@ -422,7 +429,7 @@ def match_offenders(
     def offender_key_from_candidate(candidate: dict) -> str:
         return normalize_name_key(svodka_offender_fullname(candidate))
 
-    def offender_key_from_portal(offender: Offender) -> str:
+    def offender_key_from_portal(offender: OffenderDTO) -> str:
         return normalize_name_key(portal_offender_fullname(offender))
 
     candidate_records = []
@@ -562,6 +569,22 @@ def match_offenders(
     )
 
 
+
+
+def _hydrate_events_with_offenders(events: list[EventDTO]) -> list[HydratedEvent]:
+    if not events:
+        return []
+
+    gateway = get_portal_gateway()
+    event_ids = [e.event_id for e in events]
+
+    offenders = gateway.get_offenders_by_event_ids(event_ids)
+    by_event: dict[UUID, list[OffenderDTO]] = defaultdict(list)
+    for off in offenders:
+        by_event[off.event_id].append(off)
+
+    return [HydratedEvent(event=e, offenders=by_event.get(e.event_id, [])) for e in events]
+
 def _looks_like_regex(pattern: str) -> bool:
     return any(char in pattern for char in ".^$*+?{}[]\\|()")
 
@@ -601,18 +624,24 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 
 def _select_event_by_subdivision_time(
     subdivision_id: str, target_dt: datetime
-) -> tuple[Event | None, int | None]:
+) -> tuple[HydratedEvent | None, int | None]:
     target_local = to_local_naive(target_dt)
     if target_local is None:
         return None, None
     date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    candidates = list(
-        Event.objects.using("portal").filter(
-            find_subdivision_unit_id=subdivision_id,
-            date_detection__range=(date_from, date_to),
+    gateway = get_portal_gateway()
+    events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, MATCH_STAGE_SUBDIVISION_LIMIT)
+    candidates = [
+        EventDTO(
+            event_id=e.event_id,
+            date_detection=e.date_detection,
+            subdivision_id=e.subdivision_id,
+            event_type=e.event_type,
+            article_of_law=e.article_of_law,
         )
-    )
+        for e in events
+    ]
     if not candidates:
         return None, None
     closest = min(
@@ -627,25 +656,32 @@ def _select_event_by_subdivision_time(
     )
     if delta_minutes > MATCH_TIME_DELTA_MINUTES:
         return None, None
-    return repository.get_event_with_offenders(closest.event_id), delta_minutes
-
-
-def _prefetch_portal_events(queryset):
-    return queryset.prefetch_related(
-        Prefetch("offenders", queryset=Offender.objects.using("portal"))
-    )
+    hydrated = _hydrate_events_with_offenders([closest])
+    return (hydrated[0] if hydrated else None), delta_minutes
 
 
 def _build_subdivision_offender_candidates(
     subdivision_id: str, extracted_offenders: list[dict], target_dt: datetime | None
 ) -> list[dict]:
-    candidates = list(
-        _prefetch_portal_events(
-            Event.objects.using("portal")
-            .filter(find_subdivision_unit_id=subdivision_id)
-            .order_by("-date_detection")[:MATCH_STAGE_SUBDIVISION_LIMIT]
-        )
+    gateway = get_portal_gateway()
+    anchor_dt = target_dt or timezone.now()
+    events = gateway.search_events_by_time(
+        anchor_dt - timedelta(days=36500),
+        anchor_dt + timedelta(days=36500),
+        MATCH_STAGE_SUBDIVISION_LIMIT,
     )
+    candidates = [
+        EventDTO(
+            event_id=e.event_id,
+            date_detection=e.date_detection,
+            subdivision_id=e.subdivision_id,
+            event_type=e.event_type,
+            article_of_law=e.article_of_law,
+        )
+        for e in events
+        if str(e.subdivision_id) == str(subdivision_id)
+    ]
+    candidates = _hydrate_events_with_offenders(candidates)
     if not candidates or not extracted_offenders:
         return []
     scored_candidates = []
@@ -657,7 +693,7 @@ def _build_subdivision_offender_candidates(
         delta_minutes = None
         if target_dt:
             target_local = to_local_naive(target_dt)
-            event_local = to_local_naive(event.date_detection)
+            event_local = to_local_naive(event.event.date_detection)
             if target_local and event_local:
                 delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
         scored_candidates.append(
@@ -674,13 +710,19 @@ def _build_time_offender_candidates(
         return []
     date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    candidates = list(
-        _prefetch_portal_events(
-            Event.objects.using("portal")
-            .filter(date_detection__range=(date_from, date_to))
-            .order_by("-date_detection")[:MATCH_STAGE_TIME_LIMIT]
+    gateway = get_portal_gateway()
+    events = gateway.search_events_by_time(date_from, date_to, MATCH_STAGE_TIME_LIMIT)
+    candidates = [
+        EventDTO(
+            event_id=e.event_id,
+            date_detection=e.date_detection,
+            subdivision_id=e.subdivision_id,
+            event_type=e.event_type,
+            article_of_law=e.article_of_law,
         )
-    )
+        for e in events
+    ]
+    candidates = _hydrate_events_with_offenders(candidates)
     if not candidates or not extracted_offenders:
         return []
     scored_candidates = []
@@ -689,7 +731,7 @@ def _build_time_offender_candidates(
         overlap = counts["matched"]
         if overlap < 1:
             continue
-        event_local = to_local_naive(event.date_detection)
+        event_local = to_local_naive(event.event.date_detection)
         if not event_local:
             continue
         delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
@@ -707,12 +749,18 @@ def _build_subdivision_time_candidates(
         return []
     date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    candidates = list(
-        Event.objects.using("portal").filter(
-            find_subdivision_unit_id=subdivision_id,
-            date_detection__range=(date_from, date_to),
+    gateway = get_portal_gateway()
+    events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, MATCH_STAGE_SUBDIVISION_LIMIT)
+    candidates = [
+        EventDTO(
+            event_id=e.event_id,
+            date_detection=e.date_detection,
+            subdivision_id=e.subdivision_id,
+            event_type=e.event_type,
+            article_of_law=e.article_of_law,
         )
-    )
+        for e in events
+    ]
     scored_candidates = []
     for event in candidates:
         event_local = to_local_naive(event.date_detection)
@@ -807,7 +855,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         best_event = best_candidate["event"]
         best_delta = best_candidate.get("delta_minutes")
         if match_method == "subdivision+time":
-            best_event = repository.get_event_with_offenders(best_event.event_id)
+            hydrated = _hydrate_events_with_offenders([best_event])
+            best_event = hydrated[0] if hydrated else None
 
     top_overlap_c = max((item["overlap"] for item in candidates_c), default=0)
     top_overlap_b = max((item["overlap"] for item in candidates_b), default=0)
@@ -875,6 +924,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "debug": debug_meta,
         }
 
+    portal_subdivision_name = None
+    if subdivision_candidate:
+        portal_subdivision_name = subdivision_candidate.get("candidate_name")
+    if not portal_subdivision_name:
+        portal_subdivision_name = attributes.subdivision_name
+
     portal_offenders = _portal_offenders(best_event)
     offenders_score, offenders_counts, offender_matches = match_offenders(
         attributes.offenders, portal_offenders
@@ -885,8 +940,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         and offenders_counts.get("missing_in_portal", 0) == 0
         and offenders_counts.get("missing_in_svodka", 0) == 0
     )
-    type_ok = predicted_type and predicted_type == best_event.event_type
-    article_ok = predicted_article and predicted_article == best_event.article_of_law
+    type_ok = predicted_type and predicted_type == best_event.event.event_type
+    article_ok = predicted_article and predicted_article == best_event.event.article_of_law
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -906,24 +961,24 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     if not best_flags.get("type_match"):
         diffs["event_type"] = {
             "expected": best_flags.get("predicted_type"),
-            "actual": best_event.event_type,
+            "actual": best_event.event.event_type,
         }
     if not best_flags.get("article_match"):
         diffs["article_of_law"] = {
             "expected": best_flags.get("predicted_article"),
-            "actual": best_event.article_of_law,
+            "actual": best_event.event.article_of_law,
         }
     if not best_flags.get("subdivision_ok"):
         diffs["subdivision"] = {
             "expected": attributes.subdivision_name,
-            "actual": best_event.find_subdivision_unit.name,
+            "actual": portal_subdivision_name,
         }
     if not best_flags.get("offenders_ok"):
         diffs["offenders"] = {
             "expected": [offender_to_json(offender) for offender in attributes.offenders],
             "actual": [
                 {
-                    "full_name": offender.fio_surname_first,
+                    "full_name": portal_offender_fullname(offender),
                     "birth_year": offender.date_of_birth.year,
                     "birth_date": date_to_str(offender.date_of_birth),
                 }
@@ -943,10 +998,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
 
     return {
         "matched": True,
-        "matched_event_id": str(best_event.event_id),
+        "matched_event_id": str(best_event.event.event_id),
         "score_percent": round(offenders_score * 100, 2),
-        "extracted_timestamp_display": format_local_naive(attributes.date_time),
-        "portal_timestamp_display": format_local_naive(best_event.date_detection),
+        "extracted_timestamp_display": format_dt_dmy_hm(attributes.date_time),
+        "portal_timestamp_display": format_dt_dmy_hm(best_event.event.date_detection),
         "time_delta_minutes": best_delta,
         "offenders_score_percent": best_flags.get("offenders_score", 0),
         "offenders_counts": best_flags.get("offenders_counts")
@@ -973,13 +1028,11 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_unit_type_conflict": unit_type_conflict,
         "extracted_subdivision_name": attributes.subdivision_name,
         "portal": {
-            "timestamp": format_local_naive(best_event.date_detection),
-            "subdivision_name": best_event.find_subdivision_unit.name
-            if best_event.find_subdivision_unit
-            else None,
+            "timestamp": format_dt_dmy_hm(best_event.event.date_detection),
+            "subdivision_name": portal_subdivision_name,
             "offenders": portal_offenders_payload,
-            "event_type": best_event.event_type,
-            "article_of_law": best_event.article_of_law,
+            "event_type": best_event.event.event_type,
+            "article_of_law": best_event.event.article_of_law,
         },
         "predicted": {
             "event_type": best_flags.get("predicted_type"),

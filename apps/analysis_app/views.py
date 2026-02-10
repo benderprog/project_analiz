@@ -18,7 +18,7 @@ from apps.analysis_app.subdivision_matcher import (
     SUBDIVISION_GREEN_THRESHOLD,
     SUBDIVISION_YELLOW_THRESHOLD,
 )
-from apps.analysis_app.utils.dt_display import format_local_naive
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_naive
 from apps.analysis_app.utils.json_safe import offender_to_json
 from apps.analysis_app.utils.offender_format import offender_display
 
@@ -253,8 +253,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     portal_dt = parse_datetime(portal.get("timestamp") or "")
     extracted_timestamp_display = match_result.get(
         "extracted_timestamp_display"
-    ) or format_local_naive(extracted_dt)
-    portal_timestamp_display = match_result.get("portal_timestamp_display") or format_local_naive(
+    ) or format_dt_dmy_hm(extracted_dt)
+    portal_timestamp_display = match_result.get("portal_timestamp_display") or format_dt_dmy_hm(
         portal_dt
     )
 
