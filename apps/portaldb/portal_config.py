@@ -62,7 +62,10 @@ def expand_env_vars(obj):
 def get_active_profile(cfg):
     profile_name = os.getenv("PORTAL_PROFILE")
     if not profile_name:
-        raise ValueError("PORTAL_PROFILE is not set.")
+        active_profile = cfg.get("active_profile", "dev")
+        profile_name = str(expand_env_vars(active_profile)).strip()
+    if not profile_name:
+        profile_name = "dev"
     profiles = cfg.get("profiles")
     if not isinstance(profiles, dict):
         raise ValueError("Portal config must define a 'profiles' mapping.")
