@@ -1,17 +1,33 @@
 # Portal YAML configuration
 
+## Рекомендуемое расположение YAML в dev
+
+В репозитории храните рабочий dev-файл в:
+
+```
+configs/portal.yml
+```
+
+Пример структуры лежит в:
+
+```
+configs/portal.example.yml
+```
+
+Если `PORTAL_CONFIG_PATH` не задан, приложение сначала ищет `configs/portal.yml`, затем `configs/portal.example.yml` (с предупреждением).
+
 ## Где хранить YAML для закрытого контура
 
-Разместите файл YAML в каталоге, доступном в закрытом контуре, например:
+В закрытом контуре храните конфиг вне репозитория, например:
 
 ```
-/etc/portal/portal.yml
+/etc/project_analiz/portal.yml
 ```
 
-Укажите путь через переменную окружения:
+И задавайте путь переменной окружения:
 
 ```
-export PORTAL_CONFIG_PATH=/etc/portal/portal.yml
+export PORTAL_CONFIG_PATH=/etc/project_analiz/portal.yml
 ```
 
 ## Минимальная структура YAML
@@ -26,11 +42,28 @@ profiles:
       password: ${PORTAL_DB_PASSWORD}
       host: ${PORTAL_DB_HOST}
       port: ${PORTAL_DB_PORT}
-    sql_registry:
-      base_dir: /opt/portal/sql
+    sql:
+      base_dir: configs/portal/sql
       queries:
-        portal_events: queries/portal_events.sql
+        list_pus: pu/list_pus.sql
+        list_subdivisions: subdivision/list_subdivisions.sql
+        search_by_subdivision_time: event/search_by_subdivision_time.sql
+        search_by_time: event/search_by_time.sql
+        event_offenders: event/event_offenders.sql
+        event_snapshot: event/event_snapshot.sql
 ```
+
+## SQL assets
+
+Базовое расположение SQL-ассетов:
+
+```
+configs/portal/sql/
+```
+
+`sql.base_dir` может быть абсолютным или относительным. Для относительного пути используется корень проекта.
+
+Для обратной совместимости поддерживается и старое расположение `apps/portaldb/sql` как fallback при поиске SQL-файлов.
 
 ## Обязательные переменные окружения
 
@@ -41,33 +74,18 @@ profiles:
 - `PORTAL_DB_USER`
 - `PORTAL_DB_PASSWORD`
 
-## Как переключать dev/prod
-
-Укажите имя профиля в `PORTAL_PROFILE`, например:
-
-```
-export PORTAL_PROFILE=dev
-```
-
-или:
-
-```
-export PORTAL_PROFILE=prod
-```
-
 ## Проверка конфигурации
 
 ```
-export PORTAL_CONFIG_PATH=./config/portal.example.yml
-export PORTAL_PROFILE=dev
-export PORTAL_DB_HOST=...
-export PORTAL_DB_PORT=...
-export PORTAL_DB_NAME=...
-export PORTAL_DB_USER=...
-export PORTAL_DB_PASSWORD=...
-
+# без PORTAL_CONFIG_PATH будет выбран configs/portal.yml (если есть)
 python manage.py portal_config_info
-python manage.py check
-python manage.py shell -c "from django.db import connections; print(connections['portal'].settings_dict['HOST'])"
+
+# явный путь
+export PORTAL_CONFIG_PATH=./configs/portal.example.yml
+python manage.py portal_config_info
+
+# проверка SQL lookup
+python manage.py shell -c "from apps.portaldb.sql_registry import get_sql_registry; r = get_sql_registry(); print(r.get_sql('list_pus')[:80])"
+
 python manage.py test
 ```

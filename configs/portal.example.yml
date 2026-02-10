@@ -11,3 +11,8 @@ profiles:
       base_dir: configs/portal/sql
       queries:
         list_pus: pu/list_pus.sql
+        list_subdivisions: subdivision/list_subdivisions.sql
+        search_by_subdivision_time: event/search_by_subdivision_time.sql
+        search_by_time: event/search_by_time.sql
+        event_offenders: event/event_offenders.sql
+        event_snapshot: event/event_snapshot.sql

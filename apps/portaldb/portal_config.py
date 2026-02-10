@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 ENV_VAR_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_yaml(path):
@@ -13,6 +14,39 @@ def load_yaml(path):
     if not isinstance(data, dict):
         raise ValueError("Portal config must be a YAML mapping at the root level.")
     return data
+
+
+def resolve_portal_config_path(project_root=None):
+    root = Path(project_root) if project_root else PROJECT_ROOT
+    env_path = os.getenv("PORTAL_CONFIG_PATH")
+    if env_path:
+        path = Path(env_path).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        if not path.exists():
+            raise FileNotFoundError(f"Portal config not found at {path.resolve()}.")
+        return path.resolve(), None
+
+    preferred = root / "configs" / "portal.yml"
+    example = root / "configs" / "portal.example.yml"
+    if preferred.exists():
+        return preferred.resolve(), None
+    if example.exists():
+        warning = (
+            "PORTAL_CONFIG_PATH is not set. Falling back to configs/portal.example.yml; "
+            "create configs/portal.yml for local development."
+        )
+        return example.resolve(), warning
+
+    raise FileNotFoundError(
+        "Portal config not found. Tried: "
+        f"{preferred.resolve()} and {example.resolve()}."
+    )
+
+
+def load_portal_config(project_root=None):
+    config_path, warning = resolve_portal_config_path(project_root=project_root)
+    return load_yaml(config_path), config_path, warning
 
 
 def expand_env_vars(obj):
