@@ -43,8 +43,18 @@ while [[ $# -gt 0 ]]; do
   esac
  done
 
+if [[ ! -f "compose/.env.docker" ]]; then
+  echo "Missing compose/.env.docker. Rebuild the release bundle with scripts/make_release_bundle.sh so compose/.env.docker is generated automatically." >&2
+  exit 1
+fi
+
+if [[ ! -f "compose/portal.yml" ]]; then
+  echo "Missing compose/portal.yml. Rebuild the release bundle with scripts/make_release_bundle.sh so portal config is bundled." >&2
+  exit 1
+fi
+
 log "Starting docker compose stack"
-docker compose -f compose/docker-compose.yml -f compose/docker-compose.offline.yml up -d
+docker compose --env-file compose/.env.docker -f compose/docker-compose.yml -f compose/docker-compose.offline.yml up -d
 
 wait_for_db() {
   local service="$1"

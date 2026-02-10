@@ -5,7 +5,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: ./scripts/make_release_bundle.sh --version 1.1 [--with-model] [--with-seed] [--archive] [--include-env]
+Usage: ./scripts/make_release_bundle.sh --version 1.1 [--with-model] [--with-seed] [--seed-xlsx /abs/file.xlsx] [--seed-docx /abs/file.docx] [--archive] [--include-env] [--skip-image-export]
 USAGE
 }
 
@@ -18,6 +18,9 @@ with_model="false"
 with_seed="false"
 archive="false"
 include_env="false"
+skip_image_export="false"
+seed_xlsx_path="${FIXTURE_XLSX:-}"
+seed_docx_path="${FIXTURE_DOCX:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,8 +40,20 @@ while [[ $# -gt 0 ]]; do
       archive="true"
       shift
       ;;
+    --seed-xlsx)
+      seed_xlsx_path="$2"
+      shift 2
+      ;;
+    --seed-docx)
+      seed_docx_path="$2"
+      shift 2
+      ;;
     --include-env)
       include_env="true"
+      shift
+      ;;
+    --skip-image-export)
+      skip_image_export="true"
       shift
       ;;
     -h|--help)
@@ -71,11 +86,18 @@ model_name="${model_name:-paraphrase-multilingual-MiniLM-L12-v2}"
 log "Preparing release bundle at ${base_dir}"
 mkdir -p "${base_dir}/artifacts" "${base_dir}/compose" "${base_dir}/docker" "${base_dir}/scripts" "${base_dir}/doc"
 
-log "Exporting docker images"
-./scripts/export_images.sh --version "$version" --output "${base_dir}/artifacts"
+if [[ "$skip_image_export" == "true" ]]; then
+  log "Skipping docker image export (--skip-image-export)"
+else
+  log "Exporting docker images"
+  ./scripts/export_images.sh --version "$version" --output "${base_dir}/artifacts"
+fi
 
 log "Copying compose files"
 cp docker-compose.yml docker-compose.offline.yml docker-compose.with-model.yml "${base_dir}/compose/"
+
+log "Copying portal offline config"
+cp configs/portal.offline.yml "${base_dir}/compose/portal.yml"
 
 log "Copying docker init SQL"
 if [[ -d docker/postgres/init ]]; then
@@ -97,6 +119,43 @@ if [[ "$include_env" == "true" ]]; then
   cp .env.docker "${base_dir}/.env.docker"
 fi
 
+log "Generating compose/.env.docker"
+if [[ -f "${base_dir}/.env.docker.example" ]]; then
+  cp "${base_dir}/.env.docker.example" "${base_dir}/compose/.env.docker"
+else
+  cp .env.docker.example "${base_dir}/compose/.env.docker"
+fi
+
+python - <<PY
+from pathlib import Path
+
+env_path = Path("${base_dir}/compose/.env.docker")
+pairs = {}
+for line in env_path.read_text(encoding="utf-8").splitlines():
+    if not line or line.lstrip().startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    pairs[key.strip()] = value.strip()
+
+required = {
+    "APP_DB_HOST": "db",
+    "PORTAL_DB_HOST": "portal_db",
+    "PORTAL_CONFIG_PATH": "/app/configs/portal.yml",
+    "PORTAL_PROFILE": "dev",
+    "PORTAL_GATEWAY_BACKEND": "orm",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "SENTENCE_TRANSFORMERS_HOME": "/opt/models",
+    "HF_HOME": "/opt/models/hf_home",
+    "SEMANTIC_MODEL_PATH": "/opt/models/${model_name}",
+}
+pairs.update(required)
+
+lines = [f"{k}={v}" for k, v in pairs.items()]
+env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(f"Wrote {env_path}")
+PY
+
 if [[ "$with_model" == "true" ]]; then
   if [[ ! -d "models/${model_name}" ]]; then
     echo "Model directory models/${model_name} not found. Run scripts/prefetch_model.sh first." >&2
@@ -108,15 +167,31 @@ if [[ "$with_model" == "true" ]]; then
 fi
 
 if [[ "$with_seed" == "true" ]]; then
-  seed_xlsx="subdivision_primer.xlsx"
-  seed_docx="test_svodka_semantic.docx"
-  if [[ ! -f "$seed_xlsx" || ! -f "$seed_docx" ]]; then
-    echo "Seed inputs not found at repository root." >&2
+  if [[ -z "$seed_xlsx_path" ]]; then
+    for legacy_xlsx in subdivision_primer.xlsx subdivizion_primer.xlsx; do
+      if [[ -f "$legacy_xlsx" ]]; then
+        seed_xlsx_path="$legacy_xlsx"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$seed_docx_path" && -f "test_svodka_semantic.docx" ]]; then
+    seed_docx_path="test_svodka_semantic.docx"
+  fi
+
+  if [[ -z "$seed_xlsx_path" || ! -f "$seed_xlsx_path" ]]; then
+    echo "Missing seed XLSX. Provide --seed-xlsx /abs/path.xlsx or set FIXTURE_XLSX." >&2
     exit 1
   fi
+  if [[ -z "$seed_docx_path" || ! -f "$seed_docx_path" ]]; then
+    echo "Missing seed DOCX. Provide --seed-docx /abs/path.docx or set FIXTURE_DOCX." >&2
+    exit 1
+  fi
+
   log "Copying seed inputs"
   mkdir -p "${base_dir}/seed"
-  cp "$seed_xlsx" "$seed_docx" "${base_dir}/seed/"
+  cp "$seed_xlsx_path" "${base_dir}/seed/subdivision_primer.xlsx"
+  cp "$seed_docx_path" "${base_dir}/seed/test_svodka_semantic.docx"
 fi
 
 log "Generating manifest.json"
