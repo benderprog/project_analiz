@@ -1,3 +1,4 @@
+from datetime import date
 import uuid
 
 from django.db import models
@@ -20,6 +21,7 @@ class Pu(models.Model):
 class Subdivision(models.Model):
     subdivision_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
+    short_name = models.CharField(max_length=255, db_index=True, blank=True, default="")
     parent_pu = models.ForeignKey(Pu, on_delete=models.CASCADE)
 
     class Meta:
@@ -27,8 +29,15 @@ class Subdivision(models.Model):
         verbose_name = "Subdivision"
         verbose_name_plural = "Subdivisions"
 
+    def display_label(self) -> str:
+        parent_pu = getattr(self, "parent_pu", None)
+        pu_label = ""
+        if parent_pu:
+            pu_label = parent_pu.short_name or parent_pu.full_name
+        return f"{self.name} {pu_label}".strip()
+
     def __str__(self) -> str:
-        return self.name
+        return self.display_label()
 
 
 class Event(models.Model):
@@ -60,5 +69,18 @@ class Offender(models.Model):
         verbose_name = "Offender"
         verbose_name_plural = "Offenders"
 
+    @property
+    def fio_surname_first(self) -> str:
+        parts = [self.second_name, self.first_name, self.patronymic_name]
+        return " ".join(part for part in parts if part).strip()
+
+    @property
+    def fio_surname_first_with_dob(self) -> str:
+        fio = self.fio_surname_first or "—"
+        birth_date = self.date_of_birth
+        if birth_date and birth_date != date(1900, 1, 1):
+            return f"{fio} ({birth_date.strftime('%d.%m.%Y')})"
+        return fio
+
     def __str__(self) -> str:
-        return f"{self.second_name} {self.first_name}"
+        return self.fio_surname_first

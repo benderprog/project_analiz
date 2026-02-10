@@ -5,11 +5,8 @@ from django.db import models
 from django.utils import timezone
 
 from apps.analysis_app.semantic import get_sentence_model
-from apps.analysis_app.subdivision_utils import (
-    build_embedding_source_hash,
-    normalize_subdivision_name,
-    to_py_floats,
-)
+from apps.analysis_app.subdivision_utils import build_embedding_source_hash, to_py_floats
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 
 
 class AnalysisRun(models.Model):
@@ -23,6 +20,7 @@ class AnalysisRun(models.Model):
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
     )
     file = models.FileField(upload_to="uploads/")
+    selected_pu_id = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
@@ -52,9 +50,13 @@ class AnalysisResult(models.Model):
 
 class CachedPU(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    portal_pu_id = models.UUIDField(unique=True)
+    portal_pu_id = models.UUIDField(unique=True, db_index=True)
     short_name = models.CharField(max_length=255)
     full_name = models.CharField(max_length=255)
+    normalized_short_name = models.TextField(blank=True, default="")
+    normalized_full_name = models.TextField(blank=True, default="")
+    embedding_short = models.JSONField(blank=True, null=True)
+    embedding_full = models.JSONField(blank=True, null=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -70,6 +72,8 @@ class CachedSubdivision(models.Model):
     portal_subdivision_id = models.UUIDField(unique=True)
     name = models.CharField(max_length=255)
     pu = models.ForeignKey(CachedPU, null=True, blank=True, on_delete=models.SET_NULL)
+    parent_pu_id = models.UUIDField(null=True, blank=True)
+    normalized_short_name = models.TextField(blank=True, default="")
     normalized_name = models.TextField()
     legacy_aliases = models.JSONField(blank=True, null=True)
     embedding = models.JSONField(blank=True, null=True)
@@ -86,9 +90,19 @@ class CachedSubdivision(models.Model):
 
     def save(self, *args, **kwargs) -> None:
         update_fields = kwargs.get("update_fields")
-        if self.name:
-            self.normalized_name = normalize_subdivision_name(self.name)
-        new_hash = build_embedding_source_hash(self.normalized_name, self.legacy_aliases)
+        embedding_text = getattr(self, "embedding_source_text", None)
+        normalized_source = None
+        if embedding_text is not None:
+            embedding_text = (embedding_text or "").strip()
+            normalized_source = normalize_subdivision_text(embedding_text)
+        if not self.normalized_name and self.name:
+            self.normalized_name = normalize_subdivision_text(self.name)
+        if normalized_source is None:
+            normalized_source = (
+                self.normalized_short_name or self.normalized_name or ""
+            )
+
+        new_hash = build_embedding_source_hash(normalized_source, self.legacy_aliases)
         existing_hash = None
         if self.pk:
             existing_hash = (
@@ -104,22 +118,26 @@ class CachedSubdivision(models.Model):
         )
         self.embedding_source_hash = new_hash
 
+        skip_rebuild = getattr(self, "_skip_embedding_rebuild", False)
+
         if should_rebuild and settings.SKIP_SEMANTIC_MODEL:
             self.embedding = None
             self.embedding_updated_at = None
-        elif should_rebuild:
+        elif should_rebuild and not skip_rebuild:
             try:
                 model = get_sentence_model()
             except RuntimeError:
                 model = None
             if model:
-                embedding = model.encode([self.normalized_name])[0]
+                embedding = model.encode([normalized_source])[0]
                 self.embedding = to_py_floats(embedding)
                 self.embedding_updated_at = timezone.now()
 
         if update_fields is not None:
             update_fields = set(update_fields)
-            update_fields.update({"normalized_name", "embedding_source_hash", "updated_at"})
+            update_fields.update(
+                {"normalized_name", "normalized_short_name", "embedding_source_hash", "updated_at"}
+            )
             if should_rebuild:
                 update_fields.update({"embedding", "embedding_updated_at"})
             kwargs["update_fields"] = update_fields

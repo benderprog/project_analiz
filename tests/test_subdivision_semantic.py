@@ -1,11 +1,12 @@
 import json
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from apps.analysis_app.models import CachedSubdivision
 from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache, match_subdivision
 from apps.analysis_app.subdivision_utils import to_py_float, to_py_floats
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 
 
 class DummyFloat:
@@ -43,19 +44,19 @@ class SubdivisionSemanticTests(TestCase):
         self.assertEqual(result, [0.1, 0.2])
         self.assertTrue(all(isinstance(item, float) for item in result))
 
+    @override_settings(SKIP_SEMANTIC_MODEL=False, SUBDIVISION_SEMANTIC_THRESHOLD=0.1)
     def test_match_subdivision_returns_json_safe_scores(self):
         CachedSubdivision.objects.create(
             portal_subdivision_id="00000000-0000-0000-0000-000000000001",
             name="Test Subdivision",
-            normalized_name="test subdivision",
-            aliases=[],
+            normalized_name=normalize_subdivision_text("Test Subdivision"),
             embedding=[0.0, 1.0],
         )
         invalidate_subdivision_cache()
 
         class StubModel:
             def encode(self, texts):
-                return [[0.0, 1.0]]
+                return [[0.0, 1.0] for _ in texts]
 
         float_value = DummyFloat(0.9)
         try:
@@ -70,7 +71,7 @@ class SubdivisionSemanticTests(TestCase):
         ), mock.patch(
             "apps.analysis_app.subdivision_matcher._cosine_similarity", return_value=float_value
         ):
-            candidates = match_subdivision("Test Subdivision", top_k=1)
+            candidates, _ = match_subdivision("Unknown subdivision here", top_k=1)
 
         self.assertEqual(len(candidates), 1)
         self.assertIsInstance(candidates[0]["score"], float)

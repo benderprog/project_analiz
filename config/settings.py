@@ -74,6 +74,22 @@ DATABASES = {
     },
 }
 
+from apps.portaldb.portal_config import (
+    apply_portal_database_settings,
+    load_portal_config,
+)
+
+try:
+    portal_cfg, _, _ = load_portal_config(project_root=BASE_DIR)
+except FileNotFoundError:
+    portal_cfg = None
+
+if portal_cfg and os.getenv("PORTAL_PROFILE"):
+    try:
+        DATABASES["portal"] = apply_portal_database_settings(globals(), portal_cfg)
+    except ValueError as exc:
+        raise RuntimeError(f"Portal config error: {exc}") from exc
+
 DATABASE_ROUTERS = ["config.db_router.PortalDBRouter"]
 
 AUTH_PASSWORD_VALIDATORS = []
@@ -101,3 +117,7 @@ SKIP_SEMANTIC_MODEL = os.getenv("SKIP_SEMANTIC_MODEL", "false").lower() in (
     "true",
     "yes",
 )
+SUBDIVISION_SEMANTIC_THRESHOLD = float(
+    os.getenv("SUBDIVISION_SEMANTIC_THRESHOLD", "0.6")
+)
+PU_SEMANTIC_THRESHOLD = float(os.getenv("PU_SEMANTIC_THRESHOLD", "0.6"))

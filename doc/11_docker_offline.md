@@ -2,28 +2,52 @@
 
 ## Overview
 
-The Docker image now prefetches and warms the sentence-transformers model during
-the build stage, so runtime can stay fully offline and the first request does not
-incur model download latency.
+There are two supported approaches:
 
-## Build (online) with warmup
+1) **Lightweight image + mounted model directory (recommended)**
+2) **Heavier image with model baked in (optional)**
+
+The recommended path keeps the Docker image small by mounting the model at
+runtime. The optional profile bakes the model into the image during build, which
+increases image size and build time.
+
+By default, the Docker images are CPU-only and do not include CUDA/NVIDIA
+libraries. A GPU-enabled build would require a separate, explicit profile and
+would significantly increase image size.
+
+If a build fails with timeouts to `download.pytorch.org`, rerun the build or
+ensure network access; pip now uses a 120s timeout to improve resilience.
+
+## Option 1: lightweight image + mounted model directory (recommended)
+
+Prepare the model directory on the host and run with the offline override:
 
 ```bash
-docker compose build --no-cache web
+docker compose -f docker-compose.yml -f docker-compose.offline.yml up --build
 ```
 
-The build runs `python manage.py warmup_models`, which:
+This configuration:
+
+- Mounts `./models` into the container at `/opt/models`.
+- Sets `WARMUP_ON_START=1` so the container warms the model once at startup.
+- Forces offline behavior (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`).
+- Keeps the image small (model is not baked in).
+
+## Option 2: heavy image with model baked in (optional)
+
+Build and run with the baked-in model profile:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.with-model.yml build --no-cache web
+docker compose -f docker-compose.yml -f docker-compose.with-model.yml up
+```
+
+This build runs `python manage.py warmup_models`, which:
 
 - Loads the model from `SEMANTIC_MODEL_PATH` if it exists.
 - Falls back to `SEMANTIC_MODEL_NAME` if the path is missing.
 - Encodes a few short strings to materialize weights and cache.
 - Prints `OK` on success.
-
-## Verify warmed model in a running container
-
-```bash
-docker compose exec web python manage.py warmup_models
-```
 
 The image already contains the model at:
 
@@ -47,11 +71,3 @@ to hit the network.
 - `collectstatic` runs in the image build and at container startup.
 - `.env.docker` sets `DJANGO_DEBUG=true` so rendering matches local runserver.
 - The app keeps the existing `TIME_ZONE=Europe/Moscow` setting for consistency.
-
-If you want to override the baked-in model without rebuilding, uncomment the bind
-mount in `docker-compose.yml`:
-
-```yaml
-    # volumes:
-    #   - ./models:/opt/models
-```

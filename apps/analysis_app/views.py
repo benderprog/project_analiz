@@ -3,8 +3,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_datetime
 from django.views import View
 
-from apps.analysis_app.forms import UploadDocxForm
-from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun
+from apps.analysis_app.forms import PuSelectionForm, UploadDocxForm
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
+from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
     _find_case_insensitive_span,
     _find_datetime_span,
@@ -19,18 +20,22 @@ from apps.analysis_app.subdivision_matcher import (
 )
 from apps.analysis_app.utils.dt_display import format_local_naive
 from apps.analysis_app.utils.json_safe import offender_to_json
+from apps.analysis_app.utils.offender_format import offender_display
 
 
-def _format_offenders(offenders: list[dict]) -> list[str]:
-    formatted = []
-    for offender in offenders or []:
-        name = offender.get("full_name") or "—"
-        birth_year = offender.get("birth_year")
-        if birth_year:
-            formatted.append(f"{name} ({birth_year})")
-        else:
-            formatted.append(name)
-    return formatted
+def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
+    return [offender_display(offender, source=source) for offender in offenders or []]
+
+
+def _dedupe_items(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
 
 
 def _status_for_timestamp(match_result: dict) -> str:
@@ -60,11 +65,62 @@ def _status_for_subdivision(match_result: dict) -> str:
 def _status_for_offenders(match_result: dict) -> str:
     if not match_result.get("matched"):
         return "red"
-    offenders_score = match_result.get("offenders_score_percent") or 0
-    diffs = match_result.get("diffs", {})
-    if "offenders" not in diffs:
+    counts = match_result.get("offenders_counts") or {}
+    matched = counts.get("matched", 0)
+    portal_total = counts.get("portal_total", 0)
+    has_issues = any(
+        (
+            counts.get("dob_mismatch", 0),
+            counts.get("missing_in_portal", 0),
+            counts.get("missing_in_svodka", 0),
+        )
+    )
+    if matched == portal_total and not has_issues:
         return "green"
-    return "yellow" if offenders_score > 0 else "red"
+    if matched == 0 and (portal_total > 0 or has_issues):
+        return "red"
+    return "yellow"
+
+
+def _build_offender_report(match_result: dict) -> dict:
+    counts = match_result.get("offenders_counts") or {}
+    summary = None
+    if counts:
+        summary = (
+            "Совпало нарушителей: "
+            f"{counts.get('matched', 0)} из {counts.get('portal_total', 0)}"
+        )
+
+    details = []
+    matches = match_result.get("offender_matches") or {}
+
+    dob_mismatch_pairs = matches.get("dob_mismatch_pairs") or []
+    for pair in dob_mismatch_pairs:
+        svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
+        portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
+        details.append(
+            f"ФИО совпало, но ДР отличается: {svodka_display} / {portal_display}"
+        )
+
+    missing_in_portal = _format_offenders(
+        matches.get("missing_in_portal") or [], source="svodka"
+    )
+    missing_in_portal = _dedupe_items(missing_in_portal)
+    if missing_in_portal:
+        details.append(
+            "В сводке есть, в БД нет: " + ", ".join(missing_in_portal)
+        )
+
+    missing_in_svodka = _format_offenders(
+        matches.get("missing_in_svodka") or [], source="portal"
+    )
+    missing_in_svodka = _dedupe_items(missing_in_svodka)
+    if missing_in_svodka:
+        details.append(
+            "В БД есть, в сводке нет: " + ", ".join(missing_in_svodka)
+        )
+
+    return {"summary": summary, "details": details}
 
 
 def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> str:
@@ -133,20 +189,42 @@ def _locality_mismatch_comment(match_result: dict) -> str:
 
 def _build_comments(match_result: dict) -> list[str]:
     comments = []
+    extracted_subdivision_name = match_result.get("extracted_subdivision_name")
     if not match_result.get("matched"):
         message = match_result.get("diffs", {}).get("message") or "Событие не найдено."
         comments.append(message)
         if match_result.get("date_time_present") and not match_result.get("time_found"):
             comments.append("Не определилось время (использована только дата).")
+        if extracted_subdivision_name is None:
+            comments.append("Подразделение не определено в сводке.")
         if match_result.get("subdivision_locality_mismatch"):
             comments.append(_locality_mismatch_comment(match_result))
+        debug_meta = match_result.get("debug") or {}
+        if debug_meta:
+            top_overlaps = debug_meta.get("top_overlaps") or {}
+            comments.append(
+                "Отладка подбора: "
+                f"A={debug_meta.get('candidates_A', 0)}, "
+                f"C={debug_meta.get('candidates_C', 0)}, "
+                f"B={debug_meta.get('candidates_B', 0)}; "
+                "subdivision candidates "
+                f"total={debug_meta.get('subdivision_candidates_total', 0)}, "
+                f"after PU={debug_meta.get('subdivision_candidates_after_pu_filter', 0)}, "
+                f"fallback={debug_meta.get('pu_filter_fallback_used', False)}, "
+                f"pu={debug_meta.get('selected_pu_id') or '—'}; "
+                f"overlap C={top_overlaps.get('stage_c', 0)}, "
+                f"B={top_overlaps.get('stage_b', 0)}; "
+                f"method={debug_meta.get('chosen_method') or '—'}."
+            )
         return comments
 
     diffs = match_result.get("diffs", {})
     if not diffs:
         comments.append("Расхождений не обнаружено.")
-    if "subdivision" in diffs:
+    if "subdivision" in diffs and extracted_subdivision_name:
         comments.append("Подразделение не совпадает с БД.")
+    elif extracted_subdivision_name is None:
+        comments.append("Подразделение не определено в сводке.")
     if match_result.get("subdivision_locality_mismatch"):
         comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:
@@ -155,12 +233,9 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Тип события отличается от классификации.")
     if "article_of_law" in diffs:
         comments.append("Статья закона отличается от классификации.")
-    offenders_counts = match_result.get("offenders_counts", {})
-    if offenders_counts:
-        comments.append(
-            "Совпало нарушителей: "
-            f"{offenders_counts.get('matched', 0)} из {offenders_counts.get('portal', 0)}."
-        )
+    offender_report = _build_offender_report(match_result)
+    if offender_report.get("summary"):
+        comments.append(f"{offender_report['summary']}.")
     if match_result.get("date_time_present") and not match_result.get("time_found"):
         comments.append("Не определилось время (использована только дата).")
     return comments
@@ -201,6 +276,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             }
         )
 
+    offender_report = _build_offender_report(match_result)
+
     return {
         "idx": paragraph.idx,
         "preview": preview,
@@ -212,7 +289,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "date_time": extracted_timestamp_display,
             "subdivision_name": extracted.get("subdivision_name"),
             "subdivision_candidates": formatted_candidates,
-            "offenders": _format_offenders(extracted.get("offenders") or []),
+            "offenders": _format_offenders(extracted.get("offenders") or [], source="svodka"),
         },
         "match": {
             "matched": bool(match_result.get("matched")),
@@ -220,12 +297,14 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "time_delta_minutes": match_result.get("time_delta_minutes"),
             "offenders_score_percent": match_result.get("offenders_score_percent"),
             "offenders_counts": match_result.get("offenders_counts") or {},
+            "offenders_summary": offender_report.get("summary"),
+            "offenders_details": offender_report.get("details"),
             "subdivision_match_percent": match_result.get("subdivision_match_percent"),
         },
         "portal": {
             "timestamp": portal_timestamp_display,
             "subdivision_name": portal.get("subdivision_name"),
-            "offenders": _format_offenders(portal.get("offenders") or []),
+            "offenders": _format_offenders(portal.get("offenders") or [], source="portal"),
             "event_type": portal.get("event_type"),
             "article_of_law": portal.get("article_of_law"),
         },
@@ -246,22 +325,54 @@ class UploadView(View):
     template_name = "analysis_app/upload.html"
 
     def get(self, request):
-        return render(request, self.template_name, {"form": UploadDocxForm()})
+        return render(request, self.template_name, {"upload_form": UploadDocxForm()})
 
     def post(self, request):
-        form = UploadDocxForm(request.POST, request.FILES)
-        if not form.is_valid():
-            return render(request, self.template_name, {"form": form})
+        if request.FILES.get("file"):
+            upload_form = UploadDocxForm(request.POST, request.FILES)
+            if not upload_form.is_valid():
+                return render(request, self.template_name, {"upload_form": upload_form})
 
-        run = AnalysisRun.objects.create(
-            uploaded_by=request.user if request.user.is_authenticated else None,
-            file=form.cleaned_data["file"],
-        )
+            run = AnalysisRun.objects.create(
+                uploaded_by=request.user if request.user.is_authenticated else None,
+                file=upload_form.cleaned_data["file"],
+            )
+            from docx import Document
+
+            document = Document(run.file.path)
+            detection = detect_pu_from_docx(document)
+            initial_pu_id = str(detection.pu.portal_pu_id) if detection.pu else ""
+            selection_form = PuSelectionForm(
+                initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
+            )
+            return render(
+                request,
+                self.template_name,
+                {
+                    "upload_form": UploadDocxForm(),
+                    "selection_form": selection_form,
+                    "detection": detection,
+                },
+            )
+
+        selection_form = PuSelectionForm(request.POST)
+        if not selection_form.is_valid():
+            return render(
+                request,
+                self.template_name,
+                {"upload_form": UploadDocxForm(), "selection_form": selection_form},
+            )
+
+        run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
+        selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
+        run.selected_pu_id = selected_pu_id
+        run.save(update_fields=["selected_pu_id"])
+
         try:
             paragraphs = parse_docx(run.file.path)
             for idx, text in enumerate(paragraphs, start=1):
                 paragraph = AnalysisParagraph.objects.create(run=run, idx=idx, text=text)
-                attributes = extract_attributes(text)
+                attributes = extract_attributes(text, selected_pu_id=selected_pu_id)
                 match_result = match_event(attributes, text)
                 AnalysisResult.objects.create(
                     paragraph=paragraph,
@@ -305,6 +416,15 @@ class AnalysisDetailView(View):
             (event for event in events if event["idx"] == selected_idx),
             events[0] if events else None,
         )
+        selected_pu = None
+        if run.selected_pu_id:
+            selected_pu = CachedPU.objects.filter(
+                portal_pu_id=run.selected_pu_id
+            ).first()
+        pu_label = "Общая сводка"
+        if selected_pu:
+            label_parts = [part for part in [selected_pu.short_name, selected_pu.full_name] if part]
+            pu_label = " — ".join(label_parts) if label_parts else pu_label
         return render(
             request,
             self.template_name,
@@ -313,5 +433,6 @@ class AnalysisDetailView(View):
                 "paragraphs": paragraphs,
                 "events": events,
                 "selected_event": selected_event,
+                "selected_pu_label": pu_label,
             },
         )

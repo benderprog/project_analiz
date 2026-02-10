@@ -5,6 +5,7 @@
   <h2>Результаты анализа</h2>
   <p>Run ID: {{ run.run_id }}</p>
   <p>Статус: {{ run.status }}</p>
+  <p>ПУ: {{ selected_pu_label }}</p>
 </section>
 
 {% if events %}
@@ -143,16 +144,24 @@
                     ✕
                   {% endif %}
                 </span>
-                <span class="attr-metric" id="metric-offenders">
-                  {% if selected_event.match.offenders_score_percent is not None %}
-                    {{ selected_event.match.offenders_score_percent }}%
-                    ({{
-                      selected_event.match.offenders_counts.matched|default:"0"
-                    }}/{{ selected_event.match.offenders_counts.portal|default:"0" }})
-                  {% else %}
-                    —
-                  {% endif %}
-                </span>
+                <div class="attr-metric offenders-metric">
+                  <div id="metric-offenders">
+                    {% if selected_event.match.offenders_summary %}
+                      {{ selected_event.match.offenders_summary }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                  <ul
+                    class="offenders-details"
+                    id="offenders-details"
+                    {% if not selected_event.match.offenders_details %}style="display: none;"{% endif %}
+                  >
+                    {% for item in selected_event.match.offenders_details %}
+                      <li>{{ item }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
               </td>
               <td id="portal-offenders">
                 {% if selected_event.portal.offenders %}
@@ -222,6 +231,7 @@
       metricTimestamp: document.getElementById("metric-timestamp"),
       metricSubdivision: document.getElementById("metric-subdivision"),
       metricOffenders: document.getElementById("metric-offenders"),
+      offendersDetails: document.getElementById("offenders-details"),
       predictedType: document.getElementById("predicted-type"),
       portalType: document.getElementById("portal-type"),
       commentsList: document.getElementById("comments-list"),
@@ -293,14 +303,12 @@
         !== null && event.match.subdivision_match_percent !== undefined
         ? `${event.match.subdivision_match_percent}%`
         : "—";
-      const offendersCounts = event.match.offenders_counts || {};
-      dom.metricOffenders.textContent =
-        event.match.offenders_score_percent !== null &&
-        event.match.offenders_score_percent !== undefined
-          ? `${event.match.offenders_score_percent}% (${offendersCounts.matched ?? 0}/${
-              offendersCounts.portal ?? 0
-            })`
-          : "—";
+      dom.metricOffenders.textContent = event.match.offenders_summary || "—";
+      const offendersDetails = event.match.offenders_details || [];
+      if (dom.offendersDetails) {
+        dom.offendersDetails.innerHTML = renderListItems(offendersDetails);
+        dom.offendersDetails.style.display = offendersDetails.length ? "block" : "none";
+      }
 
       ["timestamp", "subdivision", "offenders"].forEach((key) => {
         const badge = dom.badges[key];

@@ -8,14 +8,15 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.analysis_app.models import CachedPU, CachedSubdivision, CachedSubdivisionAlias
+from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache
 from apps.analysis_app.subdivision_utils import (
     build_embedding_source_hash,
     build_subdivision_aliases,
-    normalize_subdivision_name,
     to_py_floats,
 )
+from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 from apps.analysis_app.utils.subdivision_norm import normalize_text
 from apps.portaldb.models import Pu, Subdivision
 
@@ -29,7 +30,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--rebuild-embeddings",
             action="store_true",
-            help="Recompute embeddings for cached subdivisions.",
+            help="Recompute embeddings for cached PUs and subdivisions.",
         )
         parser.add_argument(
             "--reset",
@@ -53,29 +54,34 @@ class Command(BaseCommand):
                 CachedPU.objects.all().delete()
 
             portal_pus = list(Pu.objects.using("portal").all())
-            cached_pus = {}
-            for portal_pu in portal_pus:
-                cached_pu, _ = CachedPU.objects.update_or_create(
-                    portal_pu_id=portal_pu.pu_id,
-                    defaults={
-                        "short_name": portal_pu.short_name,
-                        "full_name": portal_pu.full_name,
-                    },
+            cached_pus = {
+                portal_pu.pu_id: upsert_pu_cache(
+                    portal_pu, rebuild_embeddings=rebuild_embeddings
                 )
-                cached_pus[portal_pu.pu_id] = cached_pu
+                for portal_pu in portal_pus
+            }
 
             portal_subdivisions = list(
                 Subdivision.objects.using("portal").select_related("parent_pu")
             )
             for portal_subdivision in portal_subdivisions:
-                normalized_name = normalize_subdivision_name(portal_subdivision.name)
+                short_name = (portal_subdivision.short_name or "").strip()
+                full_name = portal_subdivision.name.strip()
+                embedding_text = short_name or full_name
+                normalized_short_name = normalize_subdivision_text(short_name)
+                normalized_name = normalize_subdivision_text(full_name)
+                normalized_embedding_source = normalize_subdivision_text(embedding_text)
                 alias_texts = build_subdivision_aliases(portal_subdivision.name)
-                source_hash = build_embedding_source_hash(normalized_name, alias_texts)
+                source_hash = build_embedding_source_hash(
+                    normalized_embedding_source, alias_texts
+                )
                 cached_subdivision, created = CachedSubdivision.objects.get_or_create(
                     portal_subdivision_id=portal_subdivision.subdivision_id,
                     defaults={
                         "name": portal_subdivision.name,
                         "pu": cached_pus.get(portal_subdivision.parent_pu_id),
+                        "parent_pu_id": portal_subdivision.parent_pu_id,
+                        "normalized_short_name": normalized_short_name,
                         "normalized_name": normalized_name,
                         "legacy_aliases": alias_texts,
                         "embedding_source_hash": source_hash,
@@ -84,8 +90,11 @@ class Command(BaseCommand):
                 if not created:
                     cached_subdivision.name = portal_subdivision.name
                     cached_subdivision.pu = cached_pus.get(portal_subdivision.parent_pu_id)
+                    cached_subdivision.parent_pu_id = portal_subdivision.parent_pu_id
+                    cached_subdivision.normalized_short_name = normalized_short_name
                     cached_subdivision.normalized_name = normalized_name
                     cached_subdivision.legacy_aliases = alias_texts
+                cached_subdivision.embedding_source_text = embedding_text
 
                 hash_changed = cached_subdivision.embedding_source_hash != source_hash
                 should_rebuild = (
@@ -98,12 +107,13 @@ class Command(BaseCommand):
 
                 if should_rebuild:
                     if model and not settings.SKIP_SEMANTIC_MODEL:
-                        embedding = model.encode([normalized_name])[0]
+                        embedding = model.encode([normalized_embedding_source])[0]
                         cached_subdivision.embedding = to_py_floats(embedding)
                         cached_subdivision.embedding_updated_at = timezone.now()
                     elif rebuild_embeddings or cached_subdivision.embedding is None:
                         cached_subdivision.embedding = None
                         cached_subdivision.embedding_updated_at = None
+                cached_subdivision._skip_embedding_rebuild = True
 
                 cached_subdivision.save()
 
