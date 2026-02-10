@@ -1,0 +1,14 @@
+profiles:
+  dev:
+    database:
+      engine: django.db.backends.postgresql
+      name: ${PORTAL_DB_NAME}
+      user: ${PORTAL_DB_USER}
+      password: ${PORTAL_DB_PASSWORD}
+      host: ${PORTAL_DB_HOST}
+      port: ${PORTAL_DB_PORT}
+    sql_registry:
+      base_dir: /tmp/portal/sql
+      queries:
+        portal_events: queries/portal_events.sql
+        portal_users: queries/portal_users.sql
