@@ -1,5 +1,6 @@
 # Offline docs
 
-Primary document for release `1.5_test`:
+Primary documentation for release `1.5_test`:
 
-- [closed_contour_1_5_test.md](./closed_contour_1_5_test.md)
+- [Dump-first offline bundle workflow (pg15-in-docker)](../16_offline_dump_first_bundle.md)
+- [Closed contour runbook](./closed_contour_1_5_test.md)

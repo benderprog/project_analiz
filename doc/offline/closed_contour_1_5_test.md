@@ -2,19 +2,30 @@
 
 This runbook assumes Docker is installed on both the online build host and the offline target host.
 
+For a full from-zero, dump-first process (including pg15-compatible dump creation and cleanup commands), use:
+
+- [doc/16_offline_dump_first_bundle.md](../16_offline_dump_first_bundle.md)
+
 ## 1) Online: build image and prepare local assets
 
 From project root:
 
 ```bash
-docker build -f docker/Dockerfile.web -t project_analiz:web-ver-1.5_test .
-docker pull postgres:15
+docker compose build web
+VERSION="1.5_test"
+docker tag project_analiz_web:latest "project_analiz:web-ver-${VERSION}"
+```
+
+Ensure `postgres:15` is available locally (without mandatory registry usage):
+
+```bash
+docker image inspect postgres:15 >/dev/null || docker load -i /path/to/postgres_15.tar
 ```
 
 Optional model prefetch (required when `--with-model` is used):
 
 ```bash
-bash scripts/prefetch_model.sh
+bash scripts/prefetch_model.sh --model "paraphrase-multilingual-MiniLM-L12-v2" --out "models/paraphrase-multilingual-MiniLM-L12-v2"
 ```
 
 ## 2) Online: build one offline bundle
@@ -34,7 +45,7 @@ Bundle output:
 - `dist/offline_bundle_1_5_test/compose` (`compose.yml`, `.env`, `portal.yml`, optional `models/`, `db_dumps/`)
 - `dist/offline_bundle_1_5_test/db_dumps` (`app_db.dump`, `portal_db.dump`)
 - `dist/offline_bundle_1_5_test/models` (optional copy of local models)
-- `dist/offline_bundle_1_5_test/doc` (this runbook)
+- `dist/offline_bundle_1_5_test/doc` (runbooks)
 - `dist/offline_bundle_1_5_test/manifest.json` (sha256 list)
 
 Copy the whole `dist/offline_bundle_1_5_test/` directory (or the `.tar.gz` archive) to the offline host.
@@ -71,9 +82,10 @@ Open in browser:
 - `http://localhost:8000/admin/`
 - `http://localhost:8000/upload/`
 
-## 7) Logs and shutdown
+## 7) Status, logs, and shutdown
 
 ```bash
+OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh ps
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh logs
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh down
 ```

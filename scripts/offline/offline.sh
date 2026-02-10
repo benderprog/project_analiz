@@ -16,6 +16,8 @@ Usage:
   ./scripts/offline/offline.sh restore
   ./scripts/offline/offline.sh up
   ./scripts/offline/offline.sh logs
+  ./scripts/offline/offline.sh ps
+  ./scripts/offline/offline.sh status
   ./scripts/offline/offline.sh down
 
 Environment:
@@ -150,7 +152,9 @@ ENV
   docker save "project_analiz:web-ver-${version}" -o "${artifacts_dir}/project_analiz_web-ver-${version}.tar"
   docker save "postgres:15" -o "${artifacts_dir}/postgres_15.tar"
 
+  cp "${REPO_ROOT}/doc/offline/README.md" "${doc_dir}/README.md"
   cp "${REPO_ROOT}/doc/offline/closed_contour_1_5_test.md" "${doc_dir}/closed_contour_1_5_test.md"
+  cp "${REPO_ROOT}/doc/16_offline_dump_first_bundle.md" "${doc_dir}/16_offline_dump_first_bundle.md"
 
   log "Writing manifest"
   (
@@ -331,6 +335,9 @@ main() {
       ;;
     logs)
       compose_cmd logs -f --tail=200 web db_app portal_db_test
+      ;;
+    ps|status)
+      compose_cmd ps -a
       ;;
     down)
       compose_cmd down -v --remove-orphans
