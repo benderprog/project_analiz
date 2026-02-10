@@ -14,3 +14,5 @@ release/
 *.zst
 assets/models/
 wheelhouse/
+dist/
+models/
