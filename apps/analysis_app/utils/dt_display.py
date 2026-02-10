@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from django.conf import settings
 from django.utils import timezone
@@ -11,6 +11,26 @@ def format_local_naive(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def format_date_dmy(value: date | datetime | None) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, datetime):
+        value = to_local_naive(value)
+        if value is None:
+            return "—"
+        return value.strftime("%d-%m-%Y")
+    return value.strftime("%d-%m-%Y")
+
+
+def format_dt_dmy_hm(value: datetime | None) -> str:
+    if value is None:
+        return "—"
+    local_dt = to_local_naive(value)
+    if local_dt is None:
+        return "—"
+    return local_dt.strftime("%d-%m-%Y %H:%M")
 
 
 def to_local_naive(dt: datetime | None) -> datetime | None:
