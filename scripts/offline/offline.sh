@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+BUNDLE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=scripts/offline/_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
 
@@ -11,7 +12,7 @@ usage() {
 Offline bundle / runtime helper
 
 Usage:
-  ./scripts/offline/offline.sh bundle --version 1.5_test --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db.dump [--with-model] [--archive]
+  ./scripts/offline/offline.sh bundle --version 1.5_test --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db_test.dump [--with-model] [--archive]
   ./scripts/offline/offline.sh import
   ./scripts/offline/offline.sh restore
   ./scripts/offline/offline.sh up
@@ -34,6 +35,32 @@ default_bundle_dir_for_version() {
   local safe
   safe="$(sanitize_version "$version")"
   echo "${REPO_ROOT}/dist/offline_bundle_${safe}"
+}
+
+resolve_bundle_root() {
+  if [[ -n "${OFFLINE_BUNDLE_DIR:-}" ]]; then
+    echo "${OFFLINE_BUNDLE_DIR}"
+    return
+  fi
+
+  if [[ -f "${BUNDLE_ROOT}/compose/compose.yml" ]]; then
+    echo "${BUNDLE_ROOT}"
+    return
+  fi
+
+  local latest
+  latest="$(find "${REPO_ROOT}/dist" -maxdepth 1 -type d -name 'offline_bundle_*' | sort | tail -n 1 || true)"
+  [[ -n "${latest}" ]] || die "No bundle found in dist/. Set OFFLINE_BUNDLE_DIR, run from extracted bundle root, or run bundle first."
+  echo "${latest}"
+}
+
+resolve_bundle_paths() {
+  local root
+  root="$(resolve_bundle_root)"
+  compose_dir="${root}/compose"
+  artifacts_dir="${root}/artifacts"
+  dumps_dir="${root}/db_dumps"
+  configs_dir="${root}/configs"
 }
 
 bundle_cmd() {
@@ -92,16 +119,25 @@ bundle_cmd() {
   local models_dir="${bundle_dir}/models"
   local dumps_dir="${bundle_dir}/db_dumps"
   local doc_dir="${bundle_dir}/doc"
+  local scripts_dir="${bundle_dir}/scripts/offline"
+  local configs_dir="${bundle_dir}/configs"
 
   log "Preparing bundle at ${bundle_dir}"
   rm -rf "${bundle_dir}"
-  mkdir -p "${compose_dir}" "${artifacts_dir}" "${doc_dir}"
+  mkdir -p "${compose_dir}" "${artifacts_dir}" "${doc_dir}" "${scripts_dir}" "${configs_dir}" "${dumps_dir}"
 
   cp "${REPO_ROOT}/docker/offline/compose.yml" "${compose_dir}/compose.yml"
-  cp "${REPO_ROOT}/docker/offline/portal.offline.yml" "${compose_dir}/portal.yml"
+  cp "${REPO_ROOT}/configs/portal.offline.yml" "${configs_dir}/portal.yml"
+  mkdir -p "${configs_dir}/sql"
+  cp -a "${REPO_ROOT}/configs/portal/sql/." "${configs_dir}/sql/"
+
+  cp "${REPO_ROOT}/scripts/offline/offline.sh" "${scripts_dir}/offline.sh"
+  cp "${REPO_ROOT}/scripts/offline/_lib.sh" "${scripts_dir}/_lib.sh"
+  chmod +x "${scripts_dir}/offline.sh" "${scripts_dir}/_lib.sh"
 
   cat > "${compose_dir}/.env" <<ENV
 VERSION=${version}
+PORTAL_MODE=local
 
 DJANGO_SECRET_KEY=offline-secret-key
 DJANGO_DEBUG=false
@@ -121,7 +157,7 @@ PORTAL_DB_PORT=5432
 
 PORTAL_CONFIG_PATH=/app/configs/portal.yml
 PORTAL_PROFILE=dev
-PORTAL_GATEWAY_BACKEND=orm
+PORTAL_GATEWAY_BACKEND=sql
 
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
@@ -130,7 +166,7 @@ HF_HOME=/opt/models/hf_home
 SEMANTIC_MODEL_PATH=/opt/models/paraphrase-multilingual-MiniLM-L12-v2
 ENV
 
-  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps" "${dumps_dir}"
+  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps"
 
   if [[ "${with_model}" == "1" ]]; then
     [[ -d "${REPO_ROOT}/models/paraphrase-multilingual-MiniLM-L12-v2" ]] || die "Model directory not found at models/paraphrase-multilingual-MiniLM-L12-v2. Prefetch model before bundling."
@@ -142,9 +178,9 @@ ENV
 
   log "Copying DB dumps"
   cp "${db_app_dump}" "${dumps_dir}/app_db.dump"
-  cp "${db_portal_dump}" "${dumps_dir}/portal_db.dump"
+  cp "${db_portal_dump}" "${dumps_dir}/portal_db_test.dump"
   cp "${dumps_dir}/app_db.dump" "${compose_dir}/db_dumps/app_db.dump"
-  cp "${dumps_dir}/portal_db.dump" "${compose_dir}/db_dumps/portal_db.dump"
+  cp "${dumps_dir}/portal_db_test.dump" "${compose_dir}/db_dumps/portal_db_test.dump"
 
   log "Saving docker images"
   docker image inspect "project_analiz:web-ver-${version}" >/dev/null
@@ -152,14 +188,23 @@ ENV
   docker save "project_analiz:web-ver-${version}" -o "${artifacts_dir}/project_analiz_web-ver-${version}.tar"
   docker save "postgres:15" -o "${artifacts_dir}/postgres_15.tar"
 
+  cp "${REPO_ROOT}/README.md" "${doc_dir}/README_MAIN.md"
   cp "${REPO_ROOT}/doc/offline/README.md" "${doc_dir}/README.md"
   cp "${REPO_ROOT}/doc/offline/closed_contour_1_5_test.md" "${doc_dir}/closed_contour_1_5_test.md"
   cp "${REPO_ROOT}/doc/16_offline_dump_first_bundle.md" "${doc_dir}/16_offline_dump_first_bundle.md"
+  cp "${REPO_ROOT}/doc/12_release_process.md" "${doc_dir}/12_release_process.md"
+  cp "${REPO_ROOT}/doc/22_portal_config.md" "${doc_dir}/22_portal_config.md"
+  cp "${REPO_ROOT}/doc/23_portal_gateway.md" "${doc_dir}/23_portal_gateway.md"
+
+  cp "${REPO_ROOT}/doc/offline/README_OFFLINE.md" "${bundle_dir}/README_OFFLINE.md"
+  cp "${REPO_ROOT}/doc/offline/README_REMOTE_PORTAL_RO.md" "${bundle_dir}/README_REMOTE_PORTAL_RO.md"
+  cp "${REPO_ROOT}/doc/offline/README_SQL_OVERRIDE.md" "${bundle_dir}/README_SQL_OVERRIDE.md"
 
   log "Writing manifest"
   (
     cd "${bundle_dir}"
     : > manifest.json
+    : > checksums.sha256
     printf '{\n  "files": [\n' >> manifest.json
     local first="1"
     while IFS= read -r -d '' file; do
@@ -171,42 +216,32 @@ ENV
       fi
       first="0"
       printf '    {"path": "%s", "sha256": "%s"}' "$rel" "$hash" >> manifest.json
-    done < <(find . -type f ! -name manifest.json -print0 | sort -z)
+      printf '%s  %s\n' "$hash" "$rel" >> checksums.sha256
+    done < <(find . -type f ! -name manifest.json ! -name checksums.sha256 -print0 | sort -z)
     printf '\n  ]\n}\n' >> manifest.json
   )
 
   if [[ "${make_archive}" == "1" ]]; then
-    local archive_name
-    archive_name="${bundle_dir}.tar.gz"
-    tar -C "$(dirname "${bundle_dir}")" -czf "${archive_name}" "$(basename "${bundle_dir}")"
-    log "Created archive ${archive_name}"
+    local safe_version archive_name archive_path
+    safe_version="$(sanitize_version "${version}")"
+    archive_name="offline_bundle_${safe_version}.tar.gz"
+    archive_path="${REPO_ROOT}/dist/${archive_name}"
+    tar -C "$(dirname "${bundle_dir}")" -czf "${archive_path}" "$(basename "${bundle_dir}")"
+    cp "${REPO_ROOT}/doc/offline/README_OFFLINE.md" "${REPO_ROOT}/dist/README_OFFLINE_${safe_version}.md"
+    log "Created archive ${archive_path}"
   fi
 
   log "Bundle ready: ${bundle_dir}"
 }
 
-resolve_compose_dir() {
-  if [[ -n "${OFFLINE_BUNDLE_DIR:-}" ]]; then
-    echo "${OFFLINE_BUNDLE_DIR}/compose"
-    return
-  fi
-
-  local latest
-  latest="$(find "${REPO_ROOT}/dist" -maxdepth 1 -type d -name 'offline_bundle_*' | sort | tail -n 1 || true)"
-  [[ -n "${latest}" ]] || die "No bundle found in dist/. Set OFFLINE_BUNDLE_DIR or run bundle first."
-  echo "${latest}/compose"
-}
-
 compose_cmd() {
-  local compose_dir
-  compose_dir="$(resolve_compose_dir)"
+  resolve_bundle_paths
   require_cmd docker
   docker compose -f "${compose_dir}/compose.yml" --env-file "${compose_dir}/.env" "$@"
 }
 
 load_compose_env() {
-  local compose_dir
-  compose_dir="$(resolve_compose_dir)"
+  resolve_bundle_paths
 
   # shellcheck disable=SC1090
   set -a
@@ -252,15 +287,15 @@ run_pg_restore_in_postgres15() {
   local db_name="$4"
   local db_password="$5"
   local dump_file="$6"
-  local compose_dir network_name
+  local network_name
 
-  compose_dir="$(resolve_compose_dir)"
+  resolve_bundle_paths
   network_name="$(service_network_name "${service}")"
 
   log "Restoring ${db_name} from ${dump_file} using postgres:15 on network ${network_name}"
   docker run --rm \
     --network "${network_name}" \
-    -v "${compose_dir}/db_dumps:/db_dumps:ro" \
+    -v "${dumps_dir}:/db_dumps:ro" \
     -e "PGPASSWORD=${db_password}" \
     postgres:15 \
     sh -lc "pg_restore --version && pg_restore -h ${db_host} -p 5432 -U ${db_user} -d ${db_name} --clean --if-exists --no-owner --no-privileges /db_dumps/${dump_file}"
@@ -268,26 +303,26 @@ run_pg_restore_in_postgres15() {
 
 restore_cmd() {
   load_compose_env
-  compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
 
+  local portal_mode="${PORTAL_MODE:-local}"
+  if [[ "${portal_mode}" == "remote" ]]; then
+    compose_cmd up -d --remove-orphans --no-build db_app
+    wait_for_service_healthy "db_app"
+    run_pg_restore_in_postgres15 "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump"
+    return
+  fi
+
+  compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
   wait_for_service_healthy "db_app"
   wait_for_service_healthy "portal_db_test"
-
   run_pg_restore_in_postgres15 "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump"
-  run_pg_restore_in_postgres15 "portal_db_test" "portal_db_test" "portal" "portal_db_test" "${PORTAL_DB_PASSWORD}" "portal_db.dump"
+  run_pg_restore_in_postgres15 "portal_db_test" "portal_db_test" "portal" "portal_db_test" "${PORTAL_DB_PASSWORD}" "portal_db_test.dump"
 }
 
 import_cmd() {
   require_cmd docker
+  resolve_bundle_paths
 
-  local bundle_dir="${OFFLINE_BUNDLE_DIR:-}"
-  if [[ -z "${bundle_dir}" ]]; then
-    local compose_dir
-    compose_dir="$(resolve_compose_dir)"
-    bundle_dir="$(cd "${compose_dir}/.." && pwd)"
-  fi
-
-  local artifacts_dir="${bundle_dir}/artifacts"
   [[ -d "${artifacts_dir}" ]] || die "Artifacts directory not found: ${artifacts_dir}"
 
   shopt -s nullglob
@@ -314,6 +349,32 @@ import_cmd() {
   [[ "${loaded}" == "1" ]] || die "No image archives found in ${artifacts_dir}"
 }
 
+up_cmd() {
+  load_compose_env
+  restore_cmd
+
+  local portal_mode="${PORTAL_MODE:-local}"
+  if [[ "${portal_mode}" == "remote" ]]; then
+    compose_cmd run --rm migrate_app
+    compose_cmd up -d --remove-orphans --no-build web
+    return
+  fi
+
+  compose_cmd run --rm migrate_app
+  compose_cmd run --rm migrate_portal
+  compose_cmd up -d --remove-orphans --no-build web
+}
+
+logs_cmd() {
+  load_compose_env
+  local portal_mode="${PORTAL_MODE:-local}"
+  if [[ "${portal_mode}" == "remote" ]]; then
+    compose_cmd logs -f --tail=200 web db_app
+    return
+  fi
+  compose_cmd logs -f --tail=200 web db_app portal_db_test
+}
+
 main() {
   local cmd="${1:-}"
   case "${cmd}" in
@@ -325,16 +386,13 @@ main() {
       import_cmd
       ;;
     up)
-      restore_cmd
-      compose_cmd run --rm migrate_app
-      compose_cmd run --rm migrate_portal
-      compose_cmd up -d --remove-orphans --no-build web
+      up_cmd
       ;;
     restore)
       restore_cmd
       ;;
     logs)
-      compose_cmd logs -f --tail=200 web db_app portal_db_test
+      logs_cmd
       ;;
     ps|status)
       compose_cmd ps -a
