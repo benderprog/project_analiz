@@ -1,29 +1,42 @@
-from pathlib import Path
+import json
 import os
-import stat
+import shutil
 import subprocess
+from pathlib import Path
 
 
 def test_portal_offline_config_exists():
     assert Path("configs/portal.offline.yml").exists()
 
 
-def test_release_builder_is_executable():
-    script = Path("scripts/release/build_release.sh")
-    mode = script.stat().st_mode
-    assert mode & stat.S_IXUSR
+def test_make_release_bundle_creates_compose_env_and_manifest_entry(tmp_path):
+    version = "test_bundle_assets"
+    version_slug = version.replace('.', '_')
+    bundle_dir = Path("dist") / f"release_ver_{version_slug}"
 
+    if bundle_dir.exists():
+        shutil.rmtree(bundle_dir)
 
-def test_release_builder_requires_fixture_flags_or_env():
-    script = Path("scripts/release/build_release.sh")
-
+    env = {**os.environ, "PATH": os.environ.get("PATH", "")}
     result = subprocess.run(
-        ["bash", str(script), "1.5_test"],
+        [
+            "bash",
+            "scripts/make_release_bundle.sh",
+            "--version",
+            version,
+            "--skip-image-export",
+        ],
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "PATH": os.environ.get("PATH", "")},
+        env=env,
     )
 
-    assert result.returncode == 1
-    assert "Missing fixture XLSX. Provide --xlsx or set FIXTURE_XLSX" in result.stderr
+    assert result.returncode == 0, result.stderr
+
+    compose_env = bundle_dir / "compose" / ".env.docker"
+    assert compose_env.exists()
+
+    manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest_paths = {entry["path"] for entry in manifest["files"]}
+    assert "compose/.env.docker" in manifest_paths

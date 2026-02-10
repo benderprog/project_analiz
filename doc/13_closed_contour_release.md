@@ -4,45 +4,44 @@ This guide describes how to build a single offline release archive on a connecte
 
 ## 1) Build the release bundle on a connected machine
 
-### Prefetch the semantic model (once per version)
+### Prefetch the semantic model
 
 ```bash
-./scripts/prefetch_model.sh --model paraphrase-multilingual-MiniLM-L12-v2 \
+bash scripts/prefetch_model.sh --model paraphrase-multilingual-MiniLM-L12-v2 \
   --out models/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-### Build images and create the bundle
+### Build bundle (model + seed from local absolute paths)
 
 ```bash
-./scripts/make_release_bundle.sh --version 1.1 --with-model --with-seed --archive
+bash scripts/make_release_bundle.sh --version 1.5_test --with-model --with-seed \
+  --seed-xlsx /abs/x.xlsx --seed-docx /abs/t.docx --archive
 ```
 
-The command above:
+Notes:
 
-* Builds and exports the docker images into `dist/release_ver_1_1/artifacts/`.
-* Bundles compose files, docker init SQL, offline scripts, and docs.
-* Copies the cached model into `dist/release_ver_1_1/models/`.
-* Copies seed inputs into `dist/release_ver_1_1/seed/`.
-* Writes a `manifest.json` with checksums and metadata.
-* Produces `dist/release_ver_1_1.tar.gz`.
-
-The web image is built as CPU-only (no CUDA/NVIDIA libraries), which reduces the
-export size substantially. GPU builds are intentionally not part of the closed
-contour release flow.
+- `--with-seed` now requires explicit seed paths (`--seed-xlsx` / `--seed-docx`) or env vars (`FIXTURE_XLSX` / `FIXTURE_DOCX`).
+- The bundle always contains `compose/.env.docker` generated from `.env.docker.example` with offline-safe defaults.
+- `compose/.env.docker` includes `PORTAL_CONFIG_PATH`, `PORTAL_PROFILE`, `PORTAL_GATEWAY_BACKEND`, `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, `SENTENCE_TRANSFORMERS_HOME`, `HF_HOME`, and `SEMANTIC_MODEL_PATH`.
+- The bundle contains `compose/portal.yml` copied from `configs/portal.offline.yml`.
 
 ## 2) Deploy inside the closed contour
 
 Copy the archive to the offline machine. Then run:
 
 ```bash
-tar -xzf release_ver_1_1.tar.gz
-cd release_ver_1_1
+tar -xzf release_ver_1_5_test.tar.gz
+sudo systemctl stop postgresql || true
+nmcli networking off
+cd release_ver_1_5_test
+bash scripts/import_images.sh
+bash scripts/offline_up.sh
+```
 
-cp .env.docker.example .env.docker
-# Edit .env.docker if needed.
+Optional bootstrap after stack is up:
 
-./scripts/import_images.sh ./artifacts
-./scripts/offline_up.sh --seed --sync --rebuild-embeddings
+```bash
+bash scripts/offline_up.sh --seed --sync --rebuild-embeddings
 ```
 
 Verify the service:
@@ -53,22 +52,16 @@ curl -f http://127.0.0.1:8000/upload/
 
 ## 3) Troubleshooting
 
-### Database not ready
+### Missing compose/.env.docker
 
-If migrations fail with connection errors, check the database containers and retry:
-
-```bash
-docker compose -f compose/docker-compose.yml -f compose/docker-compose.offline.yml ps
-./scripts/offline_up.sh
-```
+`offline_up.sh` expects `compose/.env.docker` and exits with a helpful error if it is absent. Rebuild the bundle with `scripts/make_release_bundle.sh`.
 
 ### Missing models directory
 
-If the application reports missing models, ensure the model is present in the bundle and the env var is set:
+Check that the model is present and mounted from bundle folder:
 
 ```bash
 ls -la models/
-# Optionally set SEMANTIC_MODEL_PATH in .env.docker
 ```
 
 ### Seed files not found
@@ -84,5 +77,5 @@ ls -la seed/subdivision_primer.xlsx seed/test_svodka_semantic.docx
 To reset the databases and start fresh:
 
 ```bash
-docker compose -f compose/docker-compose.yml -f compose/docker-compose.offline.yml down -v
+docker compose --env-file compose/.env.docker -f compose/docker-compose.yml -f compose/docker-compose.offline.yml down -v
 ```

@@ -10,3 +10,4 @@ services:
     volumes:
       - ./models:/opt/models:ro
       - ./seed:/app/seed:ro
+      - ./compose/portal.yml:/app/configs/portal.yml:ro
