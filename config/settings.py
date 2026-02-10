@@ -74,6 +74,19 @@ DATABASES = {
     },
 }
 
+PORTAL_CONFIG_PATH = os.getenv("PORTAL_CONFIG_PATH")
+if PORTAL_CONFIG_PATH:
+    from apps.portaldb.portal_config import apply_portal_database_settings, load_yaml
+
+    portal_config_path = Path(PORTAL_CONFIG_PATH)
+    if not portal_config_path.exists():
+        raise RuntimeError(f"Portal config not found at {portal_config_path}.")
+    try:
+        portal_cfg = load_yaml(portal_config_path)
+        DATABASES["portal"] = apply_portal_database_settings(globals(), portal_cfg)
+    except ValueError as exc:
+        raise RuntimeError(f"Portal config error: {exc}") from exc
+
 DATABASE_ROUTERS = ["config.db_router.PortalDBRouter"]
 
 AUTH_PASSWORD_VALIDATORS = []
