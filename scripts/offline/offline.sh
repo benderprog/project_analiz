@@ -11,10 +11,10 @@ usage() {
 Offline bundle / runtime helper
 
 Usage:
-  ./scripts/offline/offline.sh bundle --version 1.5_test [--with-model] [--seed-xlsx PATH --seed-docx PATH] [--archive]
+  ./scripts/offline/offline.sh bundle --version 1.5_test --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db.dump [--with-model] [--archive]
   ./scripts/offline/offline.sh import
+  ./scripts/offline/offline.sh restore
   ./scripts/offline/offline.sh up
-  ./scripts/offline/offline.sh seed
   ./scripts/offline/offline.sh logs
   ./scripts/offline/offline.sh down
 
@@ -39,8 +39,8 @@ bundle_cmd() {
 
   local version=""
   local with_model="0"
-  local seed_xlsx=""
-  local seed_docx=""
+  local db_app_dump=""
+  local db_portal_dump=""
   local make_archive="0"
 
   while [[ $# -gt 0 ]]; do
@@ -53,12 +53,12 @@ bundle_cmd() {
         with_model="1"
         shift
         ;;
-      --seed-xlsx)
-        seed_xlsx="${2:-}"
+      --db-app-dump)
+        db_app_dump="${2:-}"
         shift 2
         ;;
-      --seed-docx)
-        seed_docx="${2:-}"
+      --db-portal-dump)
+        db_portal_dump="${2:-}"
         shift 2
         ;;
       --archive)
@@ -76,19 +76,19 @@ bundle_cmd() {
   done
 
   [[ -n "${version}" ]] || die "bundle requires --version"
-
-  if [[ -n "${seed_xlsx}" || -n "${seed_docx}" ]]; then
-    [[ -n "${seed_xlsx}" && -n "${seed_docx}" ]] || die "Provide both --seed-xlsx and --seed-docx together"
-    [[ -f "${seed_xlsx}" ]] || die "Seed XLSX not found: ${seed_xlsx}"
-    [[ -f "${seed_docx}" ]] || die "Seed DOCX not found: ${seed_docx}"
-  fi
+  [[ -n "${db_app_dump}" ]] || die "bundle requires --db-app-dump"
+  [[ -n "${db_portal_dump}" ]] || die "bundle requires --db-portal-dump"
+  [[ "${db_app_dump}" = /* ]] || die "--db-app-dump must be an absolute path"
+  [[ "${db_portal_dump}" = /* ]] || die "--db-portal-dump must be an absolute path"
+  [[ -f "${db_app_dump}" ]] || die "App DB dump not found: ${db_app_dump}"
+  [[ -f "${db_portal_dump}" ]] || die "Portal DB dump not found: ${db_portal_dump}"
 
   local bundle_dir
   bundle_dir="${OFFLINE_BUNDLE_DIR:-$(default_bundle_dir_for_version "$version")}"
   local compose_dir="${bundle_dir}/compose"
   local artifacts_dir="${bundle_dir}/artifacts"
   local models_dir="${bundle_dir}/models"
-  local seed_dir="${bundle_dir}/seed"
+  local dumps_dir="${bundle_dir}/db_dumps"
   local doc_dir="${bundle_dir}/doc"
 
   log "Preparing bundle at ${bundle_dir}"
@@ -128,7 +128,7 @@ HF_HOME=/opt/models/hf_home
 SEMANTIC_MODEL_PATH=/opt/models/paraphrase-multilingual-MiniLM-L12-v2
 ENV
 
-  mkdir -p "${compose_dir}/models" "${compose_dir}/seed"
+  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps" "${dumps_dir}"
 
   if [[ "${with_model}" == "1" ]]; then
     [[ -d "${REPO_ROOT}/models/paraphrase-multilingual-MiniLM-L12-v2" ]] || die "Model directory not found at models/paraphrase-multilingual-MiniLM-L12-v2. Prefetch model before bundling."
@@ -138,14 +138,11 @@ ENV
     cp -a "${models_dir}/." "${compose_dir}/models/"
   fi
 
-  if [[ -n "${seed_xlsx}" ]]; then
-    log "Copying seed files"
-    mkdir -p "${seed_dir}" "${compose_dir}/seed"
-    cp "${seed_xlsx}" "${seed_dir}/subdivision_primer.xlsx"
-    cp "${seed_docx}" "${seed_dir}/test_svodka_semantic.docx"
-    cp "${seed_dir}/subdivision_primer.xlsx" "${compose_dir}/seed/subdivision_primer.xlsx"
-    cp "${seed_dir}/test_svodka_semantic.docx" "${compose_dir}/seed/test_svodka_semantic.docx"
-  fi
+  log "Copying DB dumps"
+  cp "${db_app_dump}" "${dumps_dir}/app_db.dump"
+  cp "${db_portal_dump}" "${dumps_dir}/portal_db.dump"
+  cp "${dumps_dir}/app_db.dump" "${compose_dir}/db_dumps/app_db.dump"
+  cp "${dumps_dir}/portal_db.dump" "${compose_dir}/db_dumps/portal_db.dump"
 
   log "Saving docker images"
   docker image inspect "project_analiz:web-ver-${version}" >/dev/null
@@ -251,16 +248,23 @@ main() {
       import_cmd
       ;;
     up)
-      compose_cmd up -d db_app portal_db_test migrate_app migrate_portal web
+      compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
+      compose_cmd run --rm restore_app
+      compose_cmd run --rm restore_portal
+      compose_cmd run --rm migrate_app
+      compose_cmd run --rm migrate_portal
+      compose_cmd up -d --remove-orphans --no-build web
       ;;
-    seed)
-      compose_cmd --profile seed run --rm seed_portal
+    restore)
+      compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
+      compose_cmd run --rm restore_app
+      compose_cmd run --rm restore_portal
       ;;
     logs)
-      compose_cmd logs -f --tail=200 web db_app portal_db_test migrate_app migrate_portal
+      compose_cmd logs -f --tail=200 web db_app portal_db_test
       ;;
     down)
-      compose_cmd down --remove-orphans
+      compose_cmd down -v --remove-orphans
       ;;
     -h|--help|help|"")
       usage
