@@ -94,13 +94,29 @@ def _build_offender_report(match_result: dict) -> dict:
     details = []
     matches = match_result.get("offender_matches") or {}
 
+    matched_pairs = matches.get("matched_pairs") or []
+    for pair in matched_pairs:
+        discrepancy = pair.get("discrepancy")
+        if not discrepancy:
+            continue
+        svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
+        portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
+        details.append(
+            f"ФИО совпало частично/с ошибкой: {svodka_display} / {portal_display} ({discrepancy})"
+        )
+
     dob_mismatch_pairs = matches.get("dob_mismatch_pairs") or []
     for pair in dob_mismatch_pairs:
         svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
         portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
         details.append(
-            f"ФИО совпало, но ДР отличается: {svodka_display} / {portal_display}"
+            f"Возможное совпадение по ФИО, но ДР отличается: {svodka_display} / {portal_display}"
         )
+
+    ambiguous = matches.get("ambiguous") or []
+    for item in ambiguous:
+        svodka_display = _format_offenders([item.get("svodka_offender")], source="svodka")[0]
+        details.append(f"Неоднозначное совпадение: {svodka_display}")
 
     missing_in_portal = _format_offenders(
         matches.get("missing_in_portal") or [], source="svodka"

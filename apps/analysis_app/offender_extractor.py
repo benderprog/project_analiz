@@ -27,7 +27,9 @@ _DOB_YEAR_IN_PARENS = re.compile(
 )
 
 _INITIALS_REGEX = re.compile(
-    r"\b(?P<last>[А-ЯЁ][а-яё]+)\s+(?P<first>[А-ЯЁ])\.\s*(?:(?P<middle>[А-ЯЁ])\.)?\b"
+    r"\b(?P<last>[А-ЯЁ][а-яё]+)\s+"
+    r"(?P<first>[А-ЯЁ])\.?\s*"
+    r"(?:(?P<middle>[А-ЯЁ])\.?)?\b"
 )
 
 _CONTEXT_TRIGGERS = (
@@ -189,6 +191,7 @@ def _extract_natasha(text: str) -> list[dict]:
                 "birth_date": birth_date,
                 "birth_year": birth_year,
                 "span": span,
+                "surface_text": text[span[0] : span[1]] if span else full_name,
                 "source": "natasha",
             }
         )
@@ -217,6 +220,7 @@ def _extract_initials(text: str) -> list[dict]:
                 "birth_date": birth_date,
                 "birth_year": birth_year,
                 "span": span,
+                "surface_text": text[span[0] : span[1]] if span else full_name,
                 "source": "regex_initials",
             }
         )
@@ -245,6 +249,7 @@ def _extract_context(text: str) -> list[dict]:
                 "birth_date": birth_date,
                 "birth_year": birth_year,
                 "span": span,
+                "surface_text": text[span[0] : span[1]] if span else full_name,
                 "source": "regex_context",
             }
         )
