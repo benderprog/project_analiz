@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from uuid import UUID
 
 from django.db import connections
@@ -13,8 +13,8 @@ from .dtos import EventDTO, OffenderDTO, PuDTO, SubdivisionDTO
 
 def _ensure_utc(dt: datetime) -> datetime:
     if timezone.is_naive(dt):
-        return timezone.make_aware(dt, timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return timezone.make_aware(dt, dt_timezone.utc)
+    return dt.astimezone(dt_timezone.utc)
 
 
 class SQLPortalGateway:

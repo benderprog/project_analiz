@@ -5,7 +5,7 @@ import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from difflib import SequenceMatcher
 from functools import lru_cache
 from uuid import UUID
@@ -42,8 +42,8 @@ def _to_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if timezone.is_naive(dt):
-        return timezone.make_aware(dt, timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return timezone.make_aware(dt, dt_timezone.utc)
+    return dt.astimezone(dt_timezone.utc)
 
 
 @dataclass
@@ -671,7 +671,7 @@ def _build_subdivision_offender_candidates(
     subdivision_id: str, extracted_offenders: list[dict], target_dt: datetime | None
 ) -> list[dict]:
     gateway = get_portal_gateway()
-    anchor_dt = _to_utc(target_dt) or timezone.now().astimezone(timezone.utc)
+    anchor_dt = _to_utc(target_dt) or timezone.now().astimezone(dt_timezone.utc)
     events = gateway.search_events_by_time(
         anchor_dt - timedelta(days=36500),
         anchor_dt + timedelta(days=36500),

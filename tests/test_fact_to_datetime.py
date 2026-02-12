@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 
 from django.test import SimpleTestCase
 
-from apps.analysis_app.services import _fact_to_datetime
+from apps.analysis_app.services import _fact_to_datetime, _to_utc
 
 
 class DummyDate:
@@ -26,3 +26,7 @@ class FactToDatetimeTests(SimpleTestCase):
     def test_as_datetime_passthrough(self):
         value = datetime(2025, 1, 2, 3, 4)
         self.assertEqual(_fact_to_datetime(DummyAsDatetime(value)), value)
+
+    def test_to_utc_smoke_uses_stdlib_utc(self):
+        converted = _to_utc(datetime(2026, 2, 2, 3, 4))
+        self.assertEqual(converted.tzinfo, dt_timezone.utc)
