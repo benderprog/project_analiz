@@ -76,3 +76,29 @@ bash scripts/offline/offline.sh down
 - `models/` (if built with `--with-model`)
 - `doc/` copied documentation set
 - `manifest.json` + `checksums.sha256`
+
+
+## 4) Semantic model in offline mode
+
+Рекомендуемая раскладка локальной модели:
+
+```
+./models/paraphrase-multilingual-MiniLM-L12-v2
+```
+
+Переменные окружения для web-контейнера:
+
+```bash
+SEMANTIC_MODEL_NAME=paraphrase-multilingual-MiniLM-L12-v2
+SEMANTIC_MODEL_PATH=./models/paraphrase-multilingual-MiniLM-L12-v2
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+```
+
+Порядок выбора модели:
+
+1. `SEMANTIC_MODEL_PATH`, если путь существует.
+2. `./models/<SEMANTIC_MODEL_NAME>`, если каталог существует.
+3. Иначе используется имя модели (`SEMANTIC_MODEL_NAME`) для загрузки из HuggingFace (только для online/development).
+
+Если включен offline-режим (`HF_HUB_OFFLINE=1` или `TRANSFORMERS_OFFLINE=1`) и локальная модель не найдена, приложение завершает загрузку модели с понятной ошибкой без попыток обращения в сеть.
