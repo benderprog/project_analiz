@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+
+from apps.analysis_app.semantic import get_sentence_model
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +31,4 @@ class Command(BaseCommand):
         self.stdout.write("OK")
 
     def _load_model(self):
-        from sentence_transformers import SentenceTransformer
-
-        model_path = settings.SEMANTIC_MODEL_PATH
-        if model_path and Path(model_path).exists():
-            logger.info("Loading sentence model from %s", model_path)
-            return SentenceTransformer(model_path)
-
-        logger.info("Loading sentence model by name %s", settings.SEMANTIC_MODEL_NAME)
-        return SentenceTransformer(settings.SEMANTIC_MODEL_NAME)
+        return get_sentence_model()
