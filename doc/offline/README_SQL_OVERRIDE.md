@@ -2,12 +2,12 @@
 
 Bundle exposes SQL mapping in:
 
-- `configs/portal.yml`
-- `configs/sql/...`
+- `configs/portal.yml (или configs/portal/portal.yml)`
+- `configs/portal/sql/...`
 
 ## Config structure
 
-`configs/portal.yml` uses:
+`configs/portal.yml (или configs/portal/portal.yml)` uses:
 
 - `profiles.<name>.sql.base_dir` (directory prefix)
 - `profiles.<name>.sql.queries.<query_name>` (relative SQL file path)
@@ -25,12 +25,12 @@ profiles:
 ```
 
 At runtime bundle mounts `./configs` to `/app/configs` and app reads
-`PORTAL_CONFIG_PATH=/app/configs/portal.yml`.
+`PORTAL_CONFIG_PATH=/app/configs/portal.yml (или configs/portal/portal.yml)`.
 
 ## Override workflow
 
 1. Edit SQL files under `configs/sql/`.
-2. If needed, remap query filenames in `configs/portal.yml`.
+2. If needed, remap query filenames in `configs/portal.yml (или configs/portal/portal.yml)`.
 3. Restart web service:
 
 ```bash

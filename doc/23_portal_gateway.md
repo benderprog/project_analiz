@@ -7,7 +7,7 @@
 
 ## Переключение backend
 
-В `configs/portal.yml` (или `configs/portal.example.yml`) используется секция:
+В `configs/portal/portal.yml` (или `configs/portal.yml` / `configs/portal.example.yml`) используется секция:
 
 ```yaml
 gateway:

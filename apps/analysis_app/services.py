@@ -38,6 +38,13 @@ MATCH_TIME_DELTA_MINUTES = 30
 MATCH_STAGE_SUBDIVISION_LIMIT = 500
 MATCH_STAGE_TIME_LIMIT = 500
 
+def _to_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.utc)
+    return dt.astimezone(timezone.utc)
+
 
 @dataclass
 class ExtractedAttributes:
@@ -174,7 +181,7 @@ def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
 
     dt, time_found = _extract_datetime_regex(text)
     if dt is not None:
-        aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        aware_dt = _to_utc(dt)
         return aware_dt, time_found
 
     extractor = DatesExtractor(_get_morph())
@@ -185,7 +192,7 @@ def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
     if dt is None:
         return None, False
     time_found = dt.time() != time(0, 0)
-    aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    aware_dt = _to_utc(dt)
     return aware_dt, time_found
 
 
@@ -625,11 +632,11 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 def _select_event_by_subdivision_time(
     subdivision_id: str, target_dt: datetime
 ) -> tuple[HydratedEvent | None, int | None]:
-    target_local = to_local_naive(target_dt)
-    if target_local is None:
+    target_utc = _to_utc(target_dt)
+    if target_utc is None:
         return None, None
-    date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_from = target_utc - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_to = target_utc + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     gateway = get_portal_gateway()
     events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, MATCH_STAGE_SUBDIVISION_LIMIT)
     candidates = [
@@ -646,11 +653,11 @@ def _select_event_by_subdivision_time(
         return None, None
     closest = min(
         candidates,
-        key=lambda event: abs(to_local_naive(event.date_detection) - target_local),
+        key=lambda event: abs(_to_utc(event.date_detection) - target_utc),
     )
     delta_minutes = int(
         abs(
-            to_local_naive(closest.date_detection) - target_local
+            _to_utc(closest.date_detection) - target_utc
         ).total_seconds()
         / 60
     )
@@ -664,7 +671,7 @@ def _build_subdivision_offender_candidates(
     subdivision_id: str, extracted_offenders: list[dict], target_dt: datetime | None
 ) -> list[dict]:
     gateway = get_portal_gateway()
-    anchor_dt = target_dt or timezone.now()
+    anchor_dt = _to_utc(target_dt) or timezone.now().astimezone(timezone.utc)
     events = gateway.search_events_by_time(
         anchor_dt - timedelta(days=36500),
         anchor_dt + timedelta(days=36500),
@@ -682,6 +689,7 @@ def _build_subdivision_offender_candidates(
         if str(e.subdivision_id) == str(subdivision_id)
     ]
     candidates = _hydrate_events_with_offenders(candidates)
+    target_utc = _to_utc(target_dt) if target_dt else None
     if not candidates or not extracted_offenders:
         return []
     scored_candidates = []
@@ -691,11 +699,10 @@ def _build_subdivision_offender_candidates(
         if overlap < 1:
             continue
         delta_minutes = None
-        if target_dt:
-            target_local = to_local_naive(target_dt)
-            event_local = to_local_naive(event.event.date_detection)
-            if target_local and event_local:
-                delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
+        if target_utc:
+            event_dt_utc = _to_utc(event.event.date_detection)
+            if event_dt_utc:
+                delta_minutes = int(abs(event_dt_utc - target_utc).total_seconds() / 60)
         scored_candidates.append(
             {"event": event, "overlap": overlap, "delta_minutes": delta_minutes}
         )
@@ -705,11 +712,11 @@ def _build_subdivision_offender_candidates(
 def _build_time_offender_candidates(
     target_dt: datetime, extracted_offenders: list[dict]
 ) -> list[dict]:
-    target_local = to_local_naive(target_dt)
-    if target_local is None:
+    target_utc = _to_utc(target_dt)
+    if target_utc is None:
         return []
-    date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_from = target_utc - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_to = target_utc + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     gateway = get_portal_gateway()
     events = gateway.search_events_by_time(date_from, date_to, MATCH_STAGE_TIME_LIMIT)
     candidates = [
@@ -723,6 +730,7 @@ def _build_time_offender_candidates(
         for e in events
     ]
     candidates = _hydrate_events_with_offenders(candidates)
+    target_utc = _to_utc(target_dt) if target_dt else None
     if not candidates or not extracted_offenders:
         return []
     scored_candidates = []
@@ -731,10 +739,10 @@ def _build_time_offender_candidates(
         overlap = counts["matched"]
         if overlap < 1:
             continue
-        event_local = to_local_naive(event.event.date_detection)
-        if not event_local:
+        event_dt_utc = _to_utc(event.event.date_detection)
+        if not event_dt_utc:
             continue
-        delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
+        delta_minutes = int(abs(event_dt_utc - target_utc).total_seconds() / 60)
         scored_candidates.append(
             {"event": event, "overlap": overlap, "delta_minutes": delta_minutes}
         )
@@ -744,11 +752,11 @@ def _build_time_offender_candidates(
 def _build_subdivision_time_candidates(
     subdivision_id: str, target_dt: datetime
 ) -> list[dict]:
-    target_local = to_local_naive(target_dt)
-    if target_local is None:
+    target_utc = _to_utc(target_dt)
+    if target_utc is None:
         return []
-    date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_from = target_utc - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_to = target_utc + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     gateway = get_portal_gateway()
     events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, MATCH_STAGE_SUBDIVISION_LIMIT)
     candidates = [
@@ -763,10 +771,10 @@ def _build_subdivision_time_candidates(
     ]
     scored_candidates = []
     for event in candidates:
-        event_local = to_local_naive(event.date_detection)
-        if not event_local:
+        event_dt_utc = _to_utc(event.date_detection)
+        if not event_dt_utc:
             continue
-        delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
+        delta_minutes = int(abs(event_dt_utc - target_utc).total_seconds() / 60)
         if delta_minutes <= MATCH_TIME_DELTA_MINUTES:
             scored_candidates.append({"event": event, "delta_minutes": delta_minutes})
     return scored_candidates

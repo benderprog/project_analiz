@@ -103,4 +103,9 @@ class SQLPortalGatewayTests(SimpleTestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].event_id, event_id)
-        cursor.execute.assert_called_once()
+        self.assertEqual(cursor.execute.call_count, 2)
+        first_call = cursor.execute.call_args_list[0].args[0]
+        second_call_params = cursor.execute.call_args_list[1].args[1]
+        self.assertIn("SET TIME ZONE", first_call)
+        self.assertIn("from_ts", second_call_params)
+        self.assertIn("to_ts", second_call_params)

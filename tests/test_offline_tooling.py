@@ -51,3 +51,13 @@ def test_offline_script_help():
     assert "restore" in result.stdout
     assert "ps" in result.stdout
     assert "logs" in result.stdout
+
+
+
+def test_offline_bundle_writes_portal_nested_config_and_sql_paths():
+    script_path = REPO_ROOT / "scripts" / "offline" / "offline.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "portal/portal.yml" in content
+    assert "configs/portal/sql" in content
+    assert "PORTAL_CONFIG_PATH=/app/configs/portal.yml" in content

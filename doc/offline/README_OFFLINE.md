@@ -71,7 +71,7 @@ bash scripts/offline/offline.sh down
 - `artifacts/` docker image tar files
 - `compose/` compose.yml + .env
 - `scripts/offline/` offline CLI
-- `configs/portal.yml` + `configs/sql/*.sql`
+- `configs/portal.yml` (и/или `configs/portal/portal.yml`) + `configs/portal/sql/*.sql`
 - `db_dumps/app_db.dump`, `db_dumps/portal_db_test.dump`
 - `models/` (if built with `--with-model`)
 - `doc/` copied documentation set

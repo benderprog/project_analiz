@@ -70,15 +70,18 @@ class PortalConfigTests(SimpleTestCase):
             root = Path(tmpdir)
             configs_dir = root / "configs"
             configs_dir.mkdir(parents=True)
+            preferred_nested = configs_dir / "portal" / "portal.yml"
             preferred = configs_dir / "portal.yml"
             fallback = configs_dir / "portal.example.yml"
+            preferred_nested.parent.mkdir(parents=True)
+            preferred_nested.write_text("profiles: {}\n", encoding="utf-8")
             preferred.write_text("profiles: {}\n", encoding="utf-8")
             fallback.write_text("profiles: {}\n", encoding="utf-8")
 
             os.environ.pop("PORTAL_CONFIG_PATH", None)
             resolved, warning = resolve_portal_config_path(project_root=root)
 
-            self.assertEqual(resolved, preferred.resolve())
+            self.assertEqual(resolved, preferred_nested.resolve())
             self.assertIsNone(warning)
 
     def test_sql_registry_resolves_configs_base_dir(self):
@@ -98,25 +101,23 @@ class PortalConfigTests(SimpleTestCase):
 
             self.assertIn("select pu_id", registry.get_sql("list_pus"))
 
-    def test_sql_registry_fallback_to_old_apps_path(self):
+    def test_sql_registry_uses_portal_config_dir_as_base(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            old_sql_dir = root / "apps" / "portaldb" / "sql" / "pu"
+            old_sql_dir = root / "configs" / "portal" / "sql" / "pu"
             old_sql_dir.mkdir(parents=True)
             query_path = old_sql_dir / "list_pus.sql"
-            query_path.write_text("select legacy from pu;", encoding="utf-8")
+            query_path.write_text("select preferred from pu;", encoding="utf-8")
 
             registry = SQLRegistry(
                 queries={"list_pus": "pu/list_pus.sql"},
-                base_dir="configs/portal/sql",
-                fallback_dirs=[
-                    root / "configs" / "portal" / "sql",
-                    root / "apps" / "portaldb" / "sql",
-                ],
+                base_dir=str(root / "configs" / "portal" / "sql"),
+                fallback_dirs=[],
                 project_root=root,
+                profile="dev",
             )
 
-            self.assertIn("select legacy", registry.get_sql("list_pus"))
+            self.assertIn("select preferred", registry.get_sql("list_pus"))
 
     def test_portal_config_info_command(self):
         fixture_path = Path(__file__).parent / "fixtures" / "portal_config.yml"

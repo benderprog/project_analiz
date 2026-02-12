@@ -14,7 +14,7 @@ configs/portal.yml
 configs/portal.example.yml
 ```
 
-Если `PORTAL_CONFIG_PATH` не задан, приложение сначала ищет `configs/portal.yml`, затем `configs/portal.example.yml` (с предупреждением).
+Если `PORTAL_CONFIG_PATH` не задан, приложение сначала ищет `configs/portal/portal.yml`, затем `configs/portal.yml`, затем `configs/portal.example.yml` (с предупреждением).
 
 ## Где хранить YAML для закрытого контура
 
@@ -77,7 +77,7 @@ configs/portal/sql/
 ## Проверка конфигурации
 
 ```
-# без PORTAL_CONFIG_PATH будет выбран configs/portal.yml (если есть)
+# без PORTAL_CONFIG_PATH будет выбран configs/portal/portal.yml (если есть)
 python manage.py portal_config_info
 
 # явный путь
