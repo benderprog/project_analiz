@@ -4,10 +4,17 @@ from datetime import datetime
 from uuid import UUID
 
 from django.db import connections
+from django.utils import timezone
 
 from apps.portaldb.sql_registry import get_sql_registry
 
 from .dtos import EventDTO, OffenderDTO, PuDTO, SubdivisionDTO
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class SQLPortalGateway:
@@ -20,6 +27,7 @@ class SQLPortalGateway:
         registry = self.sql_registry or get_sql_registry()
         sql = registry.get_sql(query_name)
         with connections[self.alias].cursor() as cursor:
+            cursor.execute("SET TIME ZONE 'UTC'")
             cursor.execute(sql, params)
             columns = [col[0] for col in cursor.description]
             return [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
@@ -41,8 +49,8 @@ class SQLPortalGateway:
             "search_by_subdivision_time",
             {
                 "subdivision_id": subdivision_id,
-                "date_from": dt_from,
-                "date_to": dt_to,
+                "from_ts": _ensure_utc(dt_from),
+                "to_ts": _ensure_utc(dt_to),
                 "limit": limit,
             },
         )
@@ -56,7 +64,7 @@ class SQLPortalGateway:
     ) -> list[EventDTO]:
         rows = self._fetchall(
             "search_by_time",
-            {"date_from": dt_from, "date_to": dt_to, "limit": limit},
+            {"from_ts": _ensure_utc(dt_from), "to_ts": _ensure_utc(dt_to), "limit": limit},
         )
         return [EventDTO(**row) for row in rows]
 

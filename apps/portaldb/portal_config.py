@@ -27,8 +27,11 @@ def resolve_portal_config_path(project_root=None):
             raise FileNotFoundError(f"Portal config not found at {path.resolve()}.")
         return path.resolve(), None
 
+    preferred_nested = root / "configs" / "portal" / "portal.yml"
     preferred = root / "configs" / "portal.yml"
     example = root / "configs" / "portal.example.yml"
+    if preferred_nested.exists():
+        return preferred_nested.resolve(), None
     if preferred.exists():
         return preferred.resolve(), None
     if example.exists():
@@ -40,7 +43,7 @@ def resolve_portal_config_path(project_root=None):
 
     raise FileNotFoundError(
         "Portal config not found. Tried: "
-        f"{preferred.resolve()} and {example.resolve()}."
+        f"{preferred_nested.resolve()}, {preferred.resolve()} and {example.resolve()}."
     )
 
 

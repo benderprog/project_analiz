@@ -127,9 +127,19 @@ bundle_cmd() {
   mkdir -p "${compose_dir}" "${artifacts_dir}" "${doc_dir}" "${scripts_dir}" "${configs_dir}" "${dumps_dir}"
 
   cp "${REPO_ROOT}/docker/offline/compose.yml" "${compose_dir}/compose.yml"
+  local portal_backend="${PORTAL_GATEWAY_BACKEND:-sql}"
+  local sql_source_dir="${REPO_ROOT}/configs/portal/sql"
+  [[ -f "${REPO_ROOT}/configs/portal.offline.yml" ]] || die "Missing portal config template: configs/portal.offline.yml"
   cp "${REPO_ROOT}/configs/portal.offline.yml" "${configs_dir}/portal.yml"
-  mkdir -p "${configs_dir}/sql"
-  cp -a "${REPO_ROOT}/configs/portal/sql/." "${configs_dir}/sql/"
+  mkdir -p "${configs_dir}/portal"
+  cp "${REPO_ROOT}/configs/portal.offline.yml" "${configs_dir}/portal/portal.yml"
+  if [[ "${portal_backend}" == "sql" && ! -d "${sql_source_dir}" ]]; then
+    die "PORTAL_GATEWAY_BACKEND=sql requires ${sql_source_dir} to exist for bundling."
+  fi
+  mkdir -p "${configs_dir}/portal/sql"
+  if [[ -d "${sql_source_dir}" ]]; then
+    cp -a "${sql_source_dir}/." "${configs_dir}/portal/sql/"
+  fi
 
   cp "${REPO_ROOT}/scripts/offline/offline.sh" "${scripts_dir}/offline.sh"
   cp "${REPO_ROOT}/scripts/offline/_lib.sh" "${scripts_dir}/_lib.sh"

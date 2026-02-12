@@ -3,10 +3,12 @@ version: "3.9"
 services:
   db_app:
     image: postgres:15
+    command: ["postgres", "-c", "timezone=UTC"]
     environment:
       POSTGRES_DB: ${APP_DB_NAME}
       POSTGRES_USER: ${APP_DB_USER}
       POSTGRES_PASSWORD: ${APP_DB_PASSWORD}
+      TZ: UTC
     volumes:
       - app_db_data:/var/lib/postgresql/data
     healthcheck:
@@ -17,10 +19,12 @@ services:
 
   portal_db_test:
     image: postgres:15
+    command: ["postgres", "-c", "timezone=UTC"]
     environment:
       POSTGRES_DB: ${PORTAL_DB_NAME}
       POSTGRES_USER: ${PORTAL_DB_USER}
       POSTGRES_PASSWORD: ${PORTAL_DB_PASSWORD}
+      TZ: UTC
     volumes:
       - portal_db_data:/var/lib/postgresql/data
     healthcheck:
