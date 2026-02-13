@@ -16,7 +16,7 @@ from apps.analysis_app.services import (
     match_event,
     match_offenders,
 )
-from apps.analysis_app.views import _build_offender_report, _format_offenders
+from apps.analysis_app.views import _build_highlighted_html, _build_offender_report, _format_offenders
 from apps.portaldb.gateway.dtos import EventDTO
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
@@ -964,3 +964,37 @@ class Stage4OffenderFallbackTests(TestCase):
         self.assertEqual(result["offenders_counts"]["portal_total"], 2)
         self.assertGreaterEqual(result["offenders_counts"]["matched"], 1)
         self.assertGreater(result["debug"]["stage4_offenders"], 0)
+
+
+class HighlightedHtmlOffenderStatusTests(TestCase):
+    def test_build_highlighted_html_uses_span_status_for_name_and_dob(self):
+        text = "Иванов Иван Иванович 1980 г.р.; Петров Петр Петрович 01.01.1990"
+        extracted = {
+            "offenders": [
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "span": [0, 20],
+                    "dob_span": [21, 31],
+                },
+                {
+                    "full_name": "Петров Петр Петрович",
+                    "span": [32, 52],
+                    "dob_span": [53, 63],
+                },
+            ]
+        }
+        match_result = {
+            "offender_matches": {
+                "svodka_status_by_span": {
+                    "0:20": "warn",
+                    "32:52": "err",
+                }
+            }
+        }
+
+        html = _build_highlighted_html(text, extracted, match_result)
+
+        self.assertIn('<span class="hl hl-yellow">Иванов Иван Иванович</span>', html)
+        self.assertIn('<span class="hl hl-yellow">1980 г.р.;</span>', html)
+        self.assertIn('<span class="hl hl-red">Петров Петр Петрович</span>', html)
+        self.assertIn('<span class="hl hl-red">01.01.1990</span>', html)

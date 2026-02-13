@@ -258,15 +258,15 @@ body {
   display: inline-block;
 }
 
-.offender-item-ok .offender-marker {
+.offender-marker.hl-green {
   background: #2e7d32;
 }
 
-.offender-item-warn .offender-marker {
+.offender-marker.hl-yellow {
   background: #f9a825;
 }
 
-.offender-item-err .offender-marker {
+.offender-marker.hl-red {
   background: #c62828;
 }
 

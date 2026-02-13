@@ -613,14 +613,7 @@ def _status_key_for_svodka_offender(offender: dict) -> str:
         return f"{int(span[0])}:{int(span[1])}"
     if isinstance(span, tuple) and len(span) == 2:
         return f"{int(span[0])}:{int(span[1])}"
-    full_name = " ".join(str(offender.get("full_name") or "").lower().split())
-    birth_year = offender.get("birth_year")
-    birth_date = offender.get("birth_date")
-    if not birth_year and isinstance(birth_date, str) and len(birth_date) >= 4:
-        birth_year = birth_date[:4]
-    elif not birth_year and hasattr(birth_date, "year"):
-        birth_year = birth_date.year
-    return f"fio:{full_name}|year:{birth_year or ''}"
+    return ""
 
 
 def _is_year_only_birth_date(value) -> bool:
@@ -683,11 +676,15 @@ def match_offenders(
 
     status_by_key: dict[str, str] = {}
     for missing in matches["missing_in_portal"]:
-        status_by_key[_status_key_for_svodka_offender(missing)] = "err"
+        key = _status_key_for_svodka_offender(missing)
+        if key:
+            status_by_key[key] = "err"
 
     for mismatch in matches["dob_mismatch_pairs"]:
         svodka_offender = mismatch.get("svodka_offender") or {}
         key = _status_key_for_svodka_offender(svodka_offender)
+        if not key:
+            continue
         if status_by_key.get(key) != "err":
             status_by_key[key] = "warn"
 
@@ -695,6 +692,8 @@ def match_offenders(
         svodka_offender = pair.get("svodka_offender") or {}
         portal_offender = pair.get("portal_offender") or {}
         key = _status_key_for_svodka_offender(svodka_offender)
+        if not key:
+            continue
         if status_by_key.get(key) in {"err", "warn"}:
             continue
         svodka_birth_date = svodka_offender.get("birth_date")

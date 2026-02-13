@@ -127,8 +127,8 @@
                 {% if selected_event.extracted.offenders %}
                   <ul>
                     {% for offender in selected_event.extracted.offenders %}
-                      <li class="offender-item offender-item-{{ offender.status|default:'warn' }}">
-                        <span class="offender-marker" aria-hidden="true"></span>{{ offender.text }}
+                      <li class="offender-item">
+                        <span class="offender-marker {{ offender.status_css|default:'hl-yellow' }}" aria-hidden="true"></span>{{ offender.text }}
                       </li>
                     {% endfor %}
                   </ul>
@@ -276,8 +276,8 @@
       return `<ul>${items
         .map((item) => {
           if (typeof item === "object" && item !== null && "text" in item) {
-            const status = item.status || "warn";
-            return `<li class="offender-item offender-item-${escapeHtml(status)}"><span class="offender-marker" aria-hidden="true"></span>${escapeHtml(item.text || "")}</li>`;
+            const statusCss = item.status_css || "hl-yellow";
+            return `<li class="offender-item"><span class="offender-marker ${escapeHtml(statusCss)}" aria-hidden="true"></span>${escapeHtml(item.text || "")}</li>`;
           }
           return `<li>${escapeHtml(item)}</li>`;
         })
