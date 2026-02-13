@@ -94,13 +94,29 @@ def _build_offender_report(match_result: dict) -> dict:
     details = []
     matches = match_result.get("offender_matches") or {}
 
+    matched_pairs = matches.get("matched_pairs") or []
+    for pair in matched_pairs:
+        discrepancy = pair.get("discrepancy")
+        if not discrepancy:
+            continue
+        svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
+        portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
+        details.append(
+            f"ФИО совпало частично/с ошибкой: {svodka_display} / {portal_display} ({discrepancy})"
+        )
+
     dob_mismatch_pairs = matches.get("dob_mismatch_pairs") or []
     for pair in dob_mismatch_pairs:
         svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
         portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
         details.append(
-            f"ФИО совпало, но ДР отличается: {svodka_display} / {portal_display}"
+            f"Возможное совпадение по ФИО, но ДР отличается: {svodka_display} / {portal_display}"
         )
+
+    ambiguous = matches.get("ambiguous") or []
+    for item in ambiguous:
+        svodka_display = _format_offenders([item.get("svodka_offender")], source="svodka")[0]
+        details.append(f"Неоднозначное совпадение: {svodka_display}")
 
     missing_in_portal = _format_offenders(
         matches.get("missing_in_portal") or [], source="svodka"
@@ -201,19 +217,22 @@ def _build_comments(match_result: dict) -> list[str]:
             comments.append(_locality_mismatch_comment(match_result))
         debug_meta = match_result.get("debug") or {}
         if debug_meta:
-            top_overlaps = debug_meta.get("top_overlaps") or {}
+            stage_counts = ", ".join(
+                f"{item.get('stage')}={item.get('count', 0)}"
+                for item in (debug_meta.get("candidate_stages") or [])
+            ) or "—"
             comments.append(
                 "Отладка подбора: "
-                f"A={debug_meta.get('candidates_A', 0)}, "
-                f"C={debug_meta.get('candidates_C', 0)}, "
-                f"B={debug_meta.get('candidates_B', 0)}; "
+                f"candidates={debug_meta.get('candidates_total', 0)}; "
                 "subdivision candidates "
                 f"total={debug_meta.get('subdivision_candidates_total', 0)}, "
                 f"after PU={debug_meta.get('subdivision_candidates_after_pu_filter', 0)}, "
                 f"fallback={debug_meta.get('pu_filter_fallback_used', False)}, "
                 f"pu={debug_meta.get('selected_pu_id') or '—'}; "
-                f"overlap C={top_overlaps.get('stage_c', 0)}, "
-                f"B={top_overlaps.get('stage_b', 0)}; "
+                f"stage1 score={debug_meta.get('stage1_best_score', 0)}/"
+                f"{debug_meta.get('score_threshold', 2)}, "
+                f"high_conf={debug_meta.get('subdivision_confidence_high', False)}, "
+                f"stages: {stage_counts}; "
                 f"method={debug_meta.get('chosen_method') or '—'}."
             )
         return comments
@@ -233,6 +252,16 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Тип события отличается от классификации.")
     if "article_of_law" in diffs:
         comments.append("Статья закона отличается от классификации.")
+    if match_result.get("time_mismatch"):
+        date_diff = (diffs.get("date_time") or {})
+        if date_diff.get("message"):
+            comments.append(date_diff["message"])
+        if date_diff.get("delta_minutes") is not None:
+            comments.append(
+                f"Δ времени: {date_diff['delta_minutes']} мин. "
+                f"Извлечено: {date_diff.get('extracted') or '—'}, "
+                f"портал: {date_diff.get('portal') or '—'}."
+            )
     offender_report = _build_offender_report(match_result)
     if offender_report.get("summary"):
         comments.append(f"{offender_report['summary']}.")

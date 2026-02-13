@@ -5,6 +5,6 @@ select
   e.event_type,
   e.article_of_law
 from event e
-where e.date_detection between %(date_from)s and %(date_to)s
+where e.date_detection between %(from_ts)s::timestamptz and %(to_ts)s::timestamptz
 order by e.date_detection desc
 limit %(limit)s;

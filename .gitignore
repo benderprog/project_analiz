@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local fixture inputs (must not be committed)
+fixtures/*.xlsx
+fixtures/*.docx
+
+# Release/offline artifacts
+release/
+*.tar
+*.tar.zst
+*.zst
+assets/models/
+wheelhouse/
+dist/
+models/
+# Database dump artifacts
+*.dump
+db_dumps/

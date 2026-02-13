@@ -5,8 +5,7 @@ import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
-from difflib import SequenceMatcher
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from functools import lru_cache
 from uuid import UUID
 
@@ -17,15 +16,18 @@ from django.utils.safestring import SafeString, mark_safe
 from apps.classifier.models import EventTypePattern
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
-from apps.analysis_app.utils.offender_format import (
-    normalize_name_key,
-    portal_offender_fullname,
-    svodka_offender_fullname,
-)
+from apps.analysis_app.utils.offender_format import portal_offender_fullname, svodka_offender_fullname
 from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
 from apps.portaldb.gateway.factory import get_portal_gateway
 
-from .offender_extractor import extract_offenders, normalize_name_part
+from .offender_extractor import extract_offenders
+from .offenders.matching import (
+    match_offenders_with_details,
+    mention_to_dict,
+    portal_to_dict,
+    split_mentions_by_employee_context,
+)
+from .offenders.types import OffenderMention, PortalOffender
 from .semantic import get_sentence_model
 from .subdivision_matcher import (
     SUBDIVISION_MATCH_THRESHOLD,
@@ -180,7 +182,7 @@ def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
 
     dt, time_found = _extract_datetime_regex(text)
     if dt is not None:
-        aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        aware_dt = _to_utc(dt)
         return aware_dt, time_found
 
     extractor = DatesExtractor(_get_morph())
@@ -191,7 +193,7 @@ def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
     if dt is None:
         return None, False
     time_found = dt.time() != time(0, 0)
-    aware_dt = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    aware_dt = _to_utc(dt)
     return aware_dt, time_found
 
 
@@ -328,20 +330,6 @@ def extract_attributes(
     )
 
 
-def _offender_similarity(text_a: str, text_b: str) -> float:
-    try:
-        model = get_sentence_model()
-    except RuntimeError as exc:
-        logger.info("Semantic model unavailable, falling back to sequence match: %s", exc)
-        model = None
-    if model:
-        embeddings = model.encode([text_a, text_b])
-        similarity = float(
-            (embeddings[0] @ embeddings[1])
-            / (sum(embeddings[0] ** 2) ** 0.5 * sum(embeddings[1] ** 2) ** 0.5)
-        )
-        return similarity
-    return SequenceMatcher(None, text_a, text_b).ratio()
 
 
 def dob_matches(date_a: date | None, date_b: date | None) -> bool:
@@ -373,206 +361,97 @@ def _candidate_birth_date(candidate: dict) -> date | None:
     return None
 
 
-def _extract_name_parts(offender: dict) -> tuple[str, str, str]:
-    last = normalize_name_part(offender.get("second_name"))
-    first = normalize_name_part(offender.get("first_name"))
-    middle = normalize_name_part(offender.get("patronymic_name"))
-    if not last or not first:
-        full_name = offender.get("full_name") or ""
-        parts = [normalize_name_part(part) for part in full_name.split()]
-        if len(parts) >= 2:
-            last = last or parts[0]
-            first = first or parts[1]
-            if len(parts) >= 3:
-                middle = middle or parts[2]
-    return last, first, middle
-
-
-def _name_matches(candidate: dict, offender: OffenderDTO) -> bool:
-    candidate_key = normalize_name_key(svodka_offender_fullname(candidate))
-    portal_key = normalize_name_key(portal_offender_fullname(offender))
-    if not candidate_key or not portal_key:
-        return False
-    return candidate_key == portal_key
-
-
-def _portal_offender_payload(offender: OffenderDTO) -> dict:
-    birth_date = offender.date_of_birth
-    if birth_date == DEFAULT_DOB:
-        birth_date = None
-    return {
-        "full_name": portal_offender_fullname(offender),
-        "second_name": offender.second_name,
-        "first_name": offender.first_name,
-        "patronymic_name": offender.patronymic_name,
-        "birth_year": birth_date.year if birth_date else None,
-        "birth_date": date_to_str(birth_date),
-    }
-
-
 def _portal_offenders(event: HydratedEvent) -> list[OffenderDTO]:
     return list(event.offenders)
 
 
+def _mention_from_dict(candidate: dict) -> OffenderMention:
+    birth_date = _candidate_birth_date(candidate)
+    span = candidate.get("span")
+    if isinstance(span, list):
+        span = tuple(span)
+    if not isinstance(span, tuple) or len(span) != 2:
+        span = None
+    return OffenderMention(
+        full_name=candidate.get("full_name") or svodka_offender_fullname(candidate),
+        second_name=candidate.get("second_name") or "",
+        first_name=candidate.get("first_name") or "",
+        patronymic_name=candidate.get("patronymic_name") or "",
+        birth_date=birth_date,
+        birth_year=(birth_date.year if birth_date else candidate.get("birth_year")),
+        span=span,
+        source=candidate.get("source") or "unknown",
+        surface_text=candidate.get("surface_text") or candidate.get("full_name") or "",
+    )
+
+
+def _portal_offender_to_model(offender: OffenderDTO) -> PortalOffender:
+    birth_date = offender.date_of_birth
+    if birth_date == DEFAULT_DOB:
+        birth_date = None
+    return PortalOffender(
+        full_name=portal_offender_fullname(offender),
+        second_name=offender.second_name or "",
+        first_name=offender.first_name or "",
+        patronymic_name=offender.patronymic_name or "",
+        birth_date=birth_date,
+    )
+
+
+def _portal_offender_payload(offender: OffenderDTO) -> dict:
+    model = _portal_offender_to_model(offender)
+    return portal_to_dict(model)
+
+
 def match_offenders(
-    extracted: list[dict], portal_offenders: list[OffenderDTO]
+    extracted: list[dict], portal_offenders: list[OffenderDTO], text: str = ""
 ) -> tuple[float, dict, dict]:
+    mentions = [_mention_from_dict(item) for item in extracted]
+    eligible, excluded = split_mentions_by_employee_context(text, mentions)
+    portal_models = [_portal_offender_to_model(item) for item in portal_offenders]
+    result = match_offenders_with_details(eligible, excluded, portal_models)
+
     counts = {
-        "matched": 0,
-        "portal_total": len(portal_offenders),
+        "matched": len(result.matched_pairs),
+        "portal_total": len(portal_models),
         "svodka_total": len(extracted),
-        "dob_mismatch": 0,
-        "missing_in_portal": 0,
-        "missing_in_svodka": 0,
+        "dob_mismatch": len(result.possible_matches),
+        "missing_in_portal": len(result.missing_in_portal),
+        "missing_in_svodka": len(result.missing_in_summary),
+        "ambiguous": len(result.ambiguous_mentions),
     }
-
-    def is_year_only(dob: date | None) -> bool:
-        return bool(dob and dob != DEFAULT_DOB and dob.month == 1 and dob.day == 1)
-
-    def is_full_dob(dob: date | None) -> bool:
-        return bool(dob and dob != DEFAULT_DOB and not is_year_only(dob))
-
-    def offender_key_from_candidate(candidate: dict) -> str:
-        return normalize_name_key(svodka_offender_fullname(candidate))
-
-    def offender_key_from_portal(offender: OffenderDTO) -> str:
-        return normalize_name_key(portal_offender_fullname(offender))
-
-    candidate_records = []
-    for idx, candidate in enumerate(extracted):
-        dob = _candidate_birth_date(candidate)
-        if dob == DEFAULT_DOB:
-            dob = None
-        candidate_records.append(
-            {
-                "idx": idx,
-                "offender": candidate,
-                "key": offender_key_from_candidate(candidate) or f"__missing_candidate_{idx}",
-                "dob": dob,
-            }
-        )
-
-    portal_records = []
-    for idx, offender in enumerate(portal_offenders):
-        dob = offender.date_of_birth
-        if dob == DEFAULT_DOB:
-            dob = None
-        portal_records.append(
-            {
-                "idx": idx,
-                "offender": offender,
-                "key": offender_key_from_portal(offender) or f"__missing_portal_{idx}",
-                "dob": dob,
-            }
-        )
-
-    candidates_by_key: dict[str, list[dict]] = {}
-    portals_by_key: dict[str, list[dict]] = {}
-    for candidate in candidate_records:
-        candidates_by_key.setdefault(candidate["key"], []).append(candidate)
-    for portal in portal_records:
-        portals_by_key.setdefault(portal["key"], []).append(portal)
-
-    matched_pairs = []
-    dob_mismatch_pairs = []
-    used_candidates: set[int] = set()
-    used_portals: set[int] = set()
-
-    def mark_match(candidate: dict, portal: dict) -> None:
-        used_candidates.add(candidate["idx"])
-        used_portals.add(portal["idx"])
-        matched_pairs.append(
-            {
-                "svodka_offender": offender_to_json(candidate["offender"]),
-                "portal_offender": _portal_offender_payload(portal["offender"]),
-            }
-        )
-
-    def mark_mismatch(candidate: dict, portal: dict) -> None:
-        used_candidates.add(candidate["idx"])
-        used_portals.add(portal["idx"])
-        dob_mismatch_pairs.append(
-            {
-                "svodka_offender": offender_to_json(candidate["offender"]),
-                "portal_offender": _portal_offender_payload(portal["offender"]),
-                "svodka_dob": date_to_str(candidate["dob"]),
-                "portal_dob": date_to_str(portal["dob"]),
-            }
-        )
-
-    for key in set(candidates_by_key) | set(portals_by_key):
-        candidates = [c for c in candidates_by_key.get(key, []) if c["idx"] not in used_candidates]
-        portals = [p for p in portals_by_key.get(key, []) if p["idx"] not in used_portals]
-        if not candidates or not portals:
-            continue
-
-        for portal in portals:
-            if portal["idx"] in used_portals:
-                continue
-            for candidate in candidates:
-                if candidate["idx"] in used_candidates:
-                    continue
-                if candidate["dob"] and portal["dob"] and candidate["dob"] == portal["dob"]:
-                    mark_match(candidate, portal)
-                    break
-
-        for portal in portals:
-            if portal["idx"] in used_portals:
-                continue
-            for candidate in candidates:
-                if candidate["idx"] in used_candidates:
-                    continue
-                if dob_matches(candidate["dob"], portal["dob"]):
-                    mark_match(candidate, portal)
-                    break
-
-    for key in set(candidates_by_key) | set(portals_by_key):
-        candidates = [c for c in candidates_by_key.get(key, []) if c["idx"] not in used_candidates]
-        portals = [p for p in portals_by_key.get(key, []) if p["idx"] not in used_portals]
-        if not candidates or not portals:
-            continue
-        for portal in portals:
-            if portal["idx"] in used_portals:
-                continue
-            if not is_full_dob(portal["dob"]):
-                continue
-            for candidate in candidates:
-                if candidate["idx"] in used_candidates:
-                    continue
-                if not is_full_dob(candidate["dob"]):
-                    continue
-                if candidate["dob"] != portal["dob"]:
-                    mark_mismatch(candidate, portal)
-                    break
-
-    missing_in_portal = [
-        offender_to_json(record["offender"])
-        for record in candidate_records
-        if record["idx"] not in used_candidates
-    ]
-    missing_in_svodka = [
-        _portal_offender_payload(record["offender"])
-        for record in portal_records
-        if record["idx"] not in used_portals
-    ]
-
-    counts["matched"] = len(matched_pairs)
-    counts["dob_mismatch"] = len(dob_mismatch_pairs)
-    counts["missing_in_portal"] = len(missing_in_portal)
-    counts["missing_in_svodka"] = len(missing_in_svodka)
-
     score = counts["matched"] / counts["portal_total"] if counts["portal_total"] else 0.0
 
-    return (
-        score,
-        counts,
-        {
-            "matched_pairs": matched_pairs,
-            "dob_mismatch_pairs": dob_mismatch_pairs,
-            "missing_in_portal": missing_in_portal,
-            "missing_in_svodka": missing_in_svodka,
-        },
-    )
+    matches = {
+        "matched_pairs": [
+            {
+                "svodka_offender": mention_to_dict(pair.mention),
+                "portal_offender": portal_to_dict(pair.portal),
+                "match_type": pair.match_type,
+                "discrepancy": pair.discrepancy,
+            }
+            for pair in result.matched_pairs
+        ],
+        "dob_mismatch_pairs": [
+            {
+                "svodka_offender": mention_to_dict(item.mention),
+                "portal_offender": portal_to_dict(item.portal),
+                "reason": item.reason,
+            }
+            for item in result.possible_matches
+        ],
+        "missing_in_portal": [mention_to_dict(item) for item in result.missing_in_portal],
+        "missing_in_svodka": [portal_to_dict(item) for item in result.missing_in_summary],
+        "ambiguous": [
+            {
+                "svodka_offender": mention_to_dict(item.mention),
+                "reason": item.reason,
+            }
+            for item in result.ambiguous_mentions
+        ],
+        "excluded_employee_context": [mention_to_dict(item) for item in excluded],
+    }
+    return score, counts, matches
 
 
 
@@ -631,11 +510,11 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
 def _select_event_by_subdivision_time(
     subdivision_id: str, target_dt: datetime
 ) -> tuple[HydratedEvent | None, int | None]:
-    target_local = to_local_naive(target_dt)
-    if target_local is None:
+    target_utc = _to_utc(target_dt)
+    if target_utc is None:
         return None, None
-    date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_from = target_utc - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+    date_to = target_utc + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
     gateway = get_portal_gateway()
     events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, MATCH_STAGE_SUBDIVISION_LIMIT)
     candidates = [
@@ -652,11 +531,11 @@ def _select_event_by_subdivision_time(
         return None, None
     closest = min(
         candidates,
-        key=lambda event: abs(to_local_naive(event.date_detection) - target_local),
+        key=lambda event: abs(_to_utc(event.date_detection) - target_utc),
     )
     delta_minutes = int(
         abs(
-            to_local_naive(closest.date_detection) - target_local
+            _to_utc(closest.date_detection) - target_utc
         ).total_seconds()
         / 60
     )
@@ -666,59 +545,32 @@ def _select_event_by_subdivision_time(
     return (hydrated[0] if hydrated else None), delta_minutes
 
 
-def _build_subdivision_offender_candidates(
-    subdivision_id: str, extracted_offenders: list[dict], target_dt: datetime | None
-) -> list[dict]:
-    gateway = get_portal_gateway()
-    anchor_dt = target_dt or timezone.now()
-    events = gateway.search_events_by_time(
-        anchor_dt - timedelta(days=36500),
-        anchor_dt + timedelta(days=36500),
-        MATCH_STAGE_SUBDIVISION_LIMIT,
-    )
-    candidates = [
-        EventDTO(
-            event_id=e.event_id,
-            date_detection=e.date_detection,
-            subdivision_id=e.subdivision_id,
-            event_type=e.event_type,
-            article_of_law=e.article_of_law,
-        )
-        for e in events
-        if str(e.subdivision_id) == str(subdivision_id)
-    ]
-    candidates = _hydrate_events_with_offenders(candidates)
-    if not candidates or not extracted_offenders:
+def _get_events_for_window(
+    *,
+    target_dt: datetime,
+    minutes_window: int | None = None,
+    days_window: int | None = None,
+    subdivision_id: str | None = None,
+    limit: int = MATCH_STAGE_TIME_LIMIT,
+) -> list[EventDTO]:
+    target_utc = _to_utc(target_dt)
+    if target_utc is None:
         return []
-    scored_candidates = []
-    for event in candidates:
-        _, counts, _ = match_offenders(extracted_offenders, _portal_offenders(event))
-        overlap = counts["matched"]
-        if overlap < 1:
-            continue
-        delta_minutes = None
-        if target_dt:
-            target_local = to_local_naive(target_dt)
-            event_local = to_local_naive(event.event.date_detection)
-            if target_local and event_local:
-                delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
-        scored_candidates.append(
-            {"event": event, "overlap": overlap, "delta_minutes": delta_minutes}
-        )
-    return scored_candidates
-
-
-def _build_time_offender_candidates(
-    target_dt: datetime, extracted_offenders: list[dict]
-) -> list[dict]:
-    target_local = to_local_naive(target_dt)
-    if target_local is None:
+    if minutes_window is not None:
+        date_from = target_utc - timedelta(minutes=minutes_window)
+        date_to = target_utc + timedelta(minutes=minutes_window)
+    elif days_window is not None:
+        date_from = target_utc - timedelta(days=days_window)
+        date_to = target_utc + timedelta(days=days_window)
+    else:
         return []
-    date_from = target_local - timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
-    date_to = target_local + timedelta(minutes=MATCH_TIME_DELTA_MINUTES)
+
     gateway = get_portal_gateway()
-    events = gateway.search_events_by_time(date_from, date_to, MATCH_STAGE_TIME_LIMIT)
-    candidates = [
+    if subdivision_id:
+        events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, limit)
+    else:
+        events = gateway.search_events_by_time(date_from, date_to, limit)
+    return [
         EventDTO(
             event_id=e.event_id,
             date_detection=e.date_detection,
@@ -728,23 +580,6 @@ def _build_time_offender_candidates(
         )
         for e in events
     ]
-    candidates = _hydrate_events_with_offenders(candidates)
-    if not candidates or not extracted_offenders:
-        return []
-    scored_candidates = []
-    for event in candidates:
-        _, counts, _ = match_offenders(extracted_offenders, _portal_offenders(event))
-        overlap = counts["matched"]
-        if overlap < 1:
-            continue
-        event_local = to_local_naive(event.event.date_detection)
-        if not event_local:
-            continue
-        delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
-        scored_candidates.append(
-            {"event": event, "overlap": overlap, "delta_minutes": delta_minutes}
-        )
-    return scored_candidates
 
 
 def _build_subdivision_time_candidates(
@@ -922,50 +757,28 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.date_time,
         )
 
-    def _best_by_overlap(candidates: list[dict]) -> dict | None:
-        if not candidates:
-            return None
-        return min(
-            candidates,
-            key=lambda candidate: (
-                -candidate["overlap"],
-                candidate["delta_minutes"] if candidate["delta_minutes"] is not None else 10**9,
-            ),
-        )
-
-    def _best_by_delta(candidates: list[dict]) -> dict | None:
-        if not candidates:
-            return None
-        return min(candidates, key=lambda candidate: candidate["delta_minutes"])
-
-    best_candidate = None
     match_method = None
-    best_delta = None
     best_flags: dict = {}
     time_mismatch = False
     subdivision_mismatch = False
 
-    if candidates_a:
-        best_candidate = _best_by_delta(candidates_a)
-        match_method = "subdivision+time"
-    elif candidates_c:
-        best_candidate = _best_by_overlap(candidates_c)
-        match_method = "time+offenders"
-        subdivision_mismatch = True
+    if best_candidate and best_candidate["flags_true"] >= 2:
+        if best_candidate["date_ok"] and best_candidate["subdivision_ok"]:
+            match_method = "subdivision+time"
+        elif best_candidate["date_ok"] and best_candidate["offenders_ok"]:
+            match_method = "time+offenders"
+            subdivision_mismatch = True
+        elif best_candidate["subdivision_ok"] and best_candidate["offenders_ok"]:
+            match_method = "subdivision+offenders"
+            time_mismatch = True
+
         best_flags = {
-            "date_ok": True,
-            "subdivision_ok": False,
-            "offenders_ok": True,
+            "date_ok": best_candidate["date_ok"],
+            "subdivision_ok": best_candidate["subdivision_ok"],
+            "offenders_ok": best_candidate["offenders_ok"],
         }
-    elif candidates_b:
-        best_candidate = _best_by_overlap(candidates_b)
-        match_method = "subdivision+offenders"
-        time_mismatch = True
-        best_flags = {
-            "date_ok": False,
-            "subdivision_ok": True,
-            "offenders_ok": True,
-        }
+    else:
+        best_event = None
 
     if not best_candidate and attributes.offenders:
         stage4_candidates, stage4_meta = _build_stage4_offender_candidates(
@@ -1002,9 +815,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     top_overlap_c = max((item["overlap"] for item in candidates_c), default=0)
     top_overlap_b = max((item["overlap"] for item in candidates_b), default=0)
     debug_meta = {
-        "candidates_A": len(candidates_a),
-        "candidates_C": len(candidates_c),
-        "candidates_B": len(candidates_b),
+        "candidates_total": len(scored_candidates),
         "subdivision_candidates_total": attributes.subdivision_candidates_total,
         "subdivision_candidates_after_pu_filter": (
             attributes.subdivision_candidates_after_pu_filter
@@ -1013,10 +824,6 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "selected_pu_id": str(attributes.selected_pu_id)
         if attributes.selected_pu_id
         else None,
-        "top_overlaps": {
-            "stage_c": top_overlap_c,
-            "stage_b": top_overlap_b,
-        },
         "chosen_method": match_method,
         "stages": stage_debug,
     }
@@ -1074,7 +881,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
 
     portal_offenders = _portal_offenders(best_event)
     offenders_score, offenders_counts, offender_matches = match_offenders(
-        attributes.offenders, portal_offenders
+        attributes.offenders, portal_offenders, text
     )
     offenders_ok = (
         offenders_counts.get("matched", 0) == offenders_counts.get("portal_total", 0)

@@ -110,7 +110,7 @@ DATABASE_ROUTERS = ["config.db_router.PortalDBRouter"]
 AUTH_PASSWORD_VALIDATORS = []
 
 LANGUAGE_CODE = "ru-ru"
-TIME_ZONE = "Europe/Moscow"
+TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
@@ -123,10 +123,18 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes")
+
+
 SEMANTIC_MODEL_NAME = os.getenv(
     "SEMANTIC_MODEL_NAME", "paraphrase-multilingual-MiniLM-L12-v2"
 )
-SEMANTIC_MODEL_PATH = os.getenv("SEMANTIC_MODEL_PATH")
+SEMANTIC_MODEL_PATH = os.getenv("SEMANTIC_MODEL_PATH", "")
+OFFLINE_MODE = _env_flag("HF_HUB_OFFLINE") or _env_flag("TRANSFORMERS_OFFLINE")
 SKIP_SEMANTIC_MODEL = os.getenv("SKIP_SEMANTIC_MODEL", "false").lower() in (
     "1",
     "true",

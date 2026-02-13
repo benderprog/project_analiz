@@ -1,0 +1,11 @@
+# torch is installed explicitly in the Dockerfile to ensure CPU-only wheels.
+Django>=4.2
+psycopg2-binary>=2.9
+python-docx>=1.1
+natasha>=1.6
+sentence-transformers>=2.2
+openpyxl>=3.1
+python-dotenv>=1.0
+PyYAML>=6.0
+whitenoise>=6.6
+gunicorn>=21.2

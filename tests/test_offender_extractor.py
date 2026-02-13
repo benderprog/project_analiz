@@ -46,3 +46,13 @@ class OffenderExtractorTests(SimpleTestCase):
         names = sorted(offender["full_name"] for offender in offenders)
         self.assertEqual(len(names), 2)
         self.assertEqual(names, ["Климов Андрей Олегович", "Смирнова Мария Сергеевна"])
+
+    def test_extracts_surname_initials_without_dots(self):
+        text = "Холматов Т З 1984 г.р."
+
+        offenders = extract_offenders(text)
+
+        self.assertEqual(len(offenders), 1)
+        self.assertEqual(offenders[0]["second_name"], "Холматов")
+        self.assertEqual(offenders[0]["first_name"], "Т")
+        self.assertEqual(offenders[0]["patronymic_name"], "З")
