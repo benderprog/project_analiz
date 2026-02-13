@@ -1,5 +1,7 @@
+import uuid
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.conf import settings
 from django.template.loader import render_to_string
@@ -10,6 +12,7 @@ from apps.analysis_app.services import (
     DEFAULT_DOB,
     ExtractedAttributes,
     dob_matches,
+    get_event_candidates,
     match_event,
     match_offenders,
 )
@@ -484,3 +487,78 @@ class OffenderReportDeduplicationTests(TestCase):
 
         self.assertEqual(len(report["details"]), 1)
         self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
+
+class StagedCandidateDebugTests(TestCase):
+    def test_stage3_calls_time_only_branch(self):
+        attributes = ExtractedAttributes(
+            date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),
+            time_found=True,
+            subdivision_id=str(uuid.uuid4()),
+            offenders=[],
+            subdivision_name="КПП",
+            subdivision_candidates=[{"score": 1.0, "lexical_strength": "strong"}],
+        )
+
+        with patch("apps.analysis_app.services._get_events_for_window", return_value=[]) as mocked_window, patch(
+            "apps.analysis_app.services._hydrate_events_with_offenders", return_value=[]
+        ):
+            _, meta = get_event_candidates(attributes, text="")
+
+        stages = {item["stage"]: item["count"] for item in meta["stages"]}
+        self.assertIn("stage3_time", stages)
+        self.assertEqual(stages["stage3_time"], 0)
+        called_stage3_time = any(call.kwargs.get("stage_name") == "stage3_time" for call in mocked_window.call_args_list)
+        self.assertTrue(called_stage3_time)
+
+
+class Stage4OffenderFallbackTests(TestCase):
+    databases = {"default", "portal"}
+
+    def test_stage4_finds_event_by_subdivision_and_offenders_when_time_mismatch(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(name='КПП-1 "Ухтомское"', parent_pu=pu)
+        event_dt = timezone.make_aware(datetime(2026, 2, 2, 8, 30), timezone.get_current_timezone())
+        event = Event.objects.using("portal").create(
+            date_detection=event_dt,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Мария",
+            second_name="Смирнова",
+            patronymic_name="Игоревна",
+            date_of_birth=date(1996, 6, 1),
+            event=event,
+        )
+        Offender.objects.using("portal").create(
+            first_name="Андрей",
+            second_name="Климов",
+            patronymic_name="Олегович",
+            date_of_birth=date(1990, 3, 3),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {"full_name": "Смирнова Мария Игоревна", "birth_year": 1996},
+                {"full_name": "Климов Андрей Олегович", "birth_year": 1990},
+            ],
+            subdivision_name=subdivision.name,
+            subdivision_candidates=[{"score": 1.0, "lexical_strength": "strong"}],
+        )
+
+        with patch("apps.analysis_app.services._get_events_for_window", return_value=[]):
+            result = match_event(attributes, "Сводка про нарушение")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["match_method"], "subdivision+offenders")
+        self.assertTrue(result["time_mismatch"])
+        self.assertIn("date_time", result["diffs"])
+        self.assertIn("дата/время отличаются", result["diffs"]["date_time"]["message"])
+        self.assertEqual(result["offenders_counts"]["portal_total"], 2)
+        self.assertGreaterEqual(result["offenders_counts"]["matched"], 1)
+        self.assertGreater(result["debug"]["stage4_offenders"], 0)

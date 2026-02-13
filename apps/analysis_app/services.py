@@ -556,6 +556,8 @@ def _get_events_for_window(
     days_window: int | None = None,
     subdivision_id: str | None = None,
     limit: int = MATCH_STAGE_TIME_LIMIT,
+    debug_stage_log: list[dict] | None = None,
+    stage_name: str | None = None,
 ) -> list[EventDTO]:
     target_utc = _to_utc(target_dt)
     if target_utc is None:
@@ -570,10 +572,25 @@ def _get_events_for_window(
         return []
 
     gateway = get_portal_gateway()
+    method_name = "search_events_by_subdivision_time" if subdivision_id else "search_events_by_time"
     if subdivision_id:
         events = gateway.search_events_by_subdivision_time(subdivision_id, date_from, date_to, limit)
     else:
         events = gateway.search_events_by_time(date_from, date_to, limit)
+
+    if debug_stage_log is not None:
+        debug_stage_log.append(
+            {
+                "stage": stage_name,
+                "method": method_name,
+                "extracted_dt": format_dt_dmy_hm(target_utc),
+                "time_from": date_from.isoformat(),
+                "time_to": date_to.isoformat(),
+                "subdivision_ids": [str(subdivision_id)] if subdivision_id else [],
+                "rows": len(events),
+            }
+        )
+
     return [
         EventDTO(
             event_id=e.event_id,
@@ -616,7 +633,70 @@ def _score_event_candidate(event: HydratedEvent, attributes: ExtractedAttributes
     }
 
 
-def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = None) -> tuple[list[dict], dict]:
+def _stage4_candidates_by_offenders(
+    attributes: ExtractedAttributes,
+    text: str,
+    subdivision_confidence_high: bool,
+    limit: int = 200,
+) -> tuple[list[EventDTO], list[dict]]:
+    gateway = get_portal_gateway()
+    stage4_events: dict[str, EventDTO] = {}
+    debug_queries: list[dict] = []
+
+    mentions = [_mention_from_dict(item) for item in attributes.offenders]
+    eligible_mentions, _ = split_mentions_by_employee_context(text, mentions)
+    offenders = [
+        {
+            "second_name": mention.second_name,
+            "full_name": mention.full_name,
+            "birth_date": mention.birth_date,
+            "birth_year": mention.birth_year,
+        }
+        for mention in eligible_mentions
+    ]
+
+    for offender in offenders:
+        surname = (offender.get("second_name") or "").strip()
+        if not surname:
+            full_name = (offender.get("full_name") or "").strip()
+            if full_name:
+                surname = full_name.split()[0]
+        if not surname:
+            continue
+
+        birth_date = offender.get("birth_date") or _candidate_birth_date(offender)
+        birth_year = offender.get("birth_year")
+        subdivision_id = attributes.subdivision_id if subdivision_confidence_high else None
+        method_name = (
+            "search_events_by_offender_subdivision"
+            if subdivision_id
+            else "search_events_by_offender"
+        )
+        events = gateway.search_events_by_offender(
+            second_name=surname,
+            birth_date=birth_date,
+            birth_year=birth_year,
+            subdivision_id=subdivision_id,
+            limit=limit,
+        )
+        debug_queries.append(
+            {
+                "stage": "stage4_offenders",
+                "method": method_name,
+                "surname": surname,
+                "birth_date": date_to_str(birth_date) if birth_date else None,
+                "birth_year": birth_year,
+                "subdivision_ids": [str(subdivision_id)] if subdivision_id else [],
+                "rows": len(events),
+            }
+        )
+        for event in events:
+            stage4_events[str(event.event_id)] = event
+
+    return list(stage4_events.values()), debug_queries
+
+
+def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config: dict | None = None) -> tuple[list[dict], dict]:
     config = config or {}
     stage_delta_minutes = int(config.get("delta_minutes", MATCH_TIME_DELTA_MINUTES))
     stage_two_days = int(config.get("stage_two_days", 1))
@@ -629,10 +709,17 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
     )
 
     if not attributes.date_time:
-        return [], {"stages": [], "subdivision_confidence_high": subdivision_confidence_high}
+        return [], {
+            "stages": [],
+            "stage_queries": [],
+            "subdivision_confidence_high": subdivision_confidence_high,
+            "stage1_best_score": 0,
+            "score_threshold": score_threshold,
+        }
 
     stage_events: dict[str, EventDTO] = {}
     stages: list[dict] = []
+    stage_queries: list[dict] = []
 
     def _collect(stage_name: str, events: list[EventDTO]) -> None:
         stages.append({"stage": stage_name, "count": len(events)})
@@ -646,6 +733,8 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
             minutes_window=stage_delta_minutes,
             subdivision_id=attributes.subdivision_id,
             limit=MATCH_STAGE_SUBDIVISION_LIMIT,
+            debug_stage_log=stage_queries,
+            stage_name="stage1_subdivision_time",
         )
         _collect("stage1_subdivision_time", stage1_subdivision)
 
@@ -653,6 +742,8 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
         target_dt=attributes.date_time,
         minutes_window=stage_delta_minutes,
         limit=MATCH_STAGE_TIME_LIMIT,
+        debug_stage_log=stage_queries,
+        stage_name="stage1_time",
     )
     _collect("stage1_time", stage1_time)
 
@@ -667,6 +758,8 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
                 days_window=stage_two_days,
                 subdivision_id=attributes.subdivision_id,
                 limit=MATCH_STAGE_FALLBACK_LIMIT,
+                debug_stage_log=stage_queries,
+                stage_name="stage2_subdivision_time",
             )
             _collect("stage2_subdivision_time", stage2_subdivision)
 
@@ -674,6 +767,8 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
             target_dt=attributes.date_time,
             days_window=stage_two_days,
             limit=MATCH_STAGE_FALLBACK_LIMIT,
+            debug_stage_log=stage_queries,
+            stage_name="stage2_time",
         )
         _collect("stage2_time", stage2_time)
 
@@ -683,8 +778,19 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
                 days_window=stage_three_days,
                 subdivision_id=attributes.subdivision_id,
                 limit=MATCH_STAGE_FALLBACK_LIMIT,
+                debug_stage_log=stage_queries,
+                stage_name="stage3_subdivision_time",
             )
             _collect("stage3_subdivision_time", stage3_subdivision)
+
+        stage3_time = _get_events_for_window(
+            target_dt=attributes.date_time,
+            days_window=stage_three_days,
+            limit=MATCH_STAGE_FALLBACK_LIMIT,
+            debug_stage_log=stage_queries,
+            stage_name="stage3_time",
+        )
+        _collect("stage3_time", stage3_time)
 
     hydrated = _hydrate_events_with_offenders(list(stage_events.values()))
     scored = [_score_event_candidate(event, attributes) for event in hydrated]
@@ -697,11 +803,36 @@ def get_event_candidates(attributes: ExtractedAttributes, config: dict | None = 
             -item["overlap"],
         )
     )
+
+    stage4_used = False
+    best_score = scored[0]["flags_true"] if scored else 0
+    if attributes.offenders and (not scored or best_score < score_threshold):
+        stage4_events, stage4_queries = _stage4_candidates_by_offenders(
+            attributes, text=text, subdivision_confidence_high=subdivision_confidence_high
+        )
+        stage_queries.extend(stage4_queries)
+        stages.append({"stage": "stage4_offenders", "count": len(stage4_events)})
+        if stage4_events:
+            stage4_used = True
+            hydrated_stage4 = _hydrate_events_with_offenders(stage4_events)
+            scored = [_score_event_candidate(event, attributes) for event in hydrated_stage4]
+            scored.sort(
+                key=lambda item: (
+                    -item["flags_true"],
+                    -(1 if item["subdivision_ok"] else 0),
+                    -(1 if item["offenders_ok"] else 0),
+                    item["delta_minutes"] if item["delta_minutes"] is not None else 10**9,
+                    -item["overlap"],
+                )
+            )
+
     return scored, {
         "stages": stages,
+        "stage_queries": stage_queries,
         "subdivision_confidence_high": subdivision_confidence_high,
         "stage1_best_score": stage1_best_score,
         "score_threshold": score_threshold,
+        "stage4_used": stage4_used,
     }
 
 
@@ -717,7 +848,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         )
     predicted_type, predicted_article = _classify_event_type(text)
 
-    scored_candidates, candidate_meta = get_event_candidates(attributes)
+    scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
 
     best_candidate = scored_candidates[0] if scored_candidates else None
     best_event = best_candidate["event"] if best_candidate else None
@@ -746,6 +877,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     else:
         best_event = None
 
+    stage_rows = {item.get("stage"): item.get("count", 0) for item in candidate_meta.get("stages", [])}
     debug_meta = {
         "candidates_total": len(scored_candidates),
         "subdivision_candidates_total": attributes.subdivision_candidates_total,
@@ -758,9 +890,18 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         else None,
         "chosen_method": match_method,
         "candidate_stages": candidate_meta.get("stages", []),
+        "candidate_queries": candidate_meta.get("stage_queries", []),
+        "stage1_subdivision_time": stage_rows.get("stage1_subdivision_time", 0),
+        "stage1_time": stage_rows.get("stage1_time", 0),
+        "stage2_subdivision_time": stage_rows.get("stage2_subdivision_time", 0),
+        "stage2_time": stage_rows.get("stage2_time", 0),
+        "stage3_subdivision_time": stage_rows.get("stage3_subdivision_time", 0),
+        "stage3_time": stage_rows.get("stage3_time", 0),
+        "stage4_offenders": stage_rows.get("stage4_offenders", 0),
         "stage1_best_score": candidate_meta.get("stage1_best_score", 0),
         "score_threshold": candidate_meta.get("score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD),
         "subdivision_confidence_high": candidate_meta.get("subdivision_confidence_high", False),
+        "stage4_used": candidate_meta.get("stage4_used", False),
     }
 
     if not best_event:
@@ -871,7 +1012,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
     if time_mismatch and best_delta is not None:
         diffs["date_time"] = {
-            "message": "Событие найдено по подразделению и нарушителям; дата/время не совпадают",
+            "message": "Событие найдено по подразделению и нарушителям; дата/время отличаются",
             "delta_minutes": best_delta,
             "extracted": format_dt_dmy_hm(attributes.date_time),
             "portal": format_dt_dmy_hm(best_event.event.date_detection),
