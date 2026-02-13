@@ -4,13 +4,24 @@ from unittest import mock
 from django.test import TestCase, override_settings
 
 from apps.analysis_app.models import CachedSubdivision
-from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache, match_subdivision
+from apps.analysis_app.subdivision_matcher import (
+    extract_unit_quoted_name,
+    invalidate_subdivision_cache,
+    match_subdivision,
+)
 from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 from apps.analysis_app import views as analysis_views
 from apps.analysis_app.services import extract_attributes
 
 
 class SubdivisionMatcherTests(TestCase):
+
+
+    def test_extract_unit_quoted_name_returns_first_match(self):
+        text = 'АППр «Ухтомское» совместно с КПП-2 «Ухтомское» выявили нарушение.'
+
+        self.assertEqual(extract_unit_quoted_name(text), 'Ухтомское')
+
     @override_settings(SKIP_SEMANTIC_MODEL=True)
     def test_match_subdivision_prefers_substring_match(self):
         subdivision = CachedSubdivision.objects.create(
@@ -221,6 +232,76 @@ class SubdivisionMatcherTests(TestCase):
         best = attributes.subdivision_candidates[0]
         self.assertAlmostEqual(best['lexical_factor'], 1.0, places=6)
         self.assertGreaterEqual(best['score'], 0.75)
+
+    @override_settings(
+        SKIP_SEMANTIC_MODEL=False,
+        SUBDIVISION_SEMANTIC_THRESHOLD=0.01,
+        SUBDIVISION_ACCEPT_THRESHOLD=0.75,
+    )
+    def test_extract_attributes_accepts_quoted_lexical_hit_below_threshold(self):
+        target = CachedSubdivision(
+            portal_subdivision_id=uuid.uuid4(),
+            name='КПП-1 «Ухтомское»',
+            normalized_short_name=normalize_subdivision_text('КПП-1 «Ухтомское»'),
+            normalized_name=normalize_subdivision_text('КПП-1 «Ухтомское»'),
+            embedding=[0.6, 0.8],
+        )
+        target._skip_embedding_rebuild = True
+        target.save()
+        invalidate_subdivision_cache()
+
+        class StubModel:
+            def encode(self, texts):
+                return [[1.0, 0.0] for _ in texts]
+
+        with mock.patch(
+            'apps.analysis_app.subdivision_matcher.get_sentence_model', return_value=StubModel()
+        ):
+            attributes = extract_attributes('Нарушение выявлено в АППр «Ухтомское» в 12:00 01.01.2024.')
+
+        self.assertEqual(attributes.subdivision_id, str(target.portal_subdivision_id))
+        self.assertEqual(attributes.subdivision_accept_reason, 'lexical_quoted_hit')
+        self.assertEqual(attributes.subdivision_query_source, 'quoted_name')
+        self.assertEqual(attributes.subdivision_query_text, 'Ухтомское')
+        self.assertLess(attributes.subdivision_candidates[0]['score'], 0.75)
+        self.assertTrue(attributes.subdivision_candidates[0].get('lexical_hit'))
+        self.assertTrue(attributes.subdivision_candidates[0]['flags'].get('lexical_quoted_hit'))
+
+    @override_settings(SKIP_SEMANTIC_MODEL=False, SUBDIVISION_SEMANTIC_THRESHOLD=0.01)
+    def test_match_subdivision_keeps_same_name_candidates_by_id(self):
+        first = CachedSubdivision(
+            portal_subdivision_id=uuid.uuid4(),
+            name='КПП-1 «Ухтомское»',
+            normalized_short_name=normalize_subdivision_text('КПП-1 «Ухтомское»'),
+            normalized_name=normalize_subdivision_text('КПП-1 «Ухтомское»'),
+            embedding=[1.0, 0.0],
+        )
+        first._skip_embedding_rebuild = True
+        first.save()
+        second = CachedSubdivision(
+            portal_subdivision_id=uuid.uuid4(),
+            name='КПП-2 «Ухтомское»',
+            normalized_short_name=normalize_subdivision_text('КПП-2 «Ухтомское»'),
+            normalized_name=normalize_subdivision_text('КПП-2 «Ухтомское»'),
+            embedding=[0.9, 0.1],
+        )
+        second._skip_embedding_rebuild = True
+        second.save()
+        invalidate_subdivision_cache()
+
+        class StubModel:
+            def encode(self, texts):
+                return [[1.0, 0.0] for _ in texts]
+
+        with mock.patch(
+            'apps.analysis_app.subdivision_matcher.get_sentence_model', return_value=StubModel()
+        ):
+            candidates, _ = match_subdivision('Доклад: АППр «Ухтомское».', top_k=5)
+
+        candidate_ids = {item['portal_subdivision_id'] for item in candidates}
+        self.assertIn(str(first.portal_subdivision_id), candidate_ids)
+        self.assertIn(str(second.portal_subdivision_id), candidate_ids)
+        self.assertGreaterEqual(len(candidates), 2)
 
     def test_build_comments_includes_locality_mismatch(self):
         comments = analysis_views._build_comments(
