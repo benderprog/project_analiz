@@ -62,6 +62,14 @@ def normalize_name_key(fullname: str) -> str:
     return cleaned.lower().replace("ё", "е")
 
 
+def format_offender_dob(value: date | None) -> str:
+    if not value:
+        return "—"
+    if value.day == 1 and value.month == 1:
+        return str(value.year)
+    return format_date_dmy(value)
+
+
 def offender_display(offender: Any, *, source: SourceType) -> str:
     if source == "portal":
         full_name = portal_offender_fullname(offender) or "—"
@@ -69,14 +77,14 @@ def offender_display(offender: Any, *, source: SourceType) -> str:
             _get_value(offender, "date_of_birth") or _get_value(offender, "birth_date")
         )
         if birth_date and birth_date != date(1900, 1, 1):
-            return f"{full_name} ({format_date_dmy(birth_date)})"
+            return f"{full_name} ({format_offender_dob(birth_date)})"
         return full_name
 
     full_name = svodka_offender_fullname(offender) or "—"
     birth_date = _parse_birth_date(_get_value(offender, "birth_date"))
     birth_year = _get_value(offender, "birth_year")
     if birth_date and birth_date != date(1900, 1, 1):
-        return f"{full_name} ({format_date_dmy(birth_date)})"
+        return f"{full_name} ({format_offender_dob(birth_date)})"
     if birth_year:
         return f"{full_name} ({birth_year})"
     return full_name

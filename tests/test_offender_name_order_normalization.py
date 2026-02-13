@@ -53,3 +53,14 @@ class OffenderNameOrderNormalizationTests(TestCase):
         display = offender_display(offender, source="portal")
 
         self.assertEqual(display, "Зайцев Павел (12-12-1980)")
+
+
+    def test_display_year_only_dob_as_year(self):
+        offender = {
+            "full_name": "Климов Андрей Олегович",
+            "birth_date": "1990-01-01",
+        }
+
+        display = offender_display(offender, source="svodka")
+
+        self.assertEqual(display, "Климов Андрей Олегович (1990)")

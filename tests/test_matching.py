@@ -584,7 +584,7 @@ class OffenderReportDeduplicationTests(TestCase):
         self.assertEqual(len(report["details"]), 1)
         self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
 
-    def test_year_only_dob_refinement_is_not_partial_error_label(self):
+    def test_year_only_dob_match_does_not_include_refinement_text(self):
         match_result = {
             "offenders_counts": {"matched": 1, "portal_total": 1},
             "offender_matches": {
@@ -599,7 +599,7 @@ class OffenderReportDeduplicationTests(TestCase):
                             "birth_date": "1990-03-03",
                         },
                         "match_type": "exact",
-                        "discrepancy": "Совпало ФИО (с учётом падежа), ДР уточнено по данным БД: 1990 ↔ 03-03-1990",
+                        "discrepancy": None,
                     }
                 ]
             },
@@ -607,9 +607,12 @@ class OffenderReportDeduplicationTests(TestCase):
 
         report = _build_offender_report(match_result)
 
-        self.assertEqual(len(report["details"]), 1)
-        self.assertIn("ДР уточнено по данным БД", report["details"][0])
-        self.assertNotIn("ФИО совпало частично/с ошибкой", report["details"][0])
+        self.assertEqual(len(report["details"]), 0)
+        output = " ".join(report["details"])
+        self.assertNotIn("01-01", output)
+        self.assertNotIn("↔", output)
+        self.assertNotIn("с учётом падежа", output)
+        self.assertNotIn("уточнено", output)
 
     def test_dob_mismatch_pairs_are_deduplicated(self):
         match_result = {

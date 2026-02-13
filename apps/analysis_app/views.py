@@ -137,10 +137,6 @@ def _build_offender_report(match_result: dict) -> dict:
             continue
         svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
         portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
-        is_dob_refined = "ДР уточнено по данным БД" in discrepancy
-        if is_dob_refined:
-            details.append(f"{discrepancy}: {svodka_display} / {portal_display}")
-            continue
         details.append(
             f"ФИО совпало частично/с ошибкой: {svodka_display} / {portal_display} ({discrepancy})"
         )
