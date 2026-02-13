@@ -49,7 +49,7 @@ def _status_key_for_offender(offender: dict | None) -> str:
 
 
 def _format_offenders_with_status(offenders: list[dict], *, match_result: dict, source: str) -> list[dict]:
-    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or match_result.get("svodka_status_by_span") or {}
+    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
     formatted = []
     status_to_css = {
         "ok": "hl-green",
@@ -248,7 +248,7 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
             )
 
     offenders = extracted.get("offenders") or []
-    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or match_result.get("svodka_status_by_span") or {}
+    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
     status_to_css = {
         "ok": "hl-green",
         "warn": "hl-yellow",

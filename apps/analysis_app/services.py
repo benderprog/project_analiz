@@ -625,6 +625,36 @@ def _is_year_only_birth_date(value) -> bool:
     return isinstance(value, date) and value.month == 1 and value.day == 1
 
 
+def _normalized_person_key(offender: dict) -> tuple[str, str, str, str]:
+    offender = offender or {}
+    second_name = _normalize_surname(offender.get("second_name"))
+    first_name = _normalize_surname(offender.get("first_name"))
+    patronymic_name = _normalize_surname(offender.get("patronymic_name"))
+    full_name = _normalize_surname(offender.get("full_name"))
+    return second_name, first_name, patronymic_name, full_name
+
+
+def _normalized_birth_key(offender: dict) -> str:
+    offender = offender or {}
+    birth_date = offender.get("birth_date")
+    if isinstance(birth_date, date):
+        return birth_date.isoformat()
+    if isinstance(birth_date, str):
+        return birth_date
+    birth_year = offender.get("birth_year")
+    if birth_year is None:
+        return ""
+    return str(birth_year)
+
+
+def _portal_offender_key(offender: dict) -> tuple[tuple[str, str, str, str], str]:
+    return _normalized_person_key(offender), _normalized_birth_key(offender)
+
+
+def _mention_offender_key(offender: dict) -> tuple[tuple[str, str, str, str], str]:
+    return _normalized_person_key(offender), _normalized_birth_key(offender)
+
+
 def match_offenders(
     extracted: list[dict], portal_offenders: list[OffenderDTO], text: str = ""
 ) -> tuple[float, dict, dict]:
@@ -674,6 +704,37 @@ def match_offenders(
         "excluded_employee_context": [mention_to_dict(item) for item in excluded],
     }
 
+    covered_portal = {
+        _portal_offender_key(pair.get("portal_offender") or {})
+        for pair in matches["matched_pairs"]
+    }
+    covered_mentions = {
+        _mention_offender_key(pair.get("svodka_offender") or {})
+        for pair in matches["matched_pairs"]
+    }
+    covered_portal.update(
+        _portal_offender_key(pair.get("portal_offender") or {})
+        for pair in matches["dob_mismatch_pairs"]
+    )
+    covered_mentions.update(
+        _mention_offender_key(pair.get("svodka_offender") or {})
+        for pair in matches["dob_mismatch_pairs"]
+    )
+
+    matches["missing_in_svodka"] = [
+        portal
+        for portal in matches["missing_in_svodka"]
+        if _portal_offender_key(portal) not in covered_portal
+    ]
+    matches["missing_in_portal"] = [
+        mention
+        for mention in matches["missing_in_portal"]
+        if _mention_offender_key(mention) not in covered_mentions
+    ]
+
+    counts["missing_in_svodka"] = len(matches["missing_in_svodka"])
+    counts["missing_in_portal"] = len(matches["missing_in_portal"])
+
     status_by_key: dict[str, str] = {}
     for missing in matches["missing_in_portal"]:
         key = _status_key_for_svodka_offender(missing)
@@ -710,9 +771,21 @@ def match_offenders(
                 or (_is_year_only_birth_date(portal_birth_date) and not _is_year_only_birth_date(svodka_birth_date))
             )
         )
-        if year_precision_mismatch:
-            status_by_key[key] = "warn"
-        elif pair.get("match_type") == "exact" and (exact_dob or both_missing_dob):
+        discrepancy_text = str(pair.get("discrepancy") or "").lower()
+        year_only_aligned = (
+            bool(svodka_birth_date and portal_birth_date)
+            and _is_year_only_birth_date(svodka_birth_date)
+            and getattr(svodka_birth_date, "year", None) == getattr(portal_birth_date, "year", None)
+        )
+        only_dob_refined_discrepancy = discrepancy_text in {
+            "dob уточнено",
+            "др уточнено",
+        }
+        if pair.get("match_type") == "exact" and (exact_dob or both_missing_dob or year_only_aligned):
+            status_by_key[key] = "ok"
+        elif year_precision_mismatch and year_only_aligned:
+            status_by_key[key] = "ok"
+        elif only_dob_refined_discrepancy:
             status_by_key[key] = "ok"
         else:
             status_by_key[key] = "warn"
