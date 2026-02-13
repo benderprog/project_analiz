@@ -597,6 +597,87 @@ class Stage4OffenderFallbackTests(TestCase):
         self.assertGreater(result["debug"]["pre_stage4_candidate_count"], 0)
         self.assertGreater(result["debug"]["stage4_offenders"], 0)
 
+
+    def test_stage4_falls_back_to_offender_only_when_subdivision_query_returns_zero(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        target_subdivision = Subdivision.objects.using("portal").create(name='КПП-цель', parent_pu=pu)
+        other_subdivision = Subdivision.objects.using("portal").create(name='КПП-другое', parent_pu=pu)
+
+        event = Event.objects.using("portal").create(
+            date_detection=timezone.make_aware(datetime(2026, 2, 12, 10, 30), timezone.get_current_timezone()),
+            find_subdivision_unit=other_subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Семен",
+            second_name="Федоров",
+            patronymic_name="Ильич",
+            date_of_birth=date(1996, 2, 1),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),
+            time_found=True,
+            subdivision_id=str(target_subdivision.subdivision_id),
+            offenders=[
+                {"full_name": "Фёдоров Семен Ильич", "birth_year": 1996},
+            ],
+            subdivision_name=target_subdivision.name,
+            subdivision_candidates=[{"score": 1.0, "lexical_strength": "strong"}],
+        )
+
+        with patch("apps.analysis_app.services._get_events_for_window", return_value=[]):
+            result = match_event(attributes, "Событие 20")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["match_method"], "time+offenders")
+        self.assertTrue(result["subdivision_mismatch"])
+        self.assertTrue(result["debug"]["stage4_executed"])
+        self.assertEqual(result["debug"]["stage4_path"], "offender_subdivision_then_only")
+        self.assertEqual(result["debug"]["stage4_rows_subdivision"], 0)
+        self.assertGreater(result["debug"]["stage4_rows_only"], 0)
+        self.assertEqual(result["offenders_counts"]["portal_total"], 1)
+
+    def test_stage4_birth_year_matches_portal_full_birth_date(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(name='КПП-1', parent_pu=pu)
+
+        event = Event.objects.using("portal").create(
+            date_detection=timezone.make_aware(datetime(2023, 5, 1, 9, 0), timezone.get_current_timezone()),
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Мария",
+            second_name="Смирнова",
+            patronymic_name="Игоревна",
+            date_of_birth=date(1996, 2, 1),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {"full_name": "Смирнова Мария Игоревна", "birth_year": 1996},
+            ],
+            subdivision_name=subdivision.name,
+            subdivision_candidates=[{"score": 1.0, "lexical_strength": "strong"}],
+        )
+
+        with patch("apps.analysis_app.services._get_events_for_window", return_value=[]):
+            result = match_event(attributes, "Событие 20")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["debug"]["stage4_path"], "offender_subdivision")
+        self.assertGreater(result["debug"]["stage4_rows_subdivision"], 0)
+        self.assertEqual(result["debug"]["stage4_rows_only"], 0)
+        self.assertEqual(result["offenders_counts"]["portal_total"], 1)
+
     def test_stage4_finds_event_by_subdivision_and_offenders_when_time_mismatch(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
         subdivision = Subdivision.objects.using("portal").create(name='КПП-1 "Ухтомское"', parent_pu=pu)
