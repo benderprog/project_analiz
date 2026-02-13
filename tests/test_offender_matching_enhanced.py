@@ -1,4 +1,5 @@
 from datetime import date
+from unittest import mock
 
 from django.test import SimpleTestCase
 
@@ -180,3 +181,34 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
 
         self.assertEqual(len(result.possible_matches), 0)
         self.assertEqual(len(result.matched_pairs), 1)
+
+
+class EmployeeContextParenthesesRegressionTests(SimpleTestCase):
+    def test_multiple_parentheses_do_not_exclude_regular_offenders(self):
+        text = (
+            "(ст. л-т Васильев А.А.) гражданка РФ Смирнова Мария Сергеевна и "
+            "гражданин РФ Климов Андрей Олегович (не знали о правилах прохода)"
+        )
+
+        from apps.analysis_app.services import extract_attributes
+
+        with mock.patch("apps.analysis_app.services.match_subdivision", return_value=([], {})):
+            attrs = extract_attributes(text)
+
+        self.assertEqual(
+            sorted(item["full_name"] for item in attrs.offenders),
+            ["Климов Андрей Олегович", "Смирнова Мария Сергеевна"],
+        )
+        self.assertEqual(len(attrs.staff), 1)
+        self.assertEqual(attrs.staff[0]["display"], "ст. л-т Васильев А.А.")
+
+    def test_parenthetical_ranked_staff_is_excluded_from_eligible(self):
+        text = "(ст. л-т Васильев А.А.)"
+        start = text.index("Васильев")
+        mentions = [_mention("Васильев А.А.", "Васильев", "А", "А", (start, start + 12))]
+
+        eligible, excluded = split_mentions_by_employee_context(text, mentions)
+
+        self.assertEqual(len(eligible), 0)
+        self.assertEqual(len(excluded), 1)
+        self.assertTrue(excluded[0].employee_context)

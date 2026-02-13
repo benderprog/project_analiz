@@ -69,8 +69,11 @@ def _is_inside_parentheses(text: str, span: tuple[int, int] | None) -> bool:
         return False
     start, end = span
     open_idx = text.rfind("(", 0, start)
-    close_idx = text.find(")", end)
-    if open_idx == -1 or close_idx == -1:
+    last_close_before = text.rfind(")", 0, start)
+    if open_idx == -1 or last_close_before > open_idx:
+        return False
+    close_idx = text.find(")", start)
+    if close_idx == -1:
         return False
     return open_idx < start < end <= close_idx
 
@@ -109,9 +112,6 @@ def is_employee_context(text: str, mention_span: tuple[int, int] | None) -> bool
     for token, _, _ in lookback:
         if _norm(token) in normalized_markers:
             return True
-
-    if _is_inside_parentheses(text, mention_span):
-        return True
 
     return _has_rank_in_parentheses(text, mention_span)
 
