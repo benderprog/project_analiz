@@ -144,6 +144,93 @@ def _dob_compatible(summary_dob: date | None, portal_dob: date | None) -> bool:
     return False
 
 
+def _is_year_only_dob(value: date | None) -> bool:
+    return bool(value and value.day == 1 and value.month == 1)
+
+
+def _format_dob(value: date | None, *, prefer_year: bool = False) -> str:
+    if not value:
+        return "—"
+    if prefer_year:
+        return str(value.year)
+    return value.strftime("%d-%m-%Y")
+
+
+def _dob_discrepancy(mention: OffenderMention, portal: PortalOffender) -> str | None:
+    if not mention.birth_date or not portal.birth_date:
+        return None
+    if mention.birth_date == portal.birth_date:
+        return None
+    if _is_year_only_dob(mention.birth_date) and mention.birth_date.year == portal.birth_date.year:
+        return (
+            "Совпало ФИО (с учётом падежа), ДР уточнено по данным БД: "
+            f"{_format_dob(mention.birth_date, prefer_year=True)} ↔ {_format_dob(portal.birth_date)}"
+        )
+    return None
+
+
+def _nominative_variants(value: str, *, part: str) -> set[str]:
+    variants = {value}
+    if not value:
+        return variants
+
+    if part == "last" and value.endswith(("а", "я")) and len(value) > 3:
+        variants.add(value[:-1])
+
+    if part == "first":
+        if value.endswith("ия") and len(value) > 3:
+            variants.add(value[:-2] + "ий")
+        if value.endswith("ия") and len(value) > 3:
+            variants.add(value[:-1])
+        if value.endswith("я") and len(value) > 2:
+            variants.add(value[:-1] + "й")
+        if value.endswith("и") and len(value) > 2:
+            variants.add(value[:-1] + "я")
+        if value.endswith("а") and len(value) > 2:
+            variants.add(value[:-1])
+
+    if part == "middle":
+        if value.endswith("ича") and len(value) > 4:
+            variants.add(value[:-1])
+        if value.endswith("ича") and len(value) > 4:
+            variants.add(value[:-3] + "ич")
+        if value.endswith("овича") and len(value) > 6:
+            variants.add(value[:-1])
+        if value.endswith("евича") and len(value) > 6:
+            variants.add(value[:-1])
+
+    return {item for item in variants if item}
+
+
+def _component_match(
+    summary: str,
+    portal: str,
+    *,
+    threshold: float,
+    part: str,
+    label: str,
+) -> tuple[bool, str | None]:
+    if not summary:
+        return True, f"{label} отсутствует в сводке"
+    if _is_initial(summary):
+        if portal.startswith(summary):
+            if summary != portal:
+                return True, f"{label} в сводке указан инициалом"
+            return True, None
+        return False, None
+
+    variants = _nominative_variants(summary, part=part)
+    if portal in variants:
+        if summary != portal:
+            return True, f"{label} в сводке указан в косвенном падеже"
+        return True, None
+
+    ratio = _ratio(summary, portal)
+    if ratio >= threshold:
+        return True, f"{label} отличается"
+    return False, None
+
+
 def _fio_match_details(mention: OffenderMention, portal: PortalOffender) -> tuple[bool, str, str | None]:
     s_last = _norm(mention.second_name)
     p_last = _norm(portal.second_name)
@@ -152,46 +239,46 @@ def _fio_match_details(mention: OffenderMention, portal: PortalOffender) -> tupl
     s_middle = _norm(mention.patronymic_name)
     p_middle = _norm(portal.patronymic_name)
 
-    if not s_last or _ratio(s_last, p_last) < SURNAME_THRESHOLD:
+    if not s_last:
+        return False, "none", None
+
+    surname_ok, surname_note = _component_match(
+        s_last,
+        p_last,
+        threshold=SURNAME_THRESHOLD,
+        part="last",
+        label="фамилия",
+    )
+    if not surname_ok:
         return False, "none", None
 
     notes: list[str] = []
+    if surname_note and "отсутствует" not in surname_note:
+        notes.append(surname_note)
 
-    if s_first:
-        first_ok = False
-        if _is_initial(s_first):
-            first_ok = p_first.startswith(s_first)
-            if not first_ok:
-                return False, "none", None
-            if s_first != p_first:
-                notes.append("имя в сводке указано инициалом")
-        else:
-            ratio = _ratio(s_first, p_first)
-            first_ok = ratio >= NAME_THRESHOLD
-            if not first_ok:
-                return False, "none", None
-            if s_first != p_first:
-                notes.append("имя отличается")
-    else:
-        notes.append("имя отсутствует в сводке")
+    first_ok, first_note = _component_match(
+        s_first,
+        p_first,
+        threshold=NAME_THRESHOLD,
+        part="first",
+        label="имя",
+    )
+    if not first_ok:
+        return False, "none", None
+    if first_note:
+        notes.append(first_note)
 
-    if s_middle:
-        middle_ok = False
-        if _is_initial(s_middle):
-            middle_ok = p_middle.startswith(s_middle)
-            if not middle_ok:
-                return False, "none", None
-            if s_middle != p_middle:
-                notes.append("отчество в сводке указано инициалом")
-        else:
-            ratio = _ratio(s_middle, p_middle)
-            middle_ok = ratio >= PATRONYMIC_THRESHOLD
-            if not middle_ok:
-                return False, "none", None
-            if s_middle != p_middle:
-                notes.append("отчество отличается")
-    else:
-        notes.append("отчество отсутствует в сводке")
+    middle_ok, middle_note = _component_match(
+        s_middle,
+        p_middle,
+        threshold=PATRONYMIC_THRESHOLD,
+        part="middle",
+        label="отчество",
+    )
+    if not middle_ok:
+        return False, "none", None
+    if middle_note:
+        notes.append(middle_note)
 
     if not s_first and not s_middle:
         return True, "partial", "; ".join(notes)
@@ -232,6 +319,10 @@ def match_offenders_with_details(
                     reason="Возможное совпадение по ФИО, но ДР отличается",
                 )
                 continue
+
+            dob_discrepancy = _dob_discrepancy(mention, portal)
+            if dob_discrepancy:
+                discrepancy = dob_discrepancy if not discrepancy else f"{discrepancy}; {dob_discrepancy}"
 
             rank = {"exact": 3, "fuzzy": 2, "partial": 1}.get(match_type, 0)
             pair = MatchPair(
