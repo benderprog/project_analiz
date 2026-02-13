@@ -186,6 +186,41 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
         self.assertEqual(len(result.missing_in_summary), 0)
         self.assertNotIn("с учётом падежа", result.matched_pairs[0].discrepancy or "")
 
+    def test_extract_attributes_normalizes_fio_to_nominative(self):
+        from apps.analysis_app.services import extract_attributes
+
+        text = "... у гражданина РФ Орлова Дмитрия Игоревича, 1992 г.р. ..."
+        with mock.patch("apps.analysis_app.services.match_subdivision", return_value=([], {})):
+            attrs = extract_attributes(text)
+
+        self.assertEqual(len(attrs.offenders), 1)
+        self.assertEqual(attrs.offenders[0]["full_name"], "Орлов Дмитрий Игоревич")
+        self.assertEqual(attrs.offenders[0]["birth_year"], 1992)
+
+    def test_inflection_difference_is_exact_without_user_facing_notes(self):
+        mention = _mention(
+            "Орлов Дмитрий Игоревич",
+            "Орлов",
+            "Дмитрий",
+            "Игоревич",
+            birth=date(1992, 1, 1),
+        )
+        portal = PortalOffender(
+            "Орлов Дмитрий Игоревич",
+            "Орлов",
+            "Дмитрий",
+            "Игоревич",
+            date(1992, 12, 12),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal])
+
+        self.assertEqual(len(result.matched_pairs), 1)
+        self.assertEqual(result.matched_pairs[0].match_type, "exact")
+        discrepancy = result.matched_pairs[0].discrepancy or ""
+        self.assertNotIn("частично/с ошибкой", discrepancy)
+        self.assertNotIn("косвенном падеже", discrepancy)
+
     def test_year_only_dob_matches_full_date_by_same_year(self):
         mention = _mention(
             "Орлова Дмитрия Игоревича",

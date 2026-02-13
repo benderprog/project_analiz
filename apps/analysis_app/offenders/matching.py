@@ -229,8 +229,6 @@ def _component_match(
 
     variants = _nominative_variants(summary, part=part)
     if portal in variants:
-        if summary != portal:
-            return True, f"{label} в сводке указан в косвенном падеже"
         return True, None
 
     ratio = _ratio(summary, portal)
