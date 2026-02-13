@@ -28,6 +28,35 @@ _WINDOW_SIZES = (1, 2, 3, 4, 5, 6)
 _cache_version = 0
 
 
+def _token_set(value: str) -> set[str]:
+    return {token for token in value.split() if token}
+
+
+def _lexical_strength(
+    normalized_text: str,
+    subdivision: dict,
+) -> tuple[str, int, str | None]:
+    short_name = subdivision.get("normalized_short_name") or ""
+    name = subdivision.get("normalized_name") or ""
+    text_tokens = _token_set(normalized_text)
+
+    evidence_tokens = [token for token in short_name.split() if len(token) >= 4]
+    evidence_tokens.extend(token for token in name.split() if len(token) >= 6)
+
+    for token in evidence_tokens:
+        if token and token in normalized_text:
+            return "strong", 2, token
+
+    substring_source = short_name or name
+    if substring_source and substring_source in normalized_text:
+        return "strong", 2, substring_source
+
+    overlap = len(text_tokens & (_token_set(short_name) | _token_set(name)))
+    if overlap > 0:
+        return "medium", 1, None
+    return "none", 0, None
+
+
 def _build_subdivision_candidate_queryset(
     selected_pu_portal_id: uuid.UUID | None,
 ) -> tuple[models.QuerySet, dict]:
@@ -158,6 +187,12 @@ def _substring_matches(
     cached, _ = _load_cached_subdivisions(_cache_version, selected_pu_id)
     matches: list[dict] = []
     for subdivision in cached:
+        lexical_strength, lexical_score, lexical_token = _lexical_strength(
+            normalized_text,
+            subdivision,
+        )
+        if lexical_strength == "none":
+            continue
         candidates = [
             ("short_name", subdivision.get("normalized_short_name") or ""),
             ("name", subdivision.get("normalized_name") or ""),
@@ -184,6 +219,11 @@ def _substring_matches(
                     "candidate_locality": None,
                     "locality_mismatch": False,
                     "match_text": token,
+                    "lexical_strength": lexical_strength,
+                    "lexical_score": lexical_score,
+                    "token_overlap": lexical_score,
+                    "substring_evidence": lexical_strength == "strong",
+                    "lexical_token": lexical_token,
                 }
             )
             break
@@ -242,11 +282,21 @@ def _semantic_window_matches(
     embeddings = model.encode(window_texts)
 
     best_by_subdivision: dict[str, dict] = {}
+    text_tokens = _token_set(normalized_text)
     for window, window_embedding in zip(windows, embeddings):
         window_vec = to_py_floats(window_embedding)
         for candidate in cached_embeddings:
             score = _cosine_similarity(window_vec, candidate["embedding"])
             portal_id = str(candidate["subdivision"]["portal_subdivision_id"])
+            short_name = candidate["subdivision"].get("normalized_short_name") or ""
+            full_name = candidate["subdivision"].get("normalized_name") or ""
+            token_overlap = len(text_tokens & (_token_set(short_name) | _token_set(full_name)))
+            substring_evidence = bool(
+                (short_name and short_name in normalized_text)
+                or (full_name and full_name in normalized_text)
+            )
+            if token_overlap == 0 and not substring_evidence:
+                continue
             current = best_by_subdivision.get(portal_id)
             if current is None or score > current["score"]:
                 best_by_subdivision[portal_id] = {
@@ -262,6 +312,11 @@ def _semantic_window_matches(
                     "candidate_locality": None,
                     "locality_mismatch": False,
                     "match_text": window["text"],
+                    "lexical_strength": "medium" if token_overlap else "none",
+                    "lexical_score": 1 if token_overlap else 0,
+                    "token_overlap": token_overlap,
+                    "substring_evidence": substring_evidence,
+                    "lexical_token": None,
                 }
 
     threshold = getattr(settings, "SUBDIVISION_SEMANTIC_THRESHOLD", 0.6)
@@ -285,6 +340,9 @@ def match_subdivision(
 
     matches = _substring_matches(normalized_text, mapping, selected_pu_id)
     if matches:
+        strong = [item for item in matches if item.get("lexical_strength") == "strong"]
+        if strong:
+            return strong[:top_k], meta
         return matches[:top_k], meta
 
     semantic_matches = _semantic_window_matches(normalized_text, mapping, selected_pu_id)
