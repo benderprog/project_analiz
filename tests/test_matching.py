@@ -1,9 +1,11 @@
 from datetime import date, datetime, timedelta
+from uuid import uuid4
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from django.conf import settings
 from django.template.loader import render_to_string
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from apps.analysis_app.services import (
@@ -436,3 +438,140 @@ class OffenderReportDeduplicationTests(TestCase):
 
         self.assertEqual(len(report["details"]), 1)
         self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
+
+
+class StagePipelineTests(SimpleTestCase):
+
+    def test_stage3_runs_subdivision_and_time_only_queries(self):
+        event_id = uuid4()
+        subdivision_id = uuid4()
+        event_dt = datetime(2026, 2, 20, 10, 0)
+
+        class FakeGateway:
+            def __init__(self):
+                self.calls = []
+
+            def search_events_by_subdivision_time(self, subdivision_id, dt_from, dt_to, limit):
+                self.calls.append(("subdivision", dt_from, dt_to))
+                return []
+
+            def search_events_by_time(self, dt_from, dt_to, limit):
+                self.calls.append(("time", dt_from, dt_to))
+                if abs((dt_to - dt_from).days) >= 14:
+                    return [
+                        SimpleNamespace(
+                            event_id=event_id,
+                            date_detection=event_dt,
+                            subdivision_id=subdivision_id,
+                            event_type="Тип",
+                            article_of_law="12.1",
+                        )
+                    ]
+                return []
+
+            def get_offenders_by_event_ids(self, event_ids):
+                return []
+
+            def search_events_by_offender(self, *args, **kwargs):
+                return []
+
+            def get_event_by_id(self, event_id):
+                return None
+
+        attrs = ExtractedAttributes(
+            date_time=datetime(2026, 2, 20, 10, 0),
+            time_found=True,
+            subdivision_id=str(subdivision_id),
+            offenders=[{"full_name": "Иванов Иван Иванович", "birth_year": 1990}],
+            subdivision_name="КПП-1",
+        )
+        fake = FakeGateway()
+
+        with patch("apps.analysis_app.services.get_portal_gateway", return_value=fake), patch(
+            "apps.analysis_app.services._classify_event_type", return_value=(None, None)
+        ):
+            match_event(attrs, "Тест")
+
+        stage3_sub = [c for c in fake.calls if c[0] == "subdivision" and abs((c[2] - c[1]).days) >= 14]
+        stage3_time = [c for c in fake.calls if c[0] == "time" and abs((c[2] - c[1]).days) >= 14]
+        self.assertTrue(stage3_sub)
+        self.assertTrue(stage3_time)
+
+    def test_stage4_fallback_matches_by_subdivision_and_offenders_when_time_wrong(self):
+        subdivision_id = uuid4()
+        event_id = uuid4()
+        extracted_dt = datetime(2026, 2, 20, 10, 0)
+        portal_dt = datetime(2026, 2, 18, 8, 30)
+
+        offender = SimpleNamespace(
+            offender_id=uuid4(),
+            event_id=event_id,
+            second_name="Смирнова",
+            first_name="Мария",
+            patronymic_name="Сергеевна",
+            date_of_birth=date(1996, 5, 10),
+        )
+
+        class FakeGateway:
+            def search_events_by_subdivision_time(self, subdivision_id, dt_from, dt_to, limit):
+                return []
+
+            def search_events_by_time(self, dt_from, dt_to, limit):
+                return []
+
+            def get_offenders_by_event_ids(self, event_ids):
+                if event_id in event_ids:
+                    return [offender]
+                return []
+
+            def search_events_by_offender(self, second_name, birth_date, birth_year, subdivision_id, limit):
+                return [
+                    SimpleNamespace(
+                        event_id=event_id,
+                        date_detection=portal_dt,
+                        subdivision_id=subdivision_id,
+                        event_type="Тип",
+                        article_of_law="12.1",
+                    )
+                ]
+
+            def get_event_by_id(self, event_id_arg):
+                if event_id_arg != event_id:
+                    return None
+                return SimpleNamespace(
+                    event_id=event_id,
+                    date_detection=portal_dt,
+                    subdivision_id=subdivision_id,
+                    event_type="Тип",
+                    article_of_law="12.1",
+                )
+
+        attrs = ExtractedAttributes(
+            date_time=extracted_dt,
+            time_found=True,
+            subdivision_id=str(subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Смирнова Мария Сергеевна",
+                    "second_name": "Смирнова",
+                    "first_name": "Мария",
+                    "patronymic_name": "Сергеевна",
+                    "birth_year": 1996,
+                }
+            ],
+            subdivision_name="КПП-1 Ухтомское",
+            subdivision_candidates=[
+                {"score": 0.95, "portal_subdivision_id": str(subdivision_id), "candidate_name": "КПП-1 Ухтомское"}
+            ],
+        )
+
+        with patch("apps.analysis_app.services.get_portal_gateway", return_value=FakeGateway()), patch(
+            "apps.analysis_app.services._classify_event_type", return_value=("Тип", "12.1")
+        ):
+            result = match_event(attrs, "Тест")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["matched_event_id"], str(event_id))
+        self.assertEqual(result["match_method"], "subdivision+offenders(stage4)")
+        self.assertTrue(result["time_mismatch"])
+        self.assertIn("date_time", result["diffs"])
