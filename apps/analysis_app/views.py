@@ -42,6 +42,25 @@ def _dedupe_items(items: list[str]) -> list[str]:
     return deduped
 
 
+def _offender_dedupe_key(offender: dict | None) -> tuple[str, str]:
+    offender = offender or {}
+    full_name = str(offender.get("full_name") or "").strip().lower()
+    birth_date = str(offender.get("birth_date") or offender.get("birth_year") or "")
+    return full_name, birth_date
+
+
+def _dedupe_pairs(pairs: list[dict], *, key_getter) -> list[dict]:
+    seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for pair in pairs:
+        key = key_getter(pair)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(pair)
+    return deduped
+
+
 def _status_for_timestamp(match_result: dict) -> str:
     if not match_result.get("matched"):
         return "red"
@@ -103,18 +122,37 @@ def _build_offender_report(match_result: dict) -> dict:
     details = []
     matches = match_result.get("offender_matches") or {}
 
-    matched_pairs = matches.get("matched_pairs") or []
+    matched_pairs = _dedupe_pairs(
+        matches.get("matched_pairs") or [],
+        key_getter=lambda pair: (
+            _offender_dedupe_key(pair.get("svodka_offender")),
+            _offender_dedupe_key(pair.get("portal_offender")),
+            pair.get("match_type"),
+            pair.get("discrepancy"),
+        ),
+    )
     for pair in matched_pairs:
         discrepancy = pair.get("discrepancy")
         if not discrepancy:
             continue
         svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
         portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]
+        is_dob_refined = "ДР уточнено по данным БД" in discrepancy
+        if is_dob_refined:
+            details.append(f"{discrepancy}: {svodka_display} / {portal_display}")
+            continue
         details.append(
             f"ФИО совпало частично/с ошибкой: {svodka_display} / {portal_display} ({discrepancy})"
         )
 
-    dob_mismatch_pairs = matches.get("dob_mismatch_pairs") or []
+    dob_mismatch_pairs = _dedupe_pairs(
+        matches.get("dob_mismatch_pairs") or [],
+        key_getter=lambda pair: (
+            _offender_dedupe_key(pair.get("svodka_offender")),
+            _offender_dedupe_key(pair.get("portal_offender")),
+            pair.get("reason"),
+        ),
+    )
     for pair in dob_mismatch_pairs:
         svodka_display = _format_offenders([pair.get("svodka_offender")], source="svodka")[0]
         portal_display = _format_offenders([pair.get("portal_offender")], source="portal")[0]

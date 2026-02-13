@@ -181,6 +181,50 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
 
         self.assertEqual(len(result.possible_matches), 0)
         self.assertEqual(len(result.matched_pairs), 1)
+        self.assertEqual(len(result.missing_in_summary), 0)
+
+    def test_full_dob_mismatch_is_possible_match_but_not_missing_in_summary(self):
+        mention = _mention(
+            "Смирнова Мария Сергеевна",
+            "Смирнова",
+            "Мария",
+            "Сергеевна",
+            birth=date(1996, 1, 18),
+        )
+        portal = PortalOffender(
+            "Смирнова Мария Сергеевна",
+            "Смирнова",
+            "Мария",
+            "Сергеевна",
+            date(1996, 2, 1),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal])
+
+        self.assertEqual(len(result.matched_pairs), 0)
+        self.assertEqual(len(result.possible_matches), 1)
+        self.assertEqual(len(result.missing_in_summary), 0)
+
+    def test_missing_in_summary_is_deduplicated_for_duplicate_portal_offenders(self):
+        mention = _mention("Иванов Иван Иванович", "Иванов", "Иван", "Иванович", birth=date(1990, 1, 1))
+        portal_1 = PortalOffender(
+            "Петров Петр Петрович",
+            "Петров",
+            "Петр",
+            "Петрович",
+            date(1980, 12, 12),
+        )
+        portal_2 = PortalOffender(
+            "Петров Петр Петрович",
+            "Петров",
+            "Петр",
+            "Петрович",
+            date(1980, 12, 12),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal_1, portal_2])
+
+        self.assertEqual(len(result.missing_in_summary), 1)
 
 
 class EmployeeContextParenthesesRegressionTests(SimpleTestCase):

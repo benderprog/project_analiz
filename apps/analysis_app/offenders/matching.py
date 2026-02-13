@@ -156,6 +156,16 @@ def _format_dob(value: date | None, *, prefer_year: bool = False) -> str:
     return value.strftime("%d-%m-%Y")
 
 
+def _portal_offender_key(portal: PortalOffender) -> tuple[str, str, str, str, date | None]:
+    return (
+        _norm(portal.second_name),
+        _norm(portal.first_name),
+        _norm(portal.patronymic_name),
+        _norm(portal.full_name),
+        portal.birth_date,
+    )
+
+
 def _dob_discrepancy(mention: OffenderMention, portal: PortalOffender) -> str | None:
     if not mention.birth_date or not portal.birth_date:
         return None
@@ -295,6 +305,7 @@ def match_offenders_with_details(
     result = OffenderMatchResult()
     used_summary: set[int] = set()
     used_portal: set[int] = set()
+    accounted_portal: set[int] = set()
 
     portal_surnames = {_norm(off.second_name) for off in portal_offenders if off.second_name}
     all_mentions = list(summary_mentions)
@@ -338,12 +349,15 @@ def match_offenders_with_details(
             used_summary.add(i)
             matched_portal_idx = portal_offenders.index(best[1].portal)
             used_portal.add(matched_portal_idx)
+            accounted_portal.add(matched_portal_idx)
             result.matched_pairs.append(best[1])
             continue
 
         if best_possible is not None:
             result.possible_matches.append(best_possible)
             used_summary.add(i)
+            possible_portal_idx = portal_offenders.index(best_possible.portal)
+            accounted_portal.add(possible_portal_idx)
             continue
 
         same_surname = [p for p in portal_offenders if _norm(p.second_name) == _norm(mention.second_name)]
@@ -360,9 +374,16 @@ def match_offenders_with_details(
     for i, mention in enumerate(all_mentions):
         if i not in used_summary:
             result.missing_in_portal.append(mention)
+
+    seen_missing_portal_keys: set[tuple[str, str, str, str, date | None]] = set()
     for j, portal in enumerate(portal_offenders):
-        if j not in used_portal:
-            result.missing_in_summary.append(portal)
+        if j in accounted_portal:
+            continue
+        portal_key = _portal_offender_key(portal)
+        if portal_key in seen_missing_portal_keys:
+            continue
+        seen_missing_portal_keys.add(portal_key)
+        result.missing_in_summary.append(portal)
     return result
 
 
