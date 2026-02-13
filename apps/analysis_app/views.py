@@ -31,6 +31,37 @@ def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
     return [offender_display(offender, source=source) for offender in offenders or []]
 
 
+def _status_key_for_offender(offender: dict | None) -> str:
+    offender = offender or {}
+    span = offender.get("span")
+    if isinstance(span, list) and len(span) == 2:
+        return f"{int(span[0])}:{int(span[1])}"
+    if isinstance(span, tuple) and len(span) == 2:
+        return f"{int(span[0])}:{int(span[1])}"
+    full_name = " ".join(str(offender.get("full_name") or "").lower().split())
+    birth_year = offender.get("birth_year")
+    birth_date = offender.get("birth_date")
+    if not birth_year and isinstance(birth_date, str) and len(birth_date) >= 4:
+        birth_year = birth_date[:4]
+    elif not birth_year and hasattr(birth_date, "year"):
+        birth_year = birth_date.year
+    return f"fio:{full_name}|year:{birth_year or ''}"
+
+
+def _format_offenders_with_status(offenders: list[dict], *, match_result: dict, source: str) -> list[dict]:
+    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
+    formatted = []
+    for offender in offenders or []:
+        key = _status_key_for_offender(offender)
+        formatted.append(
+            {
+                "text": offender_display(offender, source=source),
+                "status": status_map.get(key, "warn"),
+            }
+        )
+    return formatted
+
+
 def _dedupe_items(items: list[str]) -> list[str]:
     seen: set[str] = set()
     deduped = []
@@ -210,8 +241,14 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
             )
 
     offenders = extracted.get("offenders") or []
-    offender_status = f"hl-{_status_for_offenders(match_result)}"
+    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
+    status_to_css = {
+        "ok": "hl-offender-ok",
+        "warn": "hl-offender-warn",
+        "err": "hl-offender-err",
+    }
     for offender in offenders:
+        offender_status = status_to_css.get(status_map.get(_status_key_for_offender(offender), "warn"), "hl-offender-warn")
         full_name = offender.get("full_name")
         offender_span = offender.get("span")
         if offender_span and len(offender_span) == 2:
@@ -220,6 +257,9 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
             offender_span = _find_case_insensitive_span(text, full_name) if full_name else None
         if offender_span:
             spans.append((offender_span[0], offender_span[1], offender_status))
+        dob_span = offender.get("dob_span")
+        if dob_span and len(dob_span) == 2:
+            spans.append((int(dob_span[0]), int(dob_span[1]), offender_status))
 
     return highlight_text(text, spans)
 
@@ -371,7 +411,11 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "date_time": extracted_timestamp_display,
             "subdivision_name": extracted.get("subdivision_name"),
             "subdivision_candidates": formatted_candidates,
-            "offenders": _format_offenders(extracted.get("offenders") or [], source="svodka"),
+            "offenders": _format_offenders_with_status(
+                extracted.get("offenders") or [],
+                match_result=match_result,
+                source="svodka",
+            ),
             "staff": [item.get("display") for item in (extracted.get("staff") or []) if item.get("display")],
         },
         "match": {

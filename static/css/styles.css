@@ -230,6 +230,46 @@ body {
   border-color: #f2a7a7;
 }
 
+.hl.hl-offender-ok {
+  background: #d7f4dc;
+  border-color: #8dd69c;
+}
+
+.hl.hl-offender-warn {
+  background: #fff4cc;
+  border-color: #f0d37a;
+}
+
+.hl.hl-offender-err {
+  background: #fde2e2;
+  border-color: #f2a7a7;
+}
+
+.offender-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.offender-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.offender-item-ok .offender-marker {
+  background: #2e7d32;
+}
+
+.offender-item-warn .offender-marker {
+  background: #f9a825;
+}
+
+.offender-item-err .offender-marker {
+  background: #c62828;
+}
+
 .primary {
   background: #0b5cad;
   color: #fff;

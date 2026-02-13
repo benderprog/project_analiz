@@ -48,6 +48,13 @@ MATCH_STAGE_MIN_SCORE_THRESHOLD = 2
 MATCH_STAGE4_OFFENDER_LIMIT = 200
 MATCH_STAGE4_OFFENDER_LIMIT_NO_DOB = 75
 
+_DOB_FULL_DATE_RE = re.compile(r"\b\d{2}\.\d{2}\.\d{4}\b")
+_DOB_YEAR_WITH_MARKER_RE = re.compile(r"\b\d{4}\b(?=\s*(?:г\s*\.?\s*р\.?|род\.?))", re.IGNORECASE)
+_DOB_YEAR_IN_PARENS_RE = re.compile(
+    r"\(\s*(\d{4})\s*(?:г\s*\.?\s*р\.?)?\s*\)",
+    re.IGNORECASE,
+)
+
 
 
 def _normalize_surname(value: str | None) -> str:
@@ -392,6 +399,30 @@ def extract_attributes(
         for offender in offenders_all
         if tuple(offender.get("span") or ()) in eligible_spans
     ]
+    for offender in offenders:
+        span = offender.get("span")
+        if not span or len(span) != 2:
+            continue
+        start, end = int(span[0]), int(span[1])
+        window_end = min(len(text), end + 60)
+        window = text[end:window_end]
+        full_date_match = _DOB_FULL_DATE_RE.search(window)
+        if full_date_match:
+            offender["dob_span"] = (end + full_date_match.start(), end + full_date_match.end())
+            offender["dob_kind"] = "date"
+            continue
+        year_match = _DOB_YEAR_WITH_MARKER_RE.search(window)
+        if year_match:
+            offender["dob_span"] = (end + year_match.start(), end + year_match.end())
+            offender["dob_kind"] = "year"
+            continue
+        year_paren_match = _DOB_YEAR_IN_PARENS_RE.search(window)
+        if year_paren_match:
+            offender["dob_span"] = (
+                end + year_paren_match.start(1),
+                end + year_paren_match.end(1),
+            )
+            offender["dob_kind"] = "year"
 
     extracted_staff = extract_staff_mentions(text)
     excluded_staff = build_staff_from_excluded_mentions(excluded_mentions, text)
@@ -576,6 +607,31 @@ def _portal_offender_payload(offender: OffenderDTO) -> dict:
     return portal_to_dict(model)
 
 
+def _status_key_for_svodka_offender(offender: dict) -> str:
+    span = offender.get("span")
+    if isinstance(span, list) and len(span) == 2:
+        return f"{int(span[0])}:{int(span[1])}"
+    if isinstance(span, tuple) and len(span) == 2:
+        return f"{int(span[0])}:{int(span[1])}"
+    full_name = " ".join(str(offender.get("full_name") or "").lower().split())
+    birth_year = offender.get("birth_year")
+    birth_date = offender.get("birth_date")
+    if not birth_year and isinstance(birth_date, str) and len(birth_date) >= 4:
+        birth_year = birth_date[:4]
+    elif not birth_year and hasattr(birth_date, "year"):
+        birth_year = birth_date.year
+    return f"fio:{full_name}|year:{birth_year or ''}"
+
+
+def _is_year_only_birth_date(value) -> bool:
+    if isinstance(value, str):
+        try:
+            value = datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+    return isinstance(value, date) and value.month == 1 and value.day == 1
+
+
 def match_offenders(
     extracted: list[dict], portal_offenders: list[OffenderDTO], text: str = ""
 ) -> tuple[float, dict, dict]:
@@ -624,6 +680,45 @@ def match_offenders(
         ],
         "excluded_employee_context": [mention_to_dict(item) for item in excluded],
     }
+
+    status_by_key: dict[str, str] = {}
+    for missing in matches["missing_in_portal"]:
+        status_by_key[_status_key_for_svodka_offender(missing)] = "err"
+
+    for mismatch in matches["dob_mismatch_pairs"]:
+        svodka_offender = mismatch.get("svodka_offender") or {}
+        key = _status_key_for_svodka_offender(svodka_offender)
+        if status_by_key.get(key) != "err":
+            status_by_key[key] = "warn"
+
+    for pair in matches["matched_pairs"]:
+        svodka_offender = pair.get("svodka_offender") or {}
+        portal_offender = pair.get("portal_offender") or {}
+        key = _status_key_for_svodka_offender(svodka_offender)
+        if status_by_key.get(key) in {"err", "warn"}:
+            continue
+        svodka_birth_date = svodka_offender.get("birth_date")
+        portal_birth_date = portal_offender.get("birth_date")
+        svodka_has_dob = bool(svodka_birth_date or svodka_offender.get("birth_year"))
+        portal_has_dob = bool(portal_birth_date or portal_offender.get("birth_year"))
+        both_missing_dob = not svodka_has_dob and not portal_has_dob
+        exact_dob = bool(svodka_birth_date and portal_birth_date and svodka_birth_date == portal_birth_date)
+        year_precision_mismatch = (
+            bool(svodka_birth_date and portal_birth_date)
+            and svodka_birth_date != portal_birth_date
+            and (
+                (_is_year_only_birth_date(svodka_birth_date) and not _is_year_only_birth_date(portal_birth_date))
+                or (_is_year_only_birth_date(portal_birth_date) and not _is_year_only_birth_date(svodka_birth_date))
+            )
+        )
+        if year_precision_mismatch:
+            status_by_key[key] = "warn"
+        elif pair.get("match_type") == "exact" and (exact_dob or both_missing_dob):
+            status_by_key[key] = "ok"
+        else:
+            status_by_key[key] = "warn"
+
+    matches["svodka_status_by_span"] = status_by_key
     return score, counts, matches
 
 

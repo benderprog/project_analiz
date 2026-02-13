@@ -197,6 +197,27 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
         self.assertEqual(attrs.offenders[0]["full_name"], "Орлов Дмитрий Игоревич")
         self.assertEqual(attrs.offenders[0]["birth_year"], 1992)
 
+
+
+    def test_extract_attributes_adds_dob_spans_for_date_and_year(self):
+        from apps.analysis_app.services import extract_attributes
+
+        text = (
+            "гражданин РФ Иванов Иван Иванович 01.01.1955 г.р. и "
+            "гражданин РФ Петров Петр Петрович (1990 г.р.)"
+        )
+        with mock.patch("apps.analysis_app.services.match_subdivision", return_value=([], {})):
+            attrs = extract_attributes(text)
+
+        offenders_by_name = {item["full_name"]: item for item in attrs.offenders}
+        ivanov = offenders_by_name["Иванов Иван Иванович"]
+        petrov = offenders_by_name["Петров Петр Петрович"]
+
+        self.assertEqual(text[ivanov["dob_span"][0]:ivanov["dob_span"][1]], "01.01.1955")
+        self.assertEqual(ivanov.get("dob_kind"), "date")
+        self.assertEqual(text[petrov["dob_span"][0]:petrov["dob_span"][1]], "1990")
+        self.assertEqual(petrov.get("dob_kind"), "year")
+
     def test_inflection_difference_is_exact_without_user_facing_notes(self):
         mention = _mention(
             "Орлов Дмитрий Игоревич",
