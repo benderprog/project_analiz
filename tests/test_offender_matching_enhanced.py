@@ -135,3 +135,48 @@ class FuzzyOffenderMatchingTests(SimpleTestCase):
 
         self.assertEqual(len(result.matched_pairs), 1)
         self.assertIn("инициал", result.matched_pairs[0].discrepancy)
+
+
+class RussianInflectionOffenderMatchingTests(SimpleTestCase):
+    def test_genitive_case_name_with_birth_year_matches_portal_full_dob(self):
+        mention = _mention(
+            "Орлова Дмитрия Игоревича",
+            "Орлова",
+            "Дмитрия",
+            "Игоревича",
+            birth=date(1992, 1, 1),
+        )
+        portal = PortalOffender(
+            "Орлов Дмитрий Игоревич",
+            "Орлов",
+            "Дмитрий",
+            "Игоревич",
+            date(1992, 12, 12),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal])
+
+        self.assertEqual(len(result.matched_pairs), 1)
+        self.assertEqual(len(result.missing_in_summary), 0)
+        self.assertIn("с учётом падежа", result.matched_pairs[0].discrepancy)
+
+    def test_year_only_dob_matches_full_date_by_same_year(self):
+        mention = _mention(
+            "Орлова Дмитрия Игоревича",
+            "Орлова",
+            "Дмитрия",
+            "Игоревича",
+            birth=date(1992, 1, 1),
+        )
+        portal = PortalOffender(
+            "Орлов Дмитрий Игоревич",
+            "Орлов",
+            "Дмитрий",
+            "Игоревич",
+            date(1992, 12, 12),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal])
+
+        self.assertEqual(len(result.possible_matches), 0)
+        self.assertEqual(len(result.matched_pairs), 1)
