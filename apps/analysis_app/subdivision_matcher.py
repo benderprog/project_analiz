@@ -410,6 +410,59 @@ def _semantic_window_matches(
     return results
 
 
+def _quoted_name_matches(
+    quoted_name: str | None,
+    mapping: list[int],
+    selected_pu_id: uuid.UUID | None,
+    query_span: tuple[int, int] | None = None,
+) -> list[dict]:
+    quoted_norm = _normalize_quoted_lexical(quoted_name or "")
+    if not quoted_norm:
+        return []
+
+    quoted_tokens = _token_set(quoted_norm)
+    if not quoted_tokens:
+        return []
+
+    cached, _ = _load_cached_subdivisions(_cache_version, selected_pu_id)
+    if not cached:
+        return []
+
+    mapped_span = _map_normalized_span(query_span, mapping) if query_span else None
+    results: list[dict] = []
+    for subdivision in cached:
+        short_name = subdivision.get("normalized_short_name") or ""
+        full_name = subdivision.get("normalized_name") or ""
+        short_tokens = _token_set(short_name)
+        full_tokens = _token_set(full_name)
+        if quoted_tokens <= short_tokens or quoted_tokens <= full_tokens:
+            results.append(
+                {
+                    "portal_subdivision_id": str(subdivision["portal_subdivision_id"]),
+                    "name": subdivision["name"],
+                    "score": 0.9,
+                    "score_percent": 90.0,
+                    "match_method": "quoted_name",
+                    "flags": {"lexical_quoted_hit": True},
+                    "query_span": mapped_span,
+                    "normalized_span": query_span,
+                    "query_locality": None,
+                    "candidate_locality": None,
+                    "locality_mismatch": False,
+                    "match_text": quoted_name or quoted_norm,
+                    "lexical_strength": "strong",
+                    "lexical_score": len(quoted_tokens),
+                    "token_overlap": len(quoted_tokens),
+                    "substring_evidence": True,
+                    "lexical_token": quoted_norm,
+                    "lexical_hit": True,
+                }
+            )
+
+    results.sort(key=lambda item: (-item["score"], item["name"], item["portal_subdivision_id"]))
+    return results
+
+
 def match_subdivision(
     text: str, top_k: int = 5, selected_pu_id: uuid.UUID | None = None
 ) -> tuple[list[dict], dict]:
@@ -446,6 +499,15 @@ def match_subdivision(
         pos = normalized_text.find(normalized_query)
         if pos >= 0:
             query_span = (pos, pos + len(normalized_query))
+    quoted_name_candidates = _quoted_name_matches(
+        quoted_name,
+        mapping,
+        selected_pu_id,
+        query_span=query_span,
+    )
+    if quoted_name_candidates:
+        return quoted_name_candidates[:top_k], meta
+
     semantic_matches = _semantic_window_matches(
         normalized_text,
         mapping,
