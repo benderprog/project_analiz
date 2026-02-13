@@ -584,6 +584,69 @@ class OffenderReportDeduplicationTests(TestCase):
         self.assertEqual(len(report["details"]), 1)
         self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
 
+    def test_year_only_dob_refinement_is_not_partial_error_label(self):
+        match_result = {
+            "offenders_counts": {"matched": 1, "portal_total": 1},
+            "offender_matches": {
+                "matched_pairs": [
+                    {
+                        "svodka_offender": {
+                            "full_name": "Климов Андрей Олегович",
+                            "birth_date": "1990-01-01",
+                        },
+                        "portal_offender": {
+                            "full_name": "Климов Андрей Олегович",
+                            "birth_date": "1990-03-03",
+                        },
+                        "match_type": "exact",
+                        "discrepancy": "Совпало ФИО (с учётом падежа), ДР уточнено по данным БД: 1990 ↔ 03-03-1990",
+                    }
+                ]
+            },
+        }
+
+        report = _build_offender_report(match_result)
+
+        self.assertEqual(len(report["details"]), 1)
+        self.assertIn("ДР уточнено по данным БД", report["details"][0])
+        self.assertNotIn("ФИО совпало частично/с ошибкой", report["details"][0])
+
+    def test_dob_mismatch_pairs_are_deduplicated(self):
+        match_result = {
+            "offenders_counts": {"matched": 0, "portal_total": 1},
+            "offender_matches": {
+                "dob_mismatch_pairs": [
+                    {
+                        "svodka_offender": {
+                            "full_name": "Смирнова Мария Сергеевна",
+                            "birth_date": "1996-01-18",
+                        },
+                        "portal_offender": {
+                            "full_name": "Смирнова Мария Сергеевна",
+                            "birth_date": "1996-02-01",
+                        },
+                        "reason": "Возможное совпадение по ФИО, но ДР отличается",
+                    },
+                    {
+                        "svodka_offender": {
+                            "full_name": "Смирнова Мария Сергеевна",
+                            "birth_date": "1996-01-18",
+                        },
+                        "portal_offender": {
+                            "full_name": "Смирнова Мария Сергеевна",
+                            "birth_date": "1996-02-01",
+                        },
+                        "reason": "Возможное совпадение по ФИО, но ДР отличается",
+                    },
+                ]
+            },
+        }
+
+        report = _build_offender_report(match_result)
+
+        self.assertEqual(len(report["details"]), 1)
+        self.assertEqual(report["details"][0].count("Смирнова"), 2)
+
 class StagedCandidateDebugTests(TestCase):
     def test_stage3_calls_time_only_branch(self):
         attributes = ExtractedAttributes(
