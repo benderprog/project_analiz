@@ -17,6 +17,7 @@ from apps.analysis_app.services import (
     match_offenders,
 )
 from apps.analysis_app.views import _build_offender_report, _format_offenders
+from apps.portaldb.gateway.dtos import EventDTO
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
 
@@ -511,8 +512,90 @@ class StagedCandidateDebugTests(TestCase):
         self.assertTrue(called_stage3_time)
 
 
+class Stage4OffenderFallbackQueryBoundsTests(TestCase):
+    def test_stage4_offender_only_without_dob_uses_bounded_limit(self):
+        attributes = ExtractedAttributes(
+            date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),
+            time_found=True,
+            subdivision_id=str(uuid.uuid4()),
+            offenders=[{"full_name": "Иванов Иван Иванович", "second_name": "Иванов"}],
+            subdivision_name="КПП",
+            subdivision_candidates=[{"score": 0.6, "lexical_strength": "weak"}],
+        )
+
+        gateway = SimpleNamespace(
+            search_events_by_offender=lambda **kwargs: []
+        )
+
+        with patch("apps.analysis_app.services._get_events_for_window", return_value=[]), patch(
+            "apps.analysis_app.services.get_portal_gateway", return_value=gateway
+        ):
+            _, meta = get_event_candidates(attributes, text="Событие")
+
+        stage4_queries = [q for q in meta["stage_queries"] if q.get("stage") == "stage4_offenders"]
+        self.assertTrue(stage4_queries)
+        self.assertEqual(stage4_queries[0]["method"], "search_events_by_offender")
+        self.assertLessEqual(stage4_queries[0]["limit"], 100)
+        self.assertIn("dob_missing_limit_reduced", stage4_queries[0]["warnings"])
+
+
 class Stage4OffenderFallbackTests(TestCase):
     databases = {"default", "portal"}
+
+    def test_stage4_runs_even_when_stage1_to_3_have_candidates_but_no_selection(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        target_subdivision = Subdivision.objects.using("portal").create(name='КПП-цель', parent_pu=pu)
+        other_subdivision = Subdivision.objects.using("portal").create(name='КПП-другое', parent_pu=pu)
+
+        target_dt = timezone.make_aware(datetime(2026, 2, 2, 8, 30), timezone.get_current_timezone())
+        target_event = Event.objects.using("portal").create(
+            date_detection=target_dt,
+            find_subdivision_unit=target_subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=date(1955, 1, 1),
+            event=target_event,
+        )
+
+        decoy_event = Event.objects.using("portal").create(
+            date_detection=timezone.make_aware(datetime(2025, 1, 1, 0, 0), timezone.get_current_timezone()),
+            find_subdivision_unit=other_subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),
+            time_found=True,
+            subdivision_id=str(target_subdivision.subdivision_id),
+            offenders=[
+                {"full_name": "Иванов Иван Иванович", "second_name": "Иванов", "birth_year": 1955},
+            ],
+            subdivision_name=target_subdivision.name,
+            subdivision_candidates=[{"score": 0.61, "lexical_strength": "weak"}],
+        )
+
+        decoy_dto = EventDTO(
+            event_id=decoy_event.event_id,
+            date_detection=decoy_event.date_detection,
+            subdivision_id=decoy_event.find_subdivision_unit_id,
+            event_type=decoy_event.event_type,
+            article_of_law=decoy_event.article_of_law,
+        )
+
+        with patch("apps.analysis_app.services._get_events_for_window", return_value=[decoy_dto]):
+            result = match_event(attributes, "Событие 13: пн (ст.м-н Смирнов А.А.+1), Иванов Иван Иванович")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["match_method"], "subdivision+offenders")
+        self.assertTrue(result["debug"]["stage4_used"])
+        self.assertGreater(result["debug"]["pre_stage4_candidate_count"], 0)
+        self.assertGreater(result["debug"]["stage4_offenders"], 0)
 
     def test_stage4_finds_event_by_subdivision_and_offenders_when_time_mismatch(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")

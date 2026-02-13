@@ -42,6 +42,8 @@ MATCH_STAGE_TIME_LIMIT = 500
 MATCH_STAGE_FALLBACK_LIMIT = 500
 MATCH_STAGE_FALLBACK_DAYS = 7
 MATCH_STAGE_MIN_SCORE_THRESHOLD = 2
+MATCH_STAGE4_OFFENDER_LIMIT = 200
+MATCH_STAGE4_OFFENDER_LIMIT_NO_DOB = 75
 
 def _to_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
@@ -637,7 +639,7 @@ def _stage4_candidates_by_offenders(
     attributes: ExtractedAttributes,
     text: str,
     subdivision_confidence_high: bool,
-    limit: int = 200,
+    limit: int = MATCH_STAGE4_OFFENDER_LIMIT,
 ) -> tuple[list[EventDTO], list[dict]]:
     gateway = get_portal_gateway()
     stage4_events: dict[str, EventDTO] = {}
@@ -672,12 +674,23 @@ def _stage4_candidates_by_offenders(
             if subdivision_id
             else "search_events_by_offender"
         )
+        query_limit = limit
+        warnings: list[str] = []
+        if not birth_date and not birth_year:
+            query_limit = min(limit, MATCH_STAGE4_OFFENDER_LIMIT_NO_DOB)
+            warnings.append("dob_missing_limit_reduced")
+            logger.warning(
+                "Stage4 offender fallback without DOB for surname '%s'; using bounded limit=%s",
+                surname,
+                query_limit,
+            )
+
         events = gateway.search_events_by_offender(
             second_name=surname,
             birth_date=birth_date,
             birth_year=birth_year,
             subdivision_id=subdivision_id,
-            limit=limit,
+            limit=query_limit,
         )
         debug_queries.append(
             {
@@ -688,6 +701,8 @@ def _stage4_candidates_by_offenders(
                 "birth_year": birth_year,
                 "subdivision_ids": [str(subdivision_id)] if subdivision_id else [],
                 "rows": len(events),
+                "limit": query_limit,
+                "warnings": warnings,
             }
         )
         for event in events:
@@ -715,6 +730,9 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
             "subdivision_confidence_high": subdivision_confidence_high,
             "stage1_best_score": 0,
             "score_threshold": score_threshold,
+            "stage4_used": False,
+            "pre_stage4_best_score": 0,
+            "pre_stage4_candidate_count": 0,
         }
 
     stage_events: dict[str, EventDTO] = {}
@@ -806,7 +824,16 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
 
     stage4_used = False
     best_score = scored[0]["flags_true"] if scored else 0
-    if attributes.offenders and (not scored or best_score < score_threshold):
+    selected_by_pre_stage4 = bool(scored and best_score >= score_threshold)
+    should_run_stage4 = bool(
+        attributes.offenders
+        and (
+            not scored
+            or not selected_by_pre_stage4
+            or best_score < score_threshold
+        )
+    )
+    if should_run_stage4:
         stage4_events, stage4_queries = _stage4_candidates_by_offenders(
             attributes, text=text, subdivision_confidence_high=subdivision_confidence_high
         )
@@ -833,6 +860,8 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
         "stage1_best_score": stage1_best_score,
         "score_threshold": score_threshold,
         "stage4_used": stage4_used,
+        "pre_stage4_best_score": best_score,
+        "pre_stage4_candidate_count": len(hydrated),
     }
 
 
@@ -889,6 +918,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         if attributes.selected_pu_id
         else None,
         "chosen_method": match_method,
+        "method_unresolved": match_method is None,
         "candidate_stages": candidate_meta.get("stages", []),
         "candidate_queries": candidate_meta.get("stage_queries", []),
         "stage1_subdivision_time": stage_rows.get("stage1_subdivision_time", 0),
@@ -899,6 +929,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "stage3_time": stage_rows.get("stage3_time", 0),
         "stage4_offenders": stage_rows.get("stage4_offenders", 0),
         "stage1_best_score": candidate_meta.get("stage1_best_score", 0),
+        "pre_stage4_best_score": candidate_meta.get("pre_stage4_best_score", 0),
+        "pre_stage4_candidate_count": candidate_meta.get("pre_stage4_candidate_count", 0),
         "score_threshold": candidate_meta.get("score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD),
         "subdivision_confidence_high": candidate_meta.get("subdivision_confidence_high", False),
         "stage4_used": candidate_meta.get("stage4_used", False),

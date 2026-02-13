@@ -40,6 +40,21 @@ class EmployeeContextFilterTests(SimpleTestCase):
         self.assertEqual(len(excluded), 1)
         self.assertEqual(excluded[0].second_name, "Кылосова")
 
+
+    def test_excludes_parenthetical_st_mn_with_plus_counter(self):
+        text = "пн (ст.м-н Смирнов А.А.+1), Иванов Иван Иванович"
+        staff_start = text.index("Смирнов")
+        offender_start = text.index("Иванов")
+        mentions = [
+            _mention("Смирнов А.А.", "Смирнов", "А", "А", (staff_start, staff_start + 12)),
+            _mention("Иванов Иван Иванович", "Иванов", "Иван", "Иванович", (offender_start, offender_start + 20)),
+        ]
+
+        eligible, excluded = split_mentions_by_employee_context(text, mentions)
+
+        self.assertEqual([m.second_name for m in eligible], ["Иванов"])
+        self.assertEqual([m.second_name for m in excluded], ["Смирнов"])
+
     def test_excluded_surname_is_overridden_if_in_portal(self):
         text = "(пр-к Кылосова О.Д.)"
         start = text.index("Кылосова")

@@ -34,6 +34,11 @@ EMPLOYEE_MARKERS = {
     "начальник",
     "майор",
     "подполковник",
+    "мичман",
+    "старший",
+    "старший мичман",
+    "ст м н",
+    "ст.м-н",
 }
 
 _TOKEN_RE = re.compile(r"[а-яёa-z-]+", re.IGNORECASE)
@@ -79,9 +84,17 @@ def _has_rank_in_parentheses(text: str, span: tuple[int, int] | None) -> bool:
     if open_idx == -1 or close_idx == -1:
         return False
     content = text[open_idx + 1 : close_idx].lower()
+    content = re.sub(r"\+\d+\b", "", content)
     content_tokens = {_norm(token) for token in _TOKEN_RE.findall(content)}
     normalized_markers = {_norm(marker) for marker in EMPLOYEE_MARKERS}
-    return bool(content_tokens & normalized_markers)
+    if content_tokens & normalized_markers:
+        return True
+
+    normalized_content = _norm(content)
+    if "старшиймичман" in normalized_content or "стмн" in normalized_content:
+        return True
+
+    return "ст" in content_tokens and "мн" in content_tokens
 
 
 def is_employee_context(text: str, mention_span: tuple[int, int] | None) -> bool:
@@ -96,6 +109,9 @@ def is_employee_context(text: str, mention_span: tuple[int, int] | None) -> bool
     for token, _, _ in lookback:
         if _norm(token) in normalized_markers:
             return True
+
+    if _is_inside_parentheses(text, mention_span):
+        return True
 
     return _has_rank_in_parentheses(text, mention_span)
 
