@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from functools import lru_cache
 from uuid import UUID
 
+from django.conf import settings
 from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
@@ -310,7 +311,10 @@ def extract_attributes(
         selected_pu_id=selected_pu_id,
     )
     best_candidate = subdivision_candidates[0] if subdivision_candidates else None
-    if best_candidate and best_candidate["score"] >= SUBDIVISION_MATCH_THRESHOLD:
+    accept_threshold = float(
+        getattr(settings, "SUBDIVISION_ACCEPT_THRESHOLD", SUBDIVISION_MATCH_THRESHOLD)
+    )
+    if best_candidate and best_candidate["score"] >= accept_threshold:
         subdivision_id = best_candidate["portal_subdivision_id"]
         subdivision_name = best_candidate["name"]
     else:
@@ -719,8 +723,11 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     score_threshold = int(config.get("min_score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD))
 
     subdivision_candidate = attributes.subdivision_candidates[0] if attributes.subdivision_candidates else {}
+    accept_threshold = float(
+        getattr(settings, "SUBDIVISION_ACCEPT_THRESHOLD", SUBDIVISION_MATCH_THRESHOLD)
+    )
     subdivision_confidence_high = bool(
-        subdivision_candidate.get("lexical_strength") == "strong" or attributes.selected_pu_id
+        subdivision_candidate.get("score", 0) >= accept_threshold or attributes.selected_pu_id
     )
 
     if not attributes.date_time:
