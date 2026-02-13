@@ -466,15 +466,42 @@ def _candidate_birth_date(candidate: dict) -> date | None:
     return None
 
 
-def _svodka_offender_birth_query(off: dict) -> tuple[date | None, int | None]:
+def _extract_text_window(text: str, span: tuple[int, int] | None, width: int = 80) -> str:
+    if not text:
+        return ""
+    if not isinstance(span, tuple) or len(span) != 2:
+        start = 0
+    else:
+        start = max(0, min(len(text), int(span[1])))
+    end = max(start, min(len(text), start + max(0, width)))
+    return text[start:end]
+
+
+def _is_year_only_dob_in_text(window: str, year: int) -> bool:
+    if not window:
+        return False
+    year_str = str(year)
+    if not re.search(rf"\b{re.escape(year_str)}\b", window):
+        return False
+    full_date_with_year = re.search(rf"\b\d{{2}}\.\d{{2}}\.{re.escape(year_str)}\b", window)
+    return full_date_with_year is None
+
+
+def _svodka_offender_birth_query(off: dict, text: str) -> tuple[date | None, int | None, str]:
     raw_birth_date = off.get("birth_date")
     birth_year = off.get("birth_year")
+    span = off.get("span")
+    if isinstance(span, list):
+        span = tuple(span)
+    if not isinstance(span, tuple) or len(span) != 2:
+        span = None
 
-    if not raw_birth_date and birth_year is not None:
+    parsed_birth_year: int | None = None
+    if birth_year is not None:
         try:
-            return None, int(birth_year)
+            parsed_birth_year = int(birth_year)
         except (TypeError, ValueError):
-            return None, None
+            parsed_birth_year = None
 
     birth_date = _candidate_birth_date({"birth_date": raw_birth_date})
     if not birth_date and isinstance(raw_birth_date, str):
@@ -486,9 +513,25 @@ def _svodka_offender_birth_query(off: dict) -> tuple[date | None, int | None]:
             except ValueError:
                 continue
 
-    if not birth_date:
-        return None, None
-    return birth_date, birth_date.year
+    if parsed_birth_year is None and isinstance(birth_date, date):
+        parsed_birth_year = birth_date.year
+
+    if parsed_birth_year is None and not birth_date:
+        return None, None, "none"
+
+    window = _extract_text_window(text, span)
+
+    if parsed_birth_year is not None and _is_year_only_dob_in_text(window, parsed_birth_year):
+        return None, parsed_birth_year, "year"
+
+    if isinstance(birth_date, date):
+        is_jan_first = birth_date.month == 1 and birth_date.day == 1
+        has_full_date_in_window = bool(re.search(r"\b\d{2}\.\d{2}\.\d{4}\b", window))
+        if is_jan_first and not has_full_date_in_window:
+            return None, birth_date.year, "year"
+        return birth_date, parsed_birth_year, "date"
+
+    return None, parsed_birth_year, "year"
 
 
 def _portal_offenders(event: HydratedEvent) -> list[OffenderDTO]:
@@ -788,7 +831,7 @@ def _stage4_candidates_by_offenders(
         if not surname:
             continue
 
-        birth_date, birth_year = _svodka_offender_birth_query(offender)
+        birth_date, birth_year, dob_mode = _svodka_offender_birth_query(offender, text)
         subdivision_id = attributes.subdivision_id if subdivision_confidence_high else None
         query_limit = limit
         warnings: list[str] = []
@@ -833,6 +876,8 @@ def _stage4_candidates_by_offenders(
                 "method": "search_events_by_offender",
                 "stage4_path": query_path,
                 "surname": surname,
+                "offender_query_name": (offender.get("full_name") or surname),
+                "dob_mode": dob_mode,
                 "birth_date": date_to_str(birth_date) if birth_date else None,
                 "used_birth_date": bool(birth_date),
                 "birth_year": birth_year,
