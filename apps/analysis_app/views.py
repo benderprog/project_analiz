@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_datetime
 from django.views import View
@@ -23,6 +24,9 @@ from apps.analysis_app.utils.json_safe import offender_to_json
 from apps.analysis_app.utils.offender_format import offender_display
 
 
+TIME_ERROR_MINUTES = int(getattr(settings, "TIME_ERROR_MINUTES", 30))
+
+
 def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
     return [offender_display(offender, source=source) for offender in offenders or []]
 
@@ -44,7 +48,12 @@ def _status_for_timestamp(match_result: dict) -> str:
     delta = match_result.get("time_delta_minutes")
     if delta is None:
         return "red"
-    return "green" if delta <= 30 else "yellow"
+    delta_abs = abs(delta)
+    if delta_abs == 0:
+        return "green"
+    if delta_abs <= TIME_ERROR_MINUTES:
+        return "yellow"
+    return "red"
 
 
 def _status_for_subdivision(match_result: dict) -> str:
@@ -262,6 +271,12 @@ def _build_comments(match_result: dict) -> list[str]:
                 f"Извлечено: {date_diff.get('extracted') or '—'}, "
                 f"портал: {date_diff.get('portal') or '—'}."
             )
+    delta_minutes = match_result.get("time_delta_minutes")
+    if delta_minutes is not None and abs(delta_minutes) > TIME_ERROR_MINUTES:
+        comments.append(
+            "Ошибка: расхождение даты/времени на "
+            f"{delta_minutes} мин (более {TIME_ERROR_MINUTES} мин)."
+        )
     offender_report = _build_offender_report(match_result)
     if offender_report.get("summary"):
         comments.append(f"{offender_report['summary']}.")
