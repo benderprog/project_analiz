@@ -107,10 +107,9 @@ def extract_staff_mentions(text: str) -> list[StaffMention]:
             continue
 
         span = (match.start(), match.end())
-        in_parens = _inside_parentheses(text, span)
         rank_raw = _extract_rank_before(text, match.start("surname"))
 
-        if not in_parens and not rank_raw:
+        if not rank_raw:
             continue
 
         rank_norm = re.sub(r"\s+", " ", rank_raw).strip()
@@ -149,6 +148,8 @@ def build_staff_from_excluded_mentions(excluded_mentions: list, text: str) -> li
         display = getattr(mention, "full_name", "") or " ".join(filter(None, [surname, first, middle]))
         if initials and surname:
             display = f"{surname} {initials}"
+        if not rank_raw:
+            continue
         if rank_raw and display:
             display = f"{rank_raw} {display}"
 

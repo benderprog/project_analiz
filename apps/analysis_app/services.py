@@ -47,6 +47,75 @@ MATCH_STAGE_MIN_SCORE_THRESHOLD = 2
 MATCH_STAGE4_OFFENDER_LIMIT = 200
 MATCH_STAGE4_OFFENDER_LIMIT_NO_DOB = 75
 
+
+
+def _normalize_surname(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.lower().replace("ё", "е")
+    normalized = re.sub(r"[^а-яa-z0-9]", "", normalized)
+    return normalized.strip()
+
+
+def _staff_to_offender_payload(staff_item: dict) -> dict:
+    surname = (staff_item or {}).get("surname") or ""
+    initials = (staff_item or {}).get("initials") or ""
+    initials_letters = re.findall(r"[А-ЯЁ]", initials)
+    first_name = initials_letters[0] if len(initials_letters) > 0 else ""
+    patronymic_name = initials_letters[1] if len(initials_letters) > 1 else ""
+    full_name = " ".join(filter(None, [surname, first_name, patronymic_name]))
+    return {
+        "full_name": full_name,
+        "second_name": surname,
+        "first_name": first_name,
+        "patronymic_name": patronymic_name,
+        "birth_date": None,
+        "birth_year": None,
+        "source": "staff_override",
+        "staff_override_is_offender": True,
+    }
+
+
+def _apply_staff_offender_override(attributes: ExtractedAttributes, portal_offenders: list[OffenderDTO]) -> list[dict]:
+    db_surnames = {
+        _normalize_surname(item.second_name)
+        for item in portal_offenders
+        if _normalize_surname(item.second_name)
+    }
+    if not db_surnames:
+        return []
+
+    kept_staff: list[dict] = []
+    overridden: list[dict] = []
+    existing_offender_keys = {
+        (
+            _normalize_surname(item.get("second_name")),
+            (item.get("first_name") or "").lower(),
+            (item.get("patronymic_name") or "").lower(),
+        )
+        for item in attributes.offenders
+    }
+
+    for staff_item in attributes.staff:
+        surname_norm = _normalize_surname(staff_item.get("surname"))
+        if surname_norm and surname_norm in db_surnames:
+            offender_payload = _staff_to_offender_payload(staff_item)
+            offender_key = (
+                _normalize_surname(offender_payload.get("second_name")),
+                (offender_payload.get("first_name") or "").lower(),
+                (offender_payload.get("patronymic_name") or "").lower(),
+            )
+            if offender_key not in existing_offender_keys:
+                overridden.append(offender_payload)
+                existing_offender_keys.add(offender_key)
+            continue
+        kept_staff.append(staff_item)
+
+    if overridden:
+        attributes.offenders = [*attributes.offenders, *overridden]
+    attributes.staff = kept_staff
+    return overridden
+
 def _to_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
@@ -1056,9 +1125,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         portal_subdivision_name = attributes.subdivision_name
 
     portal_offenders = _portal_offenders(best_event)
+    overridden_staff_offenders = _apply_staff_offender_override(attributes, portal_offenders)
     offenders_score, offenders_counts, offender_matches = match_offenders(
         attributes.offenders, portal_offenders, text
     )
+    if overridden_staff_offenders:
+        offender_matches["staff_overridden_to_offenders"] = overridden_staff_offenders
     offenders_ok = (
         offenders_counts.get("matched", 0) == offenders_counts.get("portal_total", 0)
         and offenders_counts.get("dob_mismatch", 0) == 0
