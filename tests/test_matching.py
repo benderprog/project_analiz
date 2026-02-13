@@ -614,6 +614,33 @@ class OffenderReportDeduplicationTests(TestCase):
         self.assertNotIn("с учётом падежа", output)
         self.assertNotIn("уточнено", output)
 
+    def test_report_has_no_partial_or_case_note_for_inflection_only_match(self):
+        match_result = {
+            "offenders_counts": {"matched": 1, "portal_total": 1},
+            "offender_matches": {
+                "matched_pairs": [
+                    {
+                        "svodka_offender": {
+                            "full_name": "Орлов Дмитрий Игоревич",
+                            "birth_date": "1992-01-01",
+                        },
+                        "portal_offender": {
+                            "full_name": "Орлов Дмитрий Игоревич",
+                            "birth_date": "1992-12-12",
+                        },
+                        "match_type": "exact",
+                        "discrepancy": None,
+                    }
+                ]
+            },
+        }
+
+        report = _build_offender_report(match_result)
+
+        details = " ".join(report["details"])
+        self.assertNotIn("частично/с ошибкой", details)
+        self.assertNotIn("косвенном падеже", details)
+
     def test_dob_mismatch_pairs_are_deduplicated(self):
         match_result = {
             "offenders_counts": {"matched": 0, "portal_total": 1},

@@ -22,6 +22,7 @@ from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
 from apps.portaldb.gateway.factory import get_portal_gateway
 
 from .offender_extractor import extract_offenders
+from .offenders.normalize import normalize_fio_to_nominative
 from .offenders.matching import (
     match_offenders_with_details,
     mention_to_dict,
@@ -376,6 +377,13 @@ def extract_attributes(
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
     offenders_all = extract_offenders(text)
+    for offender in offenders_all:
+        second_name = offender.get("second_name") or ""
+        first_name = offender.get("first_name") or ""
+        patronymic_name = offender.get("patronymic_name") or ""
+        normalized = normalize_fio_to_nominative(second_name, first_name, patronymic_name)
+        offender["second_name"], offender["first_name"], offender["patronymic_name"] = normalized
+        offender["full_name"] = " ".join(part for part in normalized if part)
     mentions = [_mention_from_dict(item) for item in offenders_all]
     eligible_mentions, excluded_mentions = split_mentions_by_employee_context(text, mentions)
     eligible_spans = {mention.span for mention in eligible_mentions}
