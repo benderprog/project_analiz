@@ -338,6 +338,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "subdivision_name": extracted.get("subdivision_name"),
             "subdivision_candidates": formatted_candidates,
             "offenders": _format_offenders(extracted.get("offenders") or [], source="svodka"),
+            "staff": [item.get("display") for item in (extracted.get("staff") or []) if item.get("display")],
         },
         "match": {
             "matched": bool(match_result.get("matched")),
@@ -434,6 +435,7 @@ class UploadView(View):
                         "offenders": [
                             offender_to_json(offender) for offender in attributes.offenders
                         ],
+                        "staff": attributes.staff,
                     },
                     match_result=match_result,
                 )
