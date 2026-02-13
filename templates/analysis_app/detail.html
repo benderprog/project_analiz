@@ -133,6 +133,20 @@
                 {% else %}
                   —
                 {% endif %}
+                <div class="nested-staff">
+                  <div><strong>Сотрудники</strong></div>
+                  <div id="attr-staff">
+                    {% if selected_event.extracted.staff %}
+                      <ul>
+                        {% for staff_item in selected_event.extracted.staff %}
+                          <li>{{ staff_item }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </div>
+                </div>
               </td>
               <td>
                 <span class="badge badge-{{ selected_event.status.offenders }}" data-badge="offenders">
@@ -266,6 +280,12 @@
       return items.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     };
 
+    const renderOffendersWithStaff = (offenders, staff) => {
+      const offendersHtml = renderList(offenders);
+      const staffHtml = renderList(staff);
+      return `${offendersHtml}<div class="nested-staff"><div><strong>Сотрудники</strong></div><div>${staffHtml}</div></div>`;
+    };
+
     const renderCandidates = (candidates) => {
       if (!candidates || !candidates.length) {
         return "<li>—</li>";
@@ -291,7 +311,10 @@
       dom.subdivisionCandidates.querySelector("ul").innerHTML = renderCandidates(
         event.extracted.subdivision_candidates
       );
-      dom.attrOffenders.innerHTML = renderList(event.extracted.offenders);
+      dom.attrOffenders.innerHTML = renderOffendersWithStaff(
+        event.extracted.offenders,
+        event.extracted.staff
+      );
       dom.portalTimestamp.textContent = event.portal_timestamp_display || "—";
       dom.portalSubdivision.textContent = event.portal.subdivision_name || "—";
       dom.portalOffenders.innerHTML = renderList(event.portal.offenders);

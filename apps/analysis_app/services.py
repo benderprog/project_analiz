@@ -29,6 +29,7 @@ from .offenders.matching import (
     split_mentions_by_employee_context,
 )
 from .offenders.types import OffenderMention, PortalOffender
+from .staff_extractor import build_staff_from_excluded_mentions, extract_staff_mentions
 from .semantic import get_sentence_model
 from .subdivision_matcher import (
     SUBDIVISION_MATCH_THRESHOLD,
@@ -61,6 +62,7 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
+    staff: list[dict] = field(default_factory=list)
     subdivision_candidates: list[dict] = field(default_factory=list)
     subdivision_span: list[int] | None = None
     selected_pu_id: uuid.UUID | None = None
@@ -304,7 +306,22 @@ def extract_attributes(
 ) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
-    offenders = extract_offenders(text)
+    offenders_all = extract_offenders(text)
+    mentions = [_mention_from_dict(item) for item in offenders_all]
+    eligible_mentions, excluded_mentions = split_mentions_by_employee_context(text, mentions)
+    eligible_spans = {mention.span for mention in eligible_mentions}
+    offenders = [
+        offender
+        for offender in offenders_all
+        if tuple(offender.get("span") or ()) in eligible_spans
+    ]
+
+    extracted_staff = extract_staff_mentions(text)
+    excluded_staff = build_staff_from_excluded_mentions(excluded_mentions, text)
+    staff_map = {item.display: item.to_dict() for item in extracted_staff}
+    for item in excluded_staff:
+        staff_map.setdefault(item.display, item.to_dict())
+    staff = list(staff_map.values())
     subdivision_candidates, candidate_meta = match_subdivision(
         text,
         top_k=5,
@@ -328,6 +345,7 @@ def extract_attributes(
         time_found=time_found,
         subdivision_id=subdivision_id,
         offenders=offenders,
+        staff=staff,
         subdivision_name=subdivision_name,
         subdivision_candidates=subdivision_candidates,
         subdivision_span=subdivision_span,
