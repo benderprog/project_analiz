@@ -24,12 +24,49 @@ SUBDIVISION_YELLOW_THRESHOLD = 0.75
 
 _MAX_WINDOW_COUNT = 80
 _WINDOW_SIZES = (1, 2, 3, 4, 5, 6)
+_SUBDIVISION_STOP_TOKENS = {
+    "опк",
+    "погз",
+    "погк",
+    "кпп",
+    "отделение",
+    "участок",
+    "пн",
+    "пограничный",
+    "пункт",
+}
 
 _cache_version = 0
 
 
 def _token_set(value: str) -> set[str]:
     return {token for token in value.split() if token}
+
+
+def _extract_key_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in _token_set(value)
+        if len(token) > 4 and token not in _SUBDIVISION_STOP_TOKENS
+    }
+
+
+def _lexical_evidence(
+    normalized_text: str, normalized_short_name: str, normalized_name: str
+) -> tuple[bool, int]:
+    evidence_source = normalized_short_name or normalized_name
+    key_tokens = _extract_key_tokens(evidence_source)
+    text_tokens = _token_set(normalized_text)
+
+    substring_hit = any(token in normalized_text for token in key_tokens)
+    token_overlap = len(key_tokens & text_tokens)
+    return substring_hit, token_overlap
+
+
+def _lexical_factor(substring_hit: bool, token_overlap: int) -> float:
+    if substring_hit or token_overlap > 0:
+        return 1.0
+    return float(getattr(settings, "SUBDIVISION_LOW_LEXICAL_FACTOR", 0.1))
 
 
 def _lexical_strength(
@@ -282,28 +319,27 @@ def _semantic_window_matches(
     embeddings = model.encode(window_texts)
 
     best_by_subdivision: dict[str, dict] = {}
-    text_tokens = _token_set(normalized_text)
     for window, window_embedding in zip(windows, embeddings):
         window_vec = to_py_floats(window_embedding)
         for candidate in cached_embeddings:
-            score = _cosine_similarity(window_vec, candidate["embedding"])
+            semantic_score = _cosine_similarity(window_vec, candidate["embedding"])
             portal_id = str(candidate["subdivision"]["portal_subdivision_id"])
             short_name = candidate["subdivision"].get("normalized_short_name") or ""
             full_name = candidate["subdivision"].get("normalized_name") or ""
-            token_overlap = len(text_tokens & (_token_set(short_name) | _token_set(full_name)))
-            substring_evidence = bool(
-                (short_name and short_name in normalized_text)
-                or (full_name and full_name in normalized_text)
+            substring_hit, token_overlap = _lexical_evidence(
+                normalized_text, short_name, full_name
             )
-            if token_overlap == 0 and not substring_evidence:
-                continue
+            lexical_factor = _lexical_factor(substring_hit, token_overlap)
+            confidence = semantic_score * lexical_factor
             current = best_by_subdivision.get(portal_id)
-            if current is None or score > current["score"]:
+            if current is None or confidence > current["score"]:
                 best_by_subdivision[portal_id] = {
                     "portal_subdivision_id": portal_id,
                     "name": candidate["subdivision"]["name"],
-                    "score": score,
-                    "score_percent": round(score * 100, 2),
+                    "score": confidence,
+                    "score_percent": round(confidence * 100, 2),
+                    "semantic_score": semantic_score,
+                    "lexical_factor": lexical_factor,
                     "match_method": "semantic_window",
                     "query_span": _map_normalized_span(window["span"], mapping),
                     "normalized_span": window["span"],
@@ -313,9 +349,9 @@ def _semantic_window_matches(
                     "locality_mismatch": False,
                     "match_text": window["text"],
                     "lexical_strength": "medium" if token_overlap else "none",
-                    "lexical_score": 1 if token_overlap else 0,
+                    "lexical_score": token_overlap,
                     "token_overlap": token_overlap,
-                    "substring_evidence": substring_evidence,
+                    "substring_evidence": substring_hit,
                     "lexical_token": None,
                 }
 

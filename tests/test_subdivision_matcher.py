@@ -7,6 +7,7 @@ from apps.analysis_app.models import CachedSubdivision
 from apps.analysis_app.subdivision_matcher import invalidate_subdivision_cache, match_subdivision
 from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 from apps.analysis_app import views as analysis_views
+from apps.analysis_app.services import extract_attributes
 
 
 class SubdivisionMatcherTests(TestCase):
@@ -21,7 +22,7 @@ class SubdivisionMatcherTests(TestCase):
         )
         invalidate_subdivision_cache()
 
-        paragraph = "На КПП №2 \"Ухтомское\" выявлено нарушение."
+        paragraph = "На КПП-2 \"Ухтомское\" выявлено нарушение."
         candidates, _ = match_subdivision(paragraph, top_k=1)
 
         self.assertEqual(len(candidates), 1)
@@ -71,18 +72,22 @@ class SubdivisionMatcherTests(TestCase):
 
     @override_settings(SKIP_SEMANTIC_MODEL=False, SUBDIVISION_SEMANTIC_THRESHOLD=0.5)
     def test_match_subdivision_semantic_fallback_uses_windows(self):
-        CachedSubdivision.objects.create(
+        subdivision_north = CachedSubdivision(
             portal_subdivision_id=uuid.uuid4(),
             name="ПОГК Северная",
             normalized_name=normalize_subdivision_text("ПОГК Северная"),
             embedding=[1.0, 0.0],
         )
-        CachedSubdivision.objects.create(
+        subdivision_north._skip_embedding_rebuild = True
+        subdivision_north.save()
+        subdivision_south = CachedSubdivision(
             portal_subdivision_id=uuid.uuid4(),
             name="ПОГК Южная",
             normalized_name=normalize_subdivision_text("ПОГК Южная"),
             embedding=[0.0, 1.0],
         )
+        subdivision_south._skip_embedding_rebuild = True
+        subdivision_south.save()
         invalidate_subdivision_cache()
 
         class StubModel:
@@ -93,7 +98,7 @@ class SubdivisionMatcherTests(TestCase):
             "apps.analysis_app.subdivision_matcher.get_sentence_model", return_value=StubModel()
         ):
             candidates, _ = match_subdivision(
-                "Службой выявлено нарушение на пункте Северном.", top_k=1
+                "Службой выявлено нарушение на пункте Северная.", top_k=1
             )
 
         self.assertEqual(len(candidates), 1)
@@ -103,32 +108,38 @@ class SubdivisionMatcherTests(TestCase):
 
     @override_settings(SKIP_SEMANTIC_MODEL=False, SUBDIVISION_SEMANTIC_THRESHOLD=0.5)
     def test_lexical_gating_prefers_uhtomskoe_and_excludes_ochakovo(self):
-        CachedSubdivision.objects.create(
+        subdivision_1 = CachedSubdivision(
             portal_subdivision_id=uuid.uuid4(),
             name='КПП-1 "Ухтомское"',
             normalized_short_name=normalize_subdivision_text('КПП-1 "Ухтомское"'),
             normalized_name=normalize_subdivision_text('КПП-1 "Ухтомское"'),
             embedding=[0.0, 1.0],
         )
-        CachedSubdivision.objects.create(
+        subdivision_1._skip_embedding_rebuild = True
+        subdivision_1.save()
+        subdivision_2 = CachedSubdivision(
             portal_subdivision_id=uuid.uuid4(),
             name='КПП-2 "Ухтомское"',
             normalized_short_name=normalize_subdivision_text('КПП-2 "Ухтомское"'),
             normalized_name=normalize_subdivision_text('КПП-2 "Ухтомское"'),
             embedding=[0.0, 0.9],
         )
-        CachedSubdivision.objects.create(
+        subdivision_2._skip_embedding_rebuild = True
+        subdivision_2.save()
+        subdivision_3 = CachedSubdivision(
             portal_subdivision_id=uuid.uuid4(),
             name='ПОГК "Очаково"',
             normalized_short_name=normalize_subdivision_text('ПОГК "Очаково"'),
             normalized_name=normalize_subdivision_text('ПОГК "Очаково"'),
             embedding=[1.0, 0.0],
         )
+        subdivision_3._skip_embedding_rebuild = True
+        subdivision_3.save()
         invalidate_subdivision_cache()
 
         class StubModel:
             def encode(self, texts):
-                return [[1.0, 0.0] for _ in texts]
+                return [[0.0, 1.0] for _ in texts]
 
         with mock.patch(
             'apps.analysis_app.subdivision_matcher.get_sentence_model', return_value=StubModel()
@@ -139,6 +150,77 @@ class SubdivisionMatcherTests(TestCase):
         top_names = [item['name'] for item in candidates[:2]]
         self.assertTrue(all('Ухтомское' in name for name in top_names))
         self.assertFalse(any('Очаково' in item['name'] for item in candidates))
+
+
+
+    @override_settings(
+        SKIP_SEMANTIC_MODEL=False,
+        SUBDIVISION_SEMANTIC_THRESHOLD=0.01,
+        SUBDIVISION_LOW_LEXICAL_FACTOR=0.1,
+        SUBDIVISION_ACCEPT_THRESHOLD=0.75,
+    )
+    def test_extract_attributes_does_not_determine_subdivision_without_lexical_evidence(self):
+        target = CachedSubdivision(
+            portal_subdivision_id=uuid.uuid4(),
+            name='ОПК "Пятницкая"',
+            normalized_short_name=normalize_subdivision_text('ОПК "Пятницкая"'),
+            normalized_name=normalize_subdivision_text('ОПК "Пятницкая"'),
+            embedding=[1.0, 0.0],
+        )
+        target._skip_embedding_rebuild = True
+        target.save()
+        invalidate_subdivision_cache()
+
+        class StubModel:
+            def encode(self, texts):
+                return [[1.0, 0.0] for _ in texts]
+
+        with mock.patch(
+            'apps.analysis_app.subdivision_matcher.get_sentence_model', return_value=StubModel()
+        ):
+            attributes = extract_attributes('Наряд обнаружил нарушение на маршруте патруля в 12:00 01.01.2024.')
+
+        self.assertIsNone(attributes.subdivision_id)
+        self.assertIsNone(attributes.subdivision_name)
+        self.assertGreaterEqual(len(attributes.subdivision_candidates), 1)
+        best = attributes.subdivision_candidates[0]
+        self.assertEqual(best['portal_subdivision_id'], str(target.portal_subdivision_id))
+        self.assertAlmostEqual(best['semantic_score'], 1.0, places=6)
+        self.assertAlmostEqual(best['lexical_factor'], 0.1, places=6)
+        self.assertLess(best['score'], 0.75)
+
+    @override_settings(
+        SKIP_SEMANTIC_MODEL=False,
+        SUBDIVISION_SEMANTIC_THRESHOLD=0.01,
+        SUBDIVISION_ACCEPT_THRESHOLD=0.75,
+    )
+    def test_extract_attributes_determines_subdivision_with_lexical_evidence(self):
+        target = CachedSubdivision(
+            portal_subdivision_id=uuid.uuid4(),
+            name='КПП "Ухтомское"',
+            normalized_short_name=normalize_subdivision_text('КПП "Ухтомское"'),
+            normalized_name=normalize_subdivision_text('КПП "Ухтомское"'),
+            embedding=[1.0, 0.0],
+        )
+        target._skip_embedding_rebuild = True
+        target.save()
+        invalidate_subdivision_cache()
+
+        class StubModel:
+            def encode(self, texts):
+                return [[1.0, 0.0] for _ in texts]
+
+        with mock.patch(
+            'apps.analysis_app.subdivision_matcher.get_sentence_model', return_value=StubModel()
+        ):
+            attributes = extract_attributes('Нарушение выявлено на посту Ухтомское в 12:00 01.01.2024.')
+
+        self.assertEqual(attributes.subdivision_id, str(target.portal_subdivision_id))
+        self.assertEqual(attributes.subdivision_name, target.name)
+        self.assertGreaterEqual(len(attributes.subdivision_candidates), 1)
+        best = attributes.subdivision_candidates[0]
+        self.assertAlmostEqual(best['lexical_factor'], 1.0, places=6)
+        self.assertGreaterEqual(best['score'], 0.75)
 
     def test_build_comments_includes_locality_mismatch(self):
         comments = analysis_views._build_comments(

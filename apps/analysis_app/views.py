@@ -313,6 +313,10 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
                 if candidate.get("score") is not None
                 else None,
                 "score_percent": candidate.get("score_percent"),
+                "semantic_score": round(candidate.get("semantic_score", 0) * 100, 2)
+                if candidate.get("semantic_score") is not None
+                else None,
+                "lexical_factor": candidate.get("lexical_factor"),
                 "flags": candidate.get("flags"),
                 "query_locality": candidate.get("query_locality"),
                 "candidate_locality": candidate.get("candidate_locality"),
