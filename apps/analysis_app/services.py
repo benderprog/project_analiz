@@ -673,11 +673,6 @@ def _stage4_candidates_by_offenders(
         birth_date = offender.get("birth_date") or _candidate_birth_date(offender)
         birth_year = offender.get("birth_year")
         subdivision_id = attributes.subdivision_id if subdivision_confidence_high else None
-        method_name = (
-            "search_events_by_offender_subdivision"
-            if subdivision_id
-            else "search_events_by_offender"
-        )
         query_limit = limit
         warnings: list[str] = []
         if not birth_date and not birth_year:
@@ -689,21 +684,44 @@ def _stage4_candidates_by_offenders(
                 query_limit,
             )
 
-        events = gateway.search_events_by_offender(
-            second_name=surname,
-            birth_date=birth_date,
-            birth_year=birth_year,
-            subdivision_id=subdivision_id,
-            limit=query_limit,
-        )
+        subdivision_events: list[EventDTO] = []
+        offender_only_events: list[EventDTO] = []
+        query_path = "offender_only"
+
+        if subdivision_id:
+            subdivision_events = gateway.search_events_by_offender(
+                second_name=surname,
+                birth_date=birth_date,
+                birth_year=birth_year,
+                subdivision_id=subdivision_id,
+                limit=query_limit,
+            )
+            query_path = "offender_subdivision"
+
+        if not subdivision_events:
+            offender_only_events = gateway.search_events_by_offender(
+                second_name=surname,
+                birth_date=birth_date,
+                birth_year=birth_year,
+                subdivision_id=None,
+                limit=query_limit,
+            )
+            if subdivision_id:
+                query_path = "offender_subdivision_then_only"
+
+        events = subdivision_events or offender_only_events
         debug_queries.append(
             {
                 "stage": "stage4_offenders",
-                "method": method_name,
+                "method": "search_events_by_offender",
+                "stage4_path": query_path,
                 "surname": surname,
                 "birth_date": date_to_str(birth_date) if birth_date else None,
                 "birth_year": birth_year,
                 "subdivision_ids": [str(subdivision_id)] if subdivision_id else [],
+                "subdivision_ids_count": 1 if subdivision_id else 0,
+                "stage4_rows_subdivision": len(subdivision_events),
+                "stage4_rows_only": len(offender_only_events),
                 "rows": len(events),
                 "limit": query_limit,
                 "warnings": warnings,
@@ -830,6 +848,10 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     )
 
     stage4_used = False
+    stage4_executed = False
+    stage4_path = None
+    stage4_rows_subdivision = 0
+    stage4_rows_only = 0
     best_score = scored[0]["flags_true"] if scored else 0
     selected_by_pre_stage4 = bool(scored and best_score >= score_threshold)
     should_run_stage4 = bool(
@@ -841,10 +863,23 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
         )
     )
     if should_run_stage4:
+        stage4_executed = True
         stage4_events, stage4_queries = _stage4_candidates_by_offenders(
             attributes, text=text, subdivision_confidence_high=subdivision_confidence_high
         )
         stage_queries.extend(stage4_queries)
+        if stage4_queries:
+            row_subdivision = sum(item.get("stage4_rows_subdivision", 0) for item in stage4_queries)
+            row_only = sum(item.get("stage4_rows_only", 0) for item in stage4_queries)
+            stage4_rows_subdivision = row_subdivision
+            stage4_rows_only = row_only
+            paths = {item.get("stage4_path") for item in stage4_queries}
+            if "offender_subdivision_then_only" in paths:
+                stage4_path = "offender_subdivision_then_only"
+            elif "offender_subdivision" in paths:
+                stage4_path = "offender_subdivision"
+            elif "offender_only" in paths:
+                stage4_path = "offender_only"
         stages.append({"stage": "stage4_offenders", "count": len(stage4_events)})
         if stage4_events:
             stage4_used = True
@@ -867,6 +902,10 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
         "stage1_best_score": stage1_best_score,
         "score_threshold": score_threshold,
         "stage4_used": stage4_used,
+        "stage4_executed": stage4_executed,
+        "stage4_path": stage4_path,
+        "stage4_rows_subdivision": stage4_rows_subdivision,
+        "stage4_rows_only": stage4_rows_only,
         "pre_stage4_best_score": best_score,
         "pre_stage4_candidate_count": len(hydrated),
     }
@@ -941,6 +980,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "score_threshold": candidate_meta.get("score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD),
         "subdivision_confidence_high": candidate_meta.get("subdivision_confidence_high", False),
         "stage4_used": candidate_meta.get("stage4_used", False),
+        "stage4_executed": candidate_meta.get("stage4_executed", False),
+        "stage4_path": candidate_meta.get("stage4_path"),
+        "stage4_rows_subdivision": candidate_meta.get("stage4_rows_subdivision", 0),
+        "stage4_rows_only": candidate_meta.get("stage4_rows_only", 0),
     }
 
     if not best_event:

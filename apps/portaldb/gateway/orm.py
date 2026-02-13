@@ -4,6 +4,8 @@ from datetime import date, datetime
 from uuid import UUID
 
 from django.conf import settings
+from django.db.models import Value
+from django.db.models.functions import Lower, Replace
 
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
@@ -100,8 +102,15 @@ class ORMPortalGateway:
         subdivision_id: UUID | None,
         limit: int,
     ) -> list[EventDTO]:
-        queryset = Event.objects.using(self.alias).filter(
-            offenders__second_name__iexact=second_name
+        normalized_second_name = (second_name or "").lower().replace("ё", "е")
+        queryset = Event.objects.using(self.alias).annotate(
+            offender_second_name_normalized=Replace(
+                Lower("offenders__second_name"),
+                Value("ё"),
+                Value("е"),
+            )
+        ).filter(
+            offender_second_name_normalized=normalized_second_name
         )
         if birth_date is not None:
             queryset = queryset.filter(offenders__date_of_birth=birth_date)
