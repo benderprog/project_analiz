@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -28,5 +28,14 @@ class PortalGateway(Protocol):
     ) -> list[EventDTO]: ...
 
     def get_offenders_by_event_ids(self, event_ids: list[UUID]) -> list[OffenderDTO]: ...
+
+    def search_event_ids_by_offender(
+        self,
+        second_name: str,
+        birth_year: int | None,
+        birth_date: date | None,
+        subdivision_id: UUID | None,
+        limit: int,
+    ) -> list[UUID]: ...
 
     def get_event_by_id(self, event_id: UUID) -> EventDTO | None: ...
