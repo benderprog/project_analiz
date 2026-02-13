@@ -815,11 +815,11 @@ def _stage4_candidates_by_offenders(
     mention_candidates = [(_mention_from_dict(item), item) for item in attributes.offenders]
     mentions = [mention for mention, _ in mention_candidates]
     eligible_mentions, _ = split_mentions_by_employee_context(text, mentions)
-    eligible_mention_ids = {id(mention) for mention in eligible_mentions}
+    eligible_spans = {mention.span for mention in eligible_mentions if mention.span}
     offenders = [
         offender
         for mention, offender in mention_candidates
-        if id(mention) in eligible_mention_ids
+        if mention.span and mention.span in eligible_spans
     ]
 
     for offender in offenders:
