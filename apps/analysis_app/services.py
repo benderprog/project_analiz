@@ -146,6 +146,9 @@ class ExtractedAttributes:
     subdivision_candidates_total: int = 0
     subdivision_candidates_after_pu_filter: int = 0
     pu_filter_fallback_used: bool = False
+    subdivision_query_source: str | None = None
+    subdivision_query_text: str | None = None
+    subdivision_accept_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -439,9 +442,20 @@ def extract_attributes(
     accept_threshold = float(
         getattr(settings, "SUBDIVISION_ACCEPT_THRESHOLD", SUBDIVISION_MATCH_THRESHOLD)
     )
+    accept_reason = None
+    quoted_lexical_hit = bool(
+        best_candidate
+        and candidate_meta.get("subdivision_query_source") == "quoted_name"
+        and best_candidate.get("lexical_hit")
+    )
     if best_candidate and best_candidate["score"] >= accept_threshold:
         subdivision_id = best_candidate["portal_subdivision_id"]
         subdivision_name = best_candidate["name"]
+        accept_reason = "semantic_threshold"
+    elif best_candidate and quoted_lexical_hit:
+        subdivision_id = best_candidate["portal_subdivision_id"]
+        subdivision_name = best_candidate["name"]
+        accept_reason = "lexical_quoted_hit"
     else:
         subdivision_id = None
         subdivision_name = None
@@ -463,6 +477,9 @@ def extract_attributes(
             "subdivision_candidates_after_pu_filter", 0
         ),
         pu_filter_fallback_used=candidate_meta.get("pu_filter_fallback_used", False),
+        subdivision_query_source=candidate_meta.get("subdivision_query_source"),
+        subdivision_query_text=candidate_meta.get("subdivision_query_text"),
+        subdivision_accept_reason=accept_reason,
     )
 
 
@@ -1314,6 +1331,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "stage4_path": candidate_meta.get("stage4_path"),
         "stage4_rows_subdivision": candidate_meta.get("stage4_rows_subdivision", 0),
         "stage4_rows_only": candidate_meta.get("stage4_rows_only", 0),
+        "subdivision_query_source": attributes.subdivision_query_source,
+        "subdivision_query_text": attributes.subdivision_query_text,
+        "subdivision_accept_reason": attributes.subdivision_accept_reason,
     }
 
     if not best_event:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import uuid
 from functools import lru_cache
 
@@ -36,6 +37,12 @@ _SUBDIVISION_STOP_TOKENS = {
     "пункт",
 }
 
+_UNIT_QUOTED_RE = re.compile(
+    r"(?:кпп-\d+|кпп|аппр|погк|опк|пп|ппр)\s*«(?P<name>[^»]{3,})»",
+    re.IGNORECASE,
+)
+_UNIT_PREFIX_RE = re.compile(r"^(?:кпп-\d+|кпп|аппр|погк|опк|пп|ппр)\s*", re.IGNORECASE)
+
 _cache_version = 0
 
 
@@ -67,6 +74,36 @@ def _lexical_factor(substring_hit: bool, token_overlap: int) -> float:
     if substring_hit or token_overlap > 0:
         return 1.0
     return float(getattr(settings, "SUBDIVISION_LOW_LEXICAL_FACTOR", 0.1))
+
+
+def extract_unit_quoted_name(text: str) -> str | None:
+    if not text:
+        return None
+    match = _UNIT_QUOTED_RE.search(text)
+    if not match:
+        return None
+    return (match.group("name") or "").strip() or None
+
+
+def _normalize_quoted_lexical(value: str) -> str:
+    normalized = (value or "").lower().replace("ё", "е")
+    normalized = normalized.replace("«", " ").replace("»", " ").replace('"', " ")
+    normalized = _UNIT_PREFIX_RE.sub("", normalized).strip()
+    normalized = re.sub(r"[^\w\s-]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _is_quoted_lexical_hit(quoted_name: str | None, candidate_name: str) -> bool:
+    if not quoted_name or not candidate_name:
+        return False
+    quoted_norm = _normalize_quoted_lexical(quoted_name)
+    if not quoted_norm:
+        return False
+    candidate_norm = _normalize_quoted_lexical(normalize_subdivision_text(candidate_name))
+    if not candidate_norm:
+        return False
+    return quoted_norm in candidate_norm.split() or f" {quoted_norm} " in f" {candidate_norm} "
 
 
 def _lexical_strength(
@@ -279,6 +316,9 @@ def _semantic_window_matches(
     normalized_text: str,
     mapping: list[int],
     selected_pu_id: uuid.UUID | None,
+    semantic_query_text: str | None = None,
+    query_span: tuple[int, int] | None = None,
+    quoted_name: str | None = None,
 ) -> list[dict]:
     cached, _ = _load_cached_subdivisions(_cache_version, selected_pu_id)
     if not cached:
@@ -293,13 +333,15 @@ def _semantic_window_matches(
     if not model:
         return []
 
-    tokens = _tokenize_with_positions(normalized_text)
-    if not tokens:
-        return []
-
-    windows = _build_windows(tokens)
-    if not windows:
-        return []
+    if semantic_query_text:
+        windows = [{"text": semantic_query_text, "span": query_span or (0, len(normalized_text))}]
+    else:
+        tokens = _tokenize_with_positions(normalized_text)
+        if not tokens:
+            return []
+        windows = _build_windows(tokens)
+        if not windows:
+            return []
 
     cached_embeddings = []
     for subdivision in cached:
@@ -333,6 +375,10 @@ def _semantic_window_matches(
             confidence = semantic_score * lexical_factor
             current = best_by_subdivision.get(portal_id)
             if current is None or confidence > current["score"]:
+                lexical_hit = _is_quoted_lexical_hit(quoted_name, candidate["subdivision"]["name"])
+                flags = {}
+                if lexical_hit:
+                    flags["lexical_quoted_hit"] = True
                 best_by_subdivision[portal_id] = {
                     "portal_subdivision_id": portal_id,
                     "name": candidate["subdivision"]["name"],
@@ -343,7 +389,7 @@ def _semantic_window_matches(
                     "match_method": "semantic_window",
                     "query_span": _map_normalized_span(window["span"], mapping),
                     "normalized_span": window["span"],
-                    "flags": {},
+                    "flags": flags,
                     "query_locality": None,
                     "candidate_locality": None,
                     "locality_mismatch": False,
@@ -353,6 +399,7 @@ def _semantic_window_matches(
                     "token_overlap": token_overlap,
                     "substring_evidence": substring_hit,
                     "lexical_token": None,
+                    "lexical_hit": lexical_hit,
                 }
 
     threshold = getattr(settings, "SUBDIVISION_SEMANTIC_THRESHOLD", 0.6)
@@ -374,14 +421,39 @@ def match_subdivision(
     if not normalized_text:
         return [], meta
 
+    quoted_name = extract_unit_quoted_name(text)
+    query_source = "quoted_name" if quoted_name else "full_text"
+    query_text = quoted_name or text
+
+    meta["subdivision_query_source"] = query_source
+    meta["subdivision_query_text"] = query_text
+
     matches = _substring_matches(normalized_text, mapping, selected_pu_id)
     if matches:
+        for item in matches:
+            lexical_hit = _is_quoted_lexical_hit(quoted_name, item.get("name") or "")
+            item["lexical_hit"] = lexical_hit
+            if lexical_hit:
+                item.setdefault("flags", {})["lexical_quoted_hit"] = True
         strong = [item for item in matches if item.get("lexical_strength") == "strong"]
         if strong:
             return strong[:top_k], meta
         return matches[:top_k], meta
 
-    semantic_matches = _semantic_window_matches(normalized_text, mapping, selected_pu_id)
+    normalized_query = normalize_subdivision_text(quoted_name) if quoted_name else None
+    query_span = None
+    if normalized_query:
+        pos = normalized_text.find(normalized_query)
+        if pos >= 0:
+            query_span = (pos, pos + len(normalized_query))
+    semantic_matches = _semantic_window_matches(
+        normalized_text,
+        mapping,
+        selected_pu_id,
+        semantic_query_text=normalized_query,
+        query_span=query_span,
+        quoted_name=quoted_name,
+    )
     return semantic_matches[:top_k], meta
 
 
@@ -391,5 +463,6 @@ __all__ = [
     "SUBDIVISION_YELLOW_THRESHOLD",
     "get_subdivision_candidates",
     "invalidate_subdivision_cache",
+    "extract_unit_quoted_name",
     "match_subdivision",
 ]
