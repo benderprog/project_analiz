@@ -239,6 +239,101 @@ class MatchingTests(TestCase):
 
 
 
+    def test_staff_surname_in_db_offenders_is_overridden_to_offender(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(name="Отдел 5", parent_pu=pu)
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Андрей",
+            second_name="Васильев",
+            patronymic_name="Алексеевич",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[],
+            subdivision_name=subdivision.name,
+            staff=[
+                {
+                    "rank_raw": "ст. л-т",
+                    "rank_norm": "ст. л-т",
+                    "surname": "Васильев",
+                    "initials": "А.А.",
+                    "display": "ст. л-т Васильев А.А.",
+                }
+            ],
+        )
+
+        result = match_event(attributes, "пн (ст. л-т Васильев А.А.)")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(attributes.staff, [])
+        self.assertEqual(len(attributes.offenders), 1)
+        self.assertEqual(attributes.offenders[0]["second_name"], "Васильев")
+        self.assertTrue(attributes.offenders[0]["staff_override_is_offender"])
+
+    def test_staff_surname_not_in_db_offenders_stays_in_staff(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(name="Отдел 6", parent_pu=pu)
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "second_name": "Иванов",
+                    "first_name": "Иван",
+                    "patronymic_name": "Иванович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+            staff=[
+                {
+                    "rank_raw": "ст. л-т",
+                    "rank_norm": "ст. л-т",
+                    "surname": "Васильев",
+                    "initials": "А.А.",
+                    "display": "ст. л-т Васильев А.А.",
+                }
+            ],
+        )
+
+        result = match_event(attributes, "пн (ст. л-т Васильев А.А.)")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(len(attributes.staff), 1)
+        self.assertEqual(attributes.staff[0]["display"], "ст. л-т Васильев А.А.")
+        self.assertEqual(len(attributes.offenders), 1)
+        self.assertEqual(attributes.offenders[0]["second_name"], "Иванов")
+
+
     def test_match_event_wrong_time_found_by_subdivision_and_offenders_with_staged_search(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
         subdivision = Subdivision.objects.using("portal").create(
