@@ -4,6 +4,8 @@ from unittest import mock
 from django.test import SimpleTestCase
 
 from apps.analysis_app.offenders.matching import (
+    _dob_discrepancy,
+    _format_dob,
     match_offenders_with_details,
     split_mentions_by_employee_context,
 )
@@ -22,6 +24,29 @@ def _mention(full_name: str, second: str, first: str = "", middle: str = "", spa
         source="test",
         surface_text=full_name,
     )
+
+
+class DobFormattingRegressionTests(SimpleTestCase):
+    def test_format_dob_year_only_is_year(self):
+        self.assertEqual(_format_dob(date(1990, 1, 1)), "1990")
+
+    def test_dob_discrepancy_year_only_vs_full_same_year_is_none(self):
+        mention = _mention(
+            "Климов Андрей Олегович",
+            "Климов",
+            "Андрей",
+            "Олегович",
+            birth=date(1990, 1, 1),
+        )
+        portal = PortalOffender(
+            "Климов Андрей Олегович",
+            "Климов",
+            "Андрей",
+            "Олегович",
+            date(1990, 3, 3),
+        )
+
+        self.assertIsNone(_dob_discrepancy(mention, portal))
 
 
 class EmployeeContextFilterTests(SimpleTestCase):
@@ -159,7 +184,7 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
 
         self.assertEqual(len(result.matched_pairs), 1)
         self.assertEqual(len(result.missing_in_summary), 0)
-        self.assertIn("с учётом падежа", result.matched_pairs[0].discrepancy)
+        self.assertNotIn("с учётом падежа", result.matched_pairs[0].discrepancy or "")
 
     def test_year_only_dob_matches_full_date_by_same_year(self):
         mention = _mention(

@@ -6,6 +6,7 @@ from datetime import date
 from difflib import SequenceMatcher
 
 from apps.analysis_app.utils.json_safe import offender_to_json
+from apps.analysis_app.utils.offender_format import format_offender_dob
 from .types import (
     AmbiguousMention,
     MatchPair,
@@ -151,9 +152,9 @@ def _is_year_only_dob(value: date | None) -> bool:
 def _format_dob(value: date | None, *, prefer_year: bool = False) -> str:
     if not value:
         return "—"
-    if prefer_year:
+    if prefer_year or _is_year_only_dob(value):
         return str(value.year)
-    return value.strftime("%d-%m-%Y")
+    return format_offender_dob(value)
 
 
 def _portal_offender_key(portal: PortalOffender) -> tuple[str, str, str, str, date | None]:
@@ -172,10 +173,7 @@ def _dob_discrepancy(mention: OffenderMention, portal: PortalOffender) -> str | 
     if mention.birth_date == portal.birth_date:
         return None
     if _is_year_only_dob(mention.birth_date) and mention.birth_date.year == portal.birth_date.year:
-        return (
-            "Совпало ФИО (с учётом падежа), ДР уточнено по данным БД: "
-            f"{_format_dob(mention.birth_date, prefer_year=True)} ↔ {_format_dob(portal.birth_date)}"
-        )
+        return None
     return None
 
 
