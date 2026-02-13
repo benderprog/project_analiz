@@ -167,6 +167,23 @@ def _portal_offender_key(portal: PortalOffender) -> tuple[str, str, str, str, da
     )
 
 
+def _mention_offender_key(mention: OffenderMention) -> tuple[str, str, str, date | int | None]:
+    return (
+        _norm(mention.second_name),
+        _norm(mention.first_name),
+        _norm(mention.patronymic_name),
+        mention.birth_date or mention.birth_year,
+    )
+
+
+def _possible_match_is_year_compatible(mention: OffenderMention, portal: PortalOffender) -> bool:
+    if not mention.birth_date or not portal.birth_date:
+        return False
+    return mention.birth_date.year == portal.birth_date.year and (
+        _is_year_only_dob(mention.birth_date) or _is_year_only_dob(portal.birth_date)
+    )
+
+
 def _dob_discrepancy(mention: OffenderMention, portal: PortalOffender) -> str | None:
     if not mention.birth_date or not portal.birth_date:
         return None
@@ -380,6 +397,24 @@ def match_offenders_with_details(
             continue
         seen_missing_portal_keys.add(portal_key)
         result.missing_in_summary.append(portal)
+
+    covered_portal = {_portal_offender_key(item.portal) for item in result.matched_pairs}
+    covered_mentions = {_mention_offender_key(item.mention) for item in result.matched_pairs}
+    for possible in result.possible_matches:
+        if _possible_match_is_year_compatible(possible.mention, possible.portal):
+            covered_portal.add(_portal_offender_key(possible.portal))
+            covered_mentions.add(_mention_offender_key(possible.mention))
+
+    if covered_portal:
+        result.missing_in_summary = [
+            portal for portal in result.missing_in_summary if _portal_offender_key(portal) not in covered_portal
+        ]
+
+    if covered_mentions:
+        result.missing_in_portal = [
+            mention for mention in result.missing_in_portal if _mention_offender_key(mention) not in covered_mentions
+        ]
+
     return result
 
 

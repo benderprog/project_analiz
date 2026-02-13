@@ -286,6 +286,36 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
 
         self.assertEqual(len(result.missing_in_summary), 1)
 
+    def test_year_only_match_does_not_duplicate_portal_offender_in_missing_lists(self):
+        mention = _mention(
+            "Смирнова Мария Сергеевна",
+            "Смирнова",
+            "Мария",
+            "Сергеевна",
+            birth=date(1996, 1, 1),
+        )
+        portal_smirnova = PortalOffender(
+            "Смирнова Мария Сергеевна",
+            "Смирнова",
+            "Мария",
+            "Сергеевна",
+            date(1996, 2, 1),
+        )
+        portal_klimov = PortalOffender(
+            "Климов Андрей Олегович",
+            "Климов",
+            "Андрей",
+            "Олегович",
+            date(1990, 3, 3),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal_smirnova, portal_klimov])
+
+        self.assertEqual(len(result.matched_pairs), 1)
+        self.assertEqual(result.matched_pairs[0].portal.second_name, "Смирнова")
+        self.assertEqual([item.second_name for item in result.missing_in_summary], ["Климов"])
+        self.assertEqual(len(result.missing_in_portal), 0)
+
 
 class EmployeeContextParenthesesRegressionTests(SimpleTestCase):
     def test_multiple_parentheses_do_not_exclude_regular_offenders(self):
