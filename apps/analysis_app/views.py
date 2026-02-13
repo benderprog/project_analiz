@@ -406,9 +406,13 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         )
 
     offender_report = _build_offender_report(match_result)
+    not_found = not bool(match_result.get("matched"))
+    title = f"Событие {paragraph.idx}" + (" — в базе данных не найдено" if not_found else "")
 
     return {
         "idx": paragraph.idx,
+        "title": title,
+        "not_found": not_found,
         "preview": preview,
         "full_text": text,
         "highlighted_html": _build_highlighted_html(text, extracted, match_result),
