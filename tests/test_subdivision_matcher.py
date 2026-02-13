@@ -152,3 +152,27 @@ class SubdivisionMatcherTests(TestCase):
         )
 
         self.assertTrue(any("Населённый пункт не совпадает" in comment for comment in comments))
+
+
+class TimestampStatusThresholdTests(TestCase):
+    def test_status_for_timestamp_yellow_when_delta_within_error_threshold(self):
+        status = analysis_views._status_for_timestamp(
+            {
+                "matched": True,
+                "time_delta_minutes": 20,
+            }
+        )
+
+        self.assertEqual(status, "yellow")
+
+    def test_comments_include_error_when_delta_exceeds_error_threshold(self):
+        comments = analysis_views._build_comments(
+            {
+                "matched": True,
+                "time_delta_minutes": 31,
+                "diffs": {},
+            }
+        )
+
+        self.assertTrue(any("Ошибка: расхождение даты/времени на 31 мин (более 30 мин)." in comment for comment in comments))
+        self.assertEqual(analysis_views._status_for_timestamp({"matched": True, "time_delta_minutes": 31}), "red")
