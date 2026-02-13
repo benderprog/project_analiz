@@ -466,6 +466,31 @@ def _candidate_birth_date(candidate: dict) -> date | None:
     return None
 
 
+def _svodka_offender_birth_query(off: dict) -> tuple[date | None, int | None]:
+    raw_birth_date = off.get("birth_date")
+    birth_year = off.get("birth_year")
+
+    if not raw_birth_date and birth_year is not None:
+        try:
+            return None, int(birth_year)
+        except (TypeError, ValueError):
+            return None, None
+
+    birth_date = _candidate_birth_date({"birth_date": raw_birth_date})
+    if not birth_date and isinstance(raw_birth_date, str):
+        raw_value = raw_birth_date.strip()
+        for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+            try:
+                birth_date = datetime.strptime(raw_value, fmt).date()
+                break
+            except ValueError:
+                continue
+
+    if not birth_date:
+        return None, None
+    return birth_date, birth_date.year
+
+
 def _portal_offenders(event: HydratedEvent) -> list[OffenderDTO]:
     return list(event.offenders)
 
@@ -744,16 +769,14 @@ def _stage4_candidates_by_offenders(
     stage4_events: dict[str, EventDTO] = {}
     debug_queries: list[dict] = []
 
-    mentions = [_mention_from_dict(item) for item in attributes.offenders]
+    mention_candidates = [(_mention_from_dict(item), item) for item in attributes.offenders]
+    mentions = [mention for mention, _ in mention_candidates]
     eligible_mentions, _ = split_mentions_by_employee_context(text, mentions)
+    eligible_mention_ids = {id(mention) for mention in eligible_mentions}
     offenders = [
-        {
-            "second_name": mention.second_name,
-            "full_name": mention.full_name,
-            "birth_date": mention.birth_date,
-            "birth_year": mention.birth_year,
-        }
-        for mention in eligible_mentions
+        offender
+        for mention, offender in mention_candidates
+        if id(mention) in eligible_mention_ids
     ]
 
     for offender in offenders:
@@ -765,8 +788,7 @@ def _stage4_candidates_by_offenders(
         if not surname:
             continue
 
-        birth_date = offender.get("birth_date") or _candidate_birth_date(offender)
-        birth_year = offender.get("birth_year")
+        birth_date, birth_year = _svodka_offender_birth_query(offender)
         subdivision_id = attributes.subdivision_id if subdivision_confidence_high else None
         query_limit = limit
         warnings: list[str] = []
@@ -812,6 +834,7 @@ def _stage4_candidates_by_offenders(
                 "stage4_path": query_path,
                 "surname": surname,
                 "birth_date": date_to_str(birth_date) if birth_date else None,
+                "used_birth_date": bool(birth_date),
                 "birth_year": birth_year,
                 "subdivision_ids": [str(subdivision_id)] if subdivision_id else [],
                 "subdivision_ids_count": 1 if subdivision_id else 0,
