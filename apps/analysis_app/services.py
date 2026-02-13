@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from functools import lru_cache
 from uuid import UUID
 
+from django.conf import settings
 from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
@@ -725,7 +726,8 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     config = config or {}
     stage_delta_minutes = int(config.get("delta_minutes", MATCH_TIME_DELTA_MINUTES))
     stage_two_days = int(config.get("stage_two_days", 1))
-    stage_three_days = int(config.get("stage_three_days", MATCH_STAGE_FALLBACK_DAYS))
+    default_stage_three_days = getattr(settings, "MATCH_STAGE_FALLBACK_DAYS", 7)
+    stage_three_days = int(config.get("stage_three_days", default_stage_three_days))
     score_threshold = int(config.get("min_score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD))
 
     subdivision_candidate = attributes.subdivision_candidates[0] if attributes.subdivision_candidates else {}
