@@ -3,6 +3,10 @@ from __future__ import annotations
 from functools import lru_cache
 
 
+ADJECTIVE_LIKE_POS = {"ADJF", "ADJS", "PRTF", "PRTS", "COMP"}
+ADJECTIVE_LIKE_ENDINGS = ("ый", "ий", "ая", "ое")
+
+
 def _to_title(token: str) -> str:
     if not token:
         return token
@@ -56,25 +60,41 @@ def _normalize_token(value: str, *, part: str) -> str:
     if morph is None:
         return _to_title(_fallback_nominative(value.lower(), part=part))
 
-    tag_map = {"last": "Surn", "first": "Name", "middle": "Patr"}
-    preferred_tag = tag_map.get(part)
+    preferred_tag_by_part = {"last": "Surn", "first": "Name", "middle": "Patr"}
+    preferred_tag = preferred_tag_by_part.get(part)
+
     lower_value = value.lower()
     parses = morph.parse(lower_value)
-    preferred = [item for item in parses if preferred_tag and preferred_tag in item.tag]
-    ordered = preferred or parses
 
-    normalized = None
-    for parse in ordered:
-        inflected = parse.inflect({"nomn"})
-        if not inflected:
+    selected_parse = None
+    for parse in parses:
+        if preferred_tag not in parse.tag:
             continue
-        candidate = inflected.word
-        normalized = candidate
+        if parse.tag.POS in ADJECTIVE_LIKE_POS:
+            continue
+        selected_parse = parse
         break
 
-    if normalized is None:
-        normalized = _fallback_nominative(lower_value, part=part)
-    return _to_title(normalized)
+    if selected_parse is None:
+        return value
+
+    if selected_parse.tag.case == "nomn":
+        return value
+
+    inflected = selected_parse.inflect({"nomn"})
+    if not inflected:
+        return value
+
+    candidate = inflected.word
+    if (
+        part == "last"
+        and candidate.endswith(ADJECTIVE_LIKE_ENDINGS)
+        and not lower_value.endswith(ADJECTIVE_LIKE_ENDINGS)
+        and "Surn" not in selected_parse.tag
+    ):
+        return value
+
+    return _to_title(candidate)
 
 
 def normalize_fio_to_nominative(second: str, first: str, middle: str) -> tuple[str, str, str]:
@@ -94,4 +114,3 @@ def normalize_fio_to_nominative(second: str, first: str, middle: str) -> tuple[s
         normalized_second = _to_title(_fallback_nominative(second.lower(), part="last"))
 
     return normalized_second, normalized_first, normalized_middle
-
