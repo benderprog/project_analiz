@@ -39,16 +39,12 @@ DEFAULT_DOB = date(1900, 1, 1)
 MATCH_TIME_DELTA_MINUTES = 30
 MATCH_STAGE_SUBDIVISION_LIMIT = 500
 MATCH_STAGE_TIME_LIMIT = 500
-MATCH_STAGE_FALLBACK_LIMIT = 500
-MATCH_STAGE_FALLBACK_DAYS = 7
-MATCH_STAGE_MIN_SCORE_THRESHOLD = 2
-
-def _to_utc(dt: datetime | None) -> datetime | None:
-    if dt is None:
-        return None
-    if timezone.is_naive(dt):
-        return timezone.make_aware(dt, dt_timezone.utc)
-    return dt.astimezone(dt_timezone.utc)
+MATCH_STAGE4_OFFENDER_EVENT_LIMIT = 200
+MATCH_STAGE_WINDOWS = [
+    ("stage1", timedelta(minutes=MATCH_TIME_DELTA_MINUTES)),
+    ("stage2", timedelta(days=1)),
+    ("stage3", timedelta(days=7)),
+]
 
 
 @dataclass
@@ -178,6 +174,14 @@ def _extract_datetime_regex(text: str) -> tuple[datetime | None, bool]:
 
     hour, minute = parsed_time
     return datetime.combine(date_obj, time(hour, minute)), True
+
+
+def _to_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt.astimezone(dt_timezone.utc)
 
 
 def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
@@ -603,33 +607,54 @@ def _get_events_for_window(
     ]
 
 
-def _score_event_candidate(event: HydratedEvent, attributes: ExtractedAttributes) -> dict:
-    target_utc = _to_utc(attributes.date_time) if attributes.date_time else None
-    event_utc = _to_utc(event.event.date_detection)
-    delta_minutes = None
-    if target_utc and event_utc:
-        delta_minutes = int(abs(event_utc - target_utc).total_seconds() / 60)
-
-    date_ok = bool(delta_minutes is not None and delta_minutes <= MATCH_TIME_DELTA_MINUTES)
-    subdivision_ok = bool(
-        attributes.subdivision_id and str(event.event.subdivision_id) == str(attributes.subdivision_id)
+def _build_subdivision_time_candidates(
+    subdivision_id: str, target_dt: datetime, stage_window: timedelta
+) -> tuple[list[dict], dict]:
+    target_local = to_local_naive(target_dt)
+    if target_local is None:
+        return [], {"target_local": None}
+    date_from = target_local - stage_window
+    date_to = target_local + stage_window
+    gateway = get_portal_gateway()
+    events_subdivision = gateway.search_events_by_subdivision_time(
+        subdivision_id,
+        date_from,
+        date_to,
+        MATCH_STAGE_SUBDIVISION_LIMIT,
     )
+    events_time = gateway.search_events_by_time(date_from, date_to, MATCH_STAGE_TIME_LIMIT)
+    seen_ids: set[UUID] = set()
+    combined: list[EventDTO] = []
+    for event in [*events_subdivision, *events_time]:
+        if event.event_id in seen_ids:
+            continue
+        seen_ids.add(event.event_id)
+        combined.append(
+            EventDTO(
+                event_id=event.event_id,
+                date_detection=event.date_detection,
+                subdivision_id=event.subdivision_id,
+                event_type=event.event_type,
+                article_of_law=event.article_of_law,
+            )
+        )
 
-    overlap = 0
-    if attributes.offenders:
-        _, counts, _ = match_offenders(attributes.offenders, _portal_offenders(event), text="")
-        overlap = counts.get("matched", 0)
-    offenders_ok = overlap >= 1
-
-    true_flags = int(date_ok) + int(subdivision_ok) + int(offenders_ok)
-    return {
-        "event": event,
-        "delta_minutes": delta_minutes,
-        "overlap": overlap,
-        "date_ok": date_ok,
-        "subdivision_ok": subdivision_ok,
-        "offenders_ok": offenders_ok,
-        "flags_true": true_flags,
+    scored_candidates = []
+    for event in combined:
+        event_local = to_local_naive(event.date_detection)
+        if not event_local:
+            continue
+        delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
+        scored_candidates.append({"event": event, "delta_minutes": delta_minutes})
+    return scored_candidates, {
+        "target_local": target_local,
+        "from": date_from,
+        "to": date_to,
+        "subdivision_id": str(subdivision_id),
+        "subdivision_rows": len(events_subdivision),
+        "time_rows": len(events_time),
+        "combined_rows": len(scored_candidates),
+        "sql": ["search_by_subdivision_time", "search_by_time"],
     }
 
 
@@ -721,10 +746,40 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     stages: list[dict] = []
     stage_queries: list[dict] = []
 
-    def _collect(stage_name: str, events: list[EventDTO]) -> None:
-        stages.append({"stage": stage_name, "count": len(events)})
-        for event in events:
-            stage_events[str(event.event_id)] = event
+    loaded_events: list[HydratedEvent] = []
+    for event_id in event_ids:
+        event = gateway.get_event_by_id(event_id)
+        if event is None:
+            continue
+        hydrated = _hydrate_events_with_offenders([event])
+        if hydrated:
+            loaded_events.append(hydrated[0])
+
+    candidates = []
+    target_local = to_local_naive(attributes.date_time) if attributes.date_time else None
+    for hydrated in loaded_events:
+        _, counts, _ = match_offenders(attributes.offenders, _portal_offenders(hydrated))
+        overlap = counts.get("matched", 0)
+        if overlap < 1:
+            continue
+        subdivision_ok = attributes.subdivision_id and str(hydrated.event.subdivision_id) == str(attributes.subdivision_id)
+        if not subdivision_ok:
+            continue
+        event_local = to_local_naive(hydrated.event.date_detection)
+        delta_minutes = None
+        if target_local and event_local:
+            delta_minutes = int(abs(event_local - target_local).total_seconds() / 60)
+        candidates.append({"event": hydrated, "overlap": overlap, "delta_minutes": delta_minutes})
+
+    return candidates, {
+        "triggered": True,
+        "searched_names": searched_names,
+        "event_ids_found": len(event_ids),
+        "hydrated_events": len(loaded_events),
+        "scored_candidates": len(candidates),
+        "subdivision_limited": bool(subdivision_high_conf and attributes.subdivision_id),
+        "sql": ["search_by_offender", "search_by_offender_subdivision", "event_snapshot", "event_offenders"],
+    }
 
     stage1_subdivision = []
     if attributes.subdivision_id:
@@ -796,12 +851,9 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     scored = [_score_event_candidate(event, attributes) for event in hydrated]
     scored.sort(
         key=lambda item: (
-            -item["flags_true"],
-            -(1 if item["subdivision_ok"] else 0),
-            -(1 if item["offenders_ok"] else 0),
-            item["delta_minutes"] if item["delta_minutes"] is not None else 10**9,
-            -item["overlap"],
-        )
+            item.get("overlap", 0),
+            -(item.get("delta_minutes") if item.get("delta_minutes") is not None else 10**9),
+        ),
     )
 
     stage4_used = False
@@ -856,10 +908,51 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
 
     match_method = None
     best_flags: dict = {}
+    best_candidate = None
+    best_score = -1
     time_mismatch = False
     subdivision_mismatch = False
 
-    if best_candidate and best_candidate["flags_true"] >= 2:
+    scored_candidates = []
+    by_event: dict[str, dict] = {}
+
+    def _register(candidate: dict, *, date_ok: bool, subdivision_ok: bool, offenders_ok: bool) -> None:
+        event = candidate.get("event")
+        if event is None:
+            return
+        event_id = str(event.event.event_id if isinstance(event, HydratedEvent) else event.event_id)
+        item = by_event.setdefault(
+            event_id,
+            {
+                "event": event,
+                "date_ok": False,
+                "subdivision_ok": False,
+                "offenders_ok": False,
+                "delta_minutes": candidate.get("delta_minutes"),
+            },
+        )
+        item["date_ok"] = item["date_ok"] or date_ok
+        item["subdivision_ok"] = item["subdivision_ok"] or subdivision_ok
+        item["offenders_ok"] = item["offenders_ok"] or offenders_ok
+        if item.get("delta_minutes") is None and candidate.get("delta_minutes") is not None:
+            item["delta_minutes"] = candidate.get("delta_minutes")
+
+    for candidate in candidates_a:
+        _register(candidate, date_ok=True, subdivision_ok=True, offenders_ok=False)
+    for candidate in candidates_b:
+        _register(candidate, date_ok=False, subdivision_ok=True, offenders_ok=True)
+    for candidate in candidates_c:
+        _register(candidate, date_ok=True, subdivision_ok=False, offenders_ok=True)
+
+    for item in by_event.values():
+        item["flags_true"] = int(item["date_ok"]) + int(item["subdivision_ok"]) + int(item["offenders_ok"])
+        score = item["flags_true"]
+        if score > best_score:
+            best_score = score
+            best_candidate = item
+        scored_candidates.append(item)
+
+    if best_candidate is not None and best_candidate["flags_true"] >= 2:
         if best_candidate["date_ok"] and best_candidate["subdivision_ok"]:
             match_method = "subdivision+time"
         elif best_candidate["date_ok"] and best_candidate["offenders_ok"]:
@@ -1010,12 +1103,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 for offender in portal_offenders
             ],
         }
-    if time_mismatch and best_delta is not None:
+    if not best_flags.get("date_ok"):
         diffs["date_time"] = {
             "message": "Событие найдено по подразделению и нарушителям; дата/время отличаются",
             "delta_minutes": best_delta,
-            "extracted": format_dt_dmy_hm(attributes.date_time),
-            "portal": format_dt_dmy_hm(best_event.event.date_detection),
         }
 
     portal_offenders_payload = [

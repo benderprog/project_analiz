@@ -11,12 +11,14 @@ from django.utils import timezone
 from apps.analysis_app.services import (
     DEFAULT_DOB,
     ExtractedAttributes,
+    HydratedEvent,
     dob_matches,
     get_event_candidates,
     match_event,
     match_offenders,
 )
 from apps.analysis_app.views import _build_offender_report, _format_offenders
+from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
 

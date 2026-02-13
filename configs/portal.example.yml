@@ -22,3 +22,5 @@ profiles:
         search_by_offender: event/search_by_offender.sql
         search_by_offender_subdivision: event/search_by_offender_subdivision.sql
         event_snapshot: event/event_snapshot.sql
+        search_by_offender: event/search_by_offender.sql
+        search_by_offender_subdivision: event/search_by_offender_subdivision.sql

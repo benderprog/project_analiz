@@ -149,6 +149,28 @@ class ORMPortalGateway:
         )
         return [OffenderDTO(**row) for row in rows]
 
+
+    def search_event_ids_by_offender(
+        self,
+        second_name: str,
+        birth_year: int | None,
+        birth_date: date | None,
+        subdivision_id: UUID | None,
+        limit: int,
+    ) -> list[UUID]:
+        queryset = Offender.objects.using(self.alias).filter(second_name__iexact=second_name)
+        if birth_date is not None:
+            queryset = queryset.filter(date_of_birth=birth_date)
+        elif birth_year is not None:
+            queryset = queryset.filter(date_of_birth__year=birth_year)
+        if subdivision_id is not None:
+            queryset = queryset.filter(event__find_subdivision_unit_id=subdivision_id)
+        rows = (
+            queryset.order_by('-event__date_detection')
+            .values_list('event_id', flat=True)[:limit]
+        )
+        return list(rows)
+
     def get_event_by_id(self, event_id: UUID) -> EventDTO | None:
         row = (
             Event.objects.using(self.alias)
