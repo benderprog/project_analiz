@@ -49,14 +49,21 @@ def _status_key_for_offender(offender: dict | None) -> str:
 
 
 def _format_offenders_with_status(offenders: list[dict], *, match_result: dict, source: str) -> list[dict]:
-    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
+    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or match_result.get("svodka_status_by_span") or {}
     formatted = []
+    status_to_css = {
+        "ok": "hl-green",
+        "warn": "hl-yellow",
+        "err": "hl-red",
+    }
     for offender in offenders or []:
         key = _status_key_for_offender(offender)
+        status = status_map.get(key, "warn")
         formatted.append(
             {
                 "text": offender_display(offender, source=source),
-                "status": status_map.get(key, "warn"),
+                "status": status,
+                "status_css": status_to_css.get(status, "hl-yellow"),
             }
         )
     return formatted
@@ -241,14 +248,14 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
             )
 
     offenders = extracted.get("offenders") or []
-    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
+    status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or match_result.get("svodka_status_by_span") or {}
     status_to_css = {
-        "ok": "hl-offender-ok",
-        "warn": "hl-offender-warn",
-        "err": "hl-offender-err",
+        "ok": "hl-green",
+        "warn": "hl-yellow",
+        "err": "hl-red",
     }
     for offender in offenders:
-        offender_status = status_to_css.get(status_map.get(_status_key_for_offender(offender), "warn"), "hl-offender-warn")
+        offender_status = status_to_css.get(status_map.get(_status_key_for_offender(offender), "warn"), "hl-yellow")
         full_name = offender.get("full_name")
         offender_span = offender.get("span")
         if offender_span and len(offender_span) == 2:
