@@ -1,0 +1,13 @@
+select distinct
+  o.event_id
+from offenders o
+join event e on e.event_id = o.event_id
+where lower(o.second_name) = lower(%(second_name)s)
+  and e.find_subdivision_unit_id = %(subdivision_id)s
+  and (
+    (%(birth_date)s is not null and o.date_of_birth = %(birth_date)s)
+    or (%(birth_date)s is null and %(birth_year)s is not null and extract(year from o.date_of_birth) = %(birth_year)s)
+    or (%(birth_date)s is null and %(birth_year)s is null)
+  )
+order by e.date_detection desc
+limit %(limit)s;

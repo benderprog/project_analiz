@@ -1,5 +1,7 @@
+import uuid
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from django.conf import settings
 from django.template.loader import render_to_string
@@ -9,11 +11,13 @@ from django.utils import timezone
 from apps.analysis_app.services import (
     DEFAULT_DOB,
     ExtractedAttributes,
+    HydratedEvent,
     dob_matches,
     match_event,
     match_offenders,
 )
 from apps.analysis_app.views import _build_offender_report, _format_offenders
+from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
 
@@ -436,3 +440,73 @@ class OffenderReportDeduplicationTests(TestCase):
 
         self.assertEqual(len(report["details"]), 1)
         self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
+
+
+class StageFallbackTests(TestCase):
+    def test_stage3_calls_subdivision_and_time_queries(self):
+        gateway = MagicMock()
+        gateway.search_events_by_subdivision_time.return_value = []
+        gateway.search_events_by_time.return_value = []
+
+        attributes = ExtractedAttributes(
+            date_time=datetime(2026, 2, 12, 10, 35),
+            time_found=True,
+            subdivision_id=str(uuid.uuid4()),
+            offenders=[],
+            subdivision_name="КПП-1",
+        )
+
+        with patch("apps.analysis_app.services.get_portal_gateway", return_value=gateway):
+            result = match_event(attributes, "Тест")
+
+        self.assertFalse(result["matched"])
+        self.assertEqual(gateway.search_events_by_subdivision_time.call_count, 3)
+        self.assertGreaterEqual(gateway.search_events_by_time.call_count, 4)
+
+    def test_stage4_offenders_finds_event_when_time_mismatch(self):
+        event_id = uuid.uuid4()
+        subdivision_id = uuid.uuid4()
+        event_dt = timezone.make_aware(datetime(2020, 4, 5, 7, 35), timezone.get_current_timezone())
+        event = EventDTO(
+            event_id=event_id,
+            date_detection=event_dt,
+            subdivision_id=subdivision_id,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        offender = OffenderDTO(
+            offender_id=uuid.uuid4(),
+            event_id=event_id,
+            second_name="Смирнова",
+            first_name="Мария",
+            patronymic_name="Сергеевна",
+            date_of_birth=date(1996, 3, 3),
+        )
+        candidate = {
+            "event": HydratedEvent(event=event, offenders=[offender]),
+            "overlap": 1,
+            "delta_minutes": 60 * 24,
+        }
+        attributes = ExtractedAttributes(
+            date_time=datetime(2026, 2, 12, 10, 35),
+            time_found=True,
+            subdivision_id=str(subdivision_id),
+            offenders=[{"full_name": "Смирнова Мария Сергеевна", "birth_year": 1996}],
+            subdivision_name="КПП-1 Ухтомское",
+            subdivision_candidates=[{"score": 0.95}],
+        )
+
+        with (
+            patch("apps.analysis_app.services._build_subdivision_time_candidates", return_value=([], {})),
+            patch("apps.analysis_app.services._build_time_offender_candidates", return_value=[]),
+            patch("apps.analysis_app.services._build_subdivision_offender_candidates", return_value=[]),
+            patch("apps.analysis_app.services._build_stage4_offender_candidates", return_value=([candidate], {"triggered": True})),
+        ):
+            result = match_event(attributes, "Тест")
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["match_method"], "subdivision+offenders")
+        self.assertTrue(result["time_mismatch"])
+        self.assertIn("date_time", result["diffs"])
+        self.assertEqual(result["offenders_counts"]["portal_total"], 1)
+        self.assertEqual(result["offenders_counts"]["matched"], 1)

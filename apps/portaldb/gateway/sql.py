@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from django.db import connections
@@ -65,6 +65,30 @@ class SQLPortalGateway:
             return []
         rows = self._fetchall("event_offenders", {"event_ids": event_ids})
         return [OffenderDTO(**row) for row in rows]
+
+
+    def search_event_ids_by_offender(
+        self,
+        second_name: str,
+        birth_year: int | None,
+        birth_date: date | None,
+        subdivision_id: UUID | None,
+        limit: int,
+    ) -> list[UUID]:
+        query_name = (
+            'search_by_offender_subdivision' if subdivision_id is not None else 'search_by_offender'
+        )
+        rows = self._fetchall(
+            query_name,
+            {
+                'second_name': second_name,
+                'birth_year': birth_year,
+                'birth_date': birth_date,
+                'subdivision_id': subdivision_id,
+                'limit': limit,
+            },
+        )
+        return [row['event_id'] for row in rows]
 
     def get_event_by_id(self, event_id: UUID) -> EventDTO | None:
         rows = self._fetchall("event_snapshot", {"event_id": event_id})
