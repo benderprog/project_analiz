@@ -100,6 +100,46 @@ class SubdivisionMatcherTests(TestCase):
         self.assertEqual(candidates[0]["match_method"], "semantic_window")
         self.assertEqual(candidates[0]["name"], "ПОГК Северная")
 
+
+    @override_settings(SKIP_SEMANTIC_MODEL=False, SUBDIVISION_SEMANTIC_THRESHOLD=0.5)
+    def test_lexical_gating_prefers_uhtomskoe_and_excludes_ochakovo(self):
+        CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name='КПП-1 "Ухтомское"',
+            normalized_short_name=normalize_subdivision_text('КПП-1 "Ухтомское"'),
+            normalized_name=normalize_subdivision_text('КПП-1 "Ухтомское"'),
+            embedding=[0.0, 1.0],
+        )
+        CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name='КПП-2 "Ухтомское"',
+            normalized_short_name=normalize_subdivision_text('КПП-2 "Ухтомское"'),
+            normalized_name=normalize_subdivision_text('КПП-2 "Ухтомское"'),
+            embedding=[0.0, 0.9],
+        )
+        CachedSubdivision.objects.create(
+            portal_subdivision_id=uuid.uuid4(),
+            name='ПОГК "Очаково"',
+            normalized_short_name=normalize_subdivision_text('ПОГК "Очаково"'),
+            normalized_name=normalize_subdivision_text('ПОГК "Очаково"'),
+            embedding=[1.0, 0.0],
+        )
+        invalidate_subdivision_cache()
+
+        class StubModel:
+            def encode(self, texts):
+                return [[1.0, 0.0] for _ in texts]
+
+        with mock.patch(
+            'apps.analysis_app.subdivision_matcher.get_sentence_model', return_value=StubModel()
+        ):
+            candidates, _ = match_subdivision('в АППр «Ухтомское» выявлено нарушение', top_k=5)
+
+        self.assertGreaterEqual(len(candidates), 2)
+        top_names = [item['name'] for item in candidates[:2]]
+        self.assertTrue(all('Ухтомское' in name for name in top_names))
+        self.assertFalse(any('Очаково' in item['name'] for item in candidates))
+
     def test_build_comments_includes_locality_mismatch(self):
         comments = analysis_views._build_comments(
             {
