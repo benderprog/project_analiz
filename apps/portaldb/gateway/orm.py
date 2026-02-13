@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from uuid import UUID
 
 from django.conf import settings
@@ -79,44 +79,6 @@ class ORMPortalGateway:
                 "event_type",
                 "article_of_law",
             )
-        )
-        return [
-            EventDTO(
-                event_id=row["event_id"],
-                date_detection=row["date_detection"],
-                subdivision_id=row["find_subdivision_unit_id"],
-                event_type=row["event_type"],
-                article_of_law=row["article_of_law"],
-            )
-            for row in rows
-        ]
-
-
-    def search_events_by_offender(
-        self,
-        second_name: str,
-        birth_date: date | None,
-        birth_year: int | None,
-        subdivision_id: UUID | str | None,
-        limit: int,
-    ) -> list[EventDTO]:
-        offender_qs = Offender.objects.using(self.alias).filter(second_name__iexact=second_name)
-        if birth_date is not None:
-            offender_qs = offender_qs.filter(date_of_birth=birth_date)
-        elif birth_year is not None:
-            offender_qs = offender_qs.filter(date_of_birth__year=birth_year)
-
-        event_ids = offender_qs.values_list("event_id", flat=True).distinct()
-        event_qs = Event.objects.using(self.alias).filter(event_id__in=event_ids)
-        if subdivision_id is not None:
-            event_qs = event_qs.filter(find_subdivision_unit_id=subdivision_id)
-
-        rows = event_qs.order_by("-date_detection")[:limit].values(
-            "event_id",
-            "date_detection",
-            "find_subdivision_unit_id",
-            "event_type",
-            "article_of_law",
         )
         return [
             EventDTO(
