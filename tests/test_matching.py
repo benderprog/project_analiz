@@ -486,6 +486,56 @@ class OffenderMatchingRulesTests(TestCase):
         self.assertEqual(counts["missing_in_portal"], 1)
         self.assertEqual(len(matches["missing_in_portal"]), 1)
 
+
+
+    def test_per_offender_status_map_contains_err_warn_ok(self):
+        extracted = [
+            {
+                "full_name": "Смирнова Мария Сергеевна",
+                "second_name": "Смирнова",
+                "first_name": "Мария",
+                "patronymic_name": "Сергеевна",
+                "birth_year": 1996,
+                "span": (0, 24),
+            },
+            {
+                "full_name": "Климов Андрей Олегович",
+                "second_name": "Климов",
+                "first_name": "Андрей",
+                "patronymic_name": "Олегович",
+                "birth_date": date(1990, 1, 1),
+                "span": (30, 52),
+            },
+            {
+                "full_name": "Иванов Иван Иванович",
+                "second_name": "Иванов",
+                "first_name": "Иван",
+                "patronymic_name": "Иванович",
+                "birth_date": date(1985, 5, 6),
+                "span": (60, 80),
+            },
+        ]
+        portal = [
+            Offender(
+                first_name="Андрей",
+                second_name="Климов",
+                patronymic_name="Олегович",
+                date_of_birth=date(1990, 3, 3),
+            ),
+            Offender(
+                first_name="Иван",
+                second_name="Иванов",
+                patronymic_name="Иванович",
+                date_of_birth=date(1985, 5, 6),
+            ),
+        ]
+
+        _, _, matches = match_offenders(extracted, portal)
+
+        self.assertEqual(matches["svodka_status_by_span"]["0:24"], "err")
+        self.assertEqual(matches["svodka_status_by_span"]["30:52"], "warn")
+        self.assertEqual(matches["svodka_status_by_span"]["60:80"], "ok")
+
     def test_offender_year_only_matches_full_date_same_year(self):
         extracted = [
             {

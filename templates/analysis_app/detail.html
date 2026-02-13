@@ -127,7 +127,9 @@
                 {% if selected_event.extracted.offenders %}
                   <ul>
                     {% for offender in selected_event.extracted.offenders %}
-                      <li>{{ offender }}</li>
+                      <li class="offender-item offender-item-{{ offender.status|default:'warn' }}">
+                        <span class="offender-marker" aria-hidden="true"></span>{{ offender.text }}
+                      </li>
                     {% endfor %}
                   </ul>
                 {% else %}
@@ -272,7 +274,13 @@
         return "—";
       }
       return `<ul>${items
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .map((item) => {
+          if (typeof item === "object" && item !== null && "text" in item) {
+            const status = item.status || "warn";
+            return `<li class="offender-item offender-item-${escapeHtml(status)}"><span class="offender-marker" aria-hidden="true"></span>${escapeHtml(item.text || "")}</li>`;
+          }
+          return `<li>${escapeHtml(item)}</li>`;
+        })
         .join("")}</ul>`;
     };
 
