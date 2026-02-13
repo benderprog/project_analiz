@@ -491,6 +491,20 @@ class OffenderReportDeduplicationTests(TestCase):
         self.assertEqual(report["details"][0].count("Зайцев Павел"), 1)
 
 class StagedCandidateDebugTests(TestCase):
+    def test_uses_default_score_threshold_without_config(self):
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        _, meta = get_event_candidates(attributes, text="")
+
+        self.assertEqual(meta["score_threshold"], settings.MATCH_STAGE_MIN_SCORE_THRESHOLD)
+        self.assertIsInstance(meta["score_threshold"], float)
+
     def test_stage3_calls_time_only_branch(self):
         attributes = ExtractedAttributes(
             date_time=timezone.make_aware(datetime(2026, 2, 12, 10, 35), timezone.get_current_timezone()),

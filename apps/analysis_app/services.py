@@ -41,6 +41,9 @@ MATCH_TIME_DELTA_MINUTES = 30
 MATCH_STAGE_SUBDIVISION_LIMIT = 500
 MATCH_STAGE_TIME_LIMIT = 500
 MATCH_STAGE4_OFFENDER_EVENT_LIMIT = 200
+DEFAULT_SCORE_THRESHOLD = float(
+    getattr(settings, "MATCH_STAGE_MIN_SCORE_THRESHOLD", 0.5)
+)
 MATCH_STAGE_WINDOWS = [
     ("stage1", timedelta(minutes=MATCH_TIME_DELTA_MINUTES)),
     ("stage2", timedelta(days=1)),
@@ -728,7 +731,7 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     stage_two_days = int(config.get("stage_two_days", 1))
     default_stage_three_days = getattr(settings, "MATCH_STAGE_FALLBACK_DAYS", 7)
     stage_three_days = int(config.get("stage_three_days", default_stage_three_days))
-    score_threshold = int(config.get("min_score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD))
+    score_threshold = float(config.get("min_score_threshold", DEFAULT_SCORE_THRESHOLD))
 
     subdivision_candidate = attributes.subdivision_candidates[0] if attributes.subdivision_candidates else {}
     subdivision_confidence_high = bool(
@@ -994,7 +997,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "stage3_time": stage_rows.get("stage3_time", 0),
         "stage4_offenders": stage_rows.get("stage4_offenders", 0),
         "stage1_best_score": candidate_meta.get("stage1_best_score", 0),
-        "score_threshold": candidate_meta.get("score_threshold", MATCH_STAGE_MIN_SCORE_THRESHOLD),
+        "score_threshold": candidate_meta.get("score_threshold", DEFAULT_SCORE_THRESHOLD),
         "subdivision_confidence_high": candidate_meta.get("subdivision_confidence_high", False),
         "stage4_used": candidate_meta.get("stage4_used", False),
     }
