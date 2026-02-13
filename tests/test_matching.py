@@ -558,3 +558,27 @@ class StageFallbackTests(TestCase):
         self.assertIn("date_time", result["diffs"])
         self.assertEqual(result["offenders_counts"]["portal_total"], 1)
         self.assertEqual(result["offenders_counts"]["matched"], 1)
+
+    def test_stage1_to_stage4_with_zero_candidates_returns_not_found_without_exception(self):
+        attributes = ExtractedAttributes(
+            date_time=datetime(2026, 2, 12, 10, 35),
+            time_found=True,
+            subdivision_id=str(uuid.uuid4()),
+            offenders=[{"full_name": "Сидоров Сидор Сидорович", "birth_year": 1990}],
+            subdivision_name="КПП-1",
+        )
+
+        with (
+            patch("apps.analysis_app.services._build_subdivision_time_candidates", return_value=([], {})),
+            patch("apps.analysis_app.services._build_time_offender_candidates", return_value=[]),
+            patch("apps.analysis_app.services._build_subdivision_offender_candidates", return_value=[]),
+            patch(
+                "apps.analysis_app.services._build_stage4_offender_candidates",
+                return_value=([], {"triggered": True, "scored_candidates": 0}),
+            ),
+        ):
+            result = match_event(attributes, "Тест")
+
+        self.assertFalse(result["matched"])
+        self.assertIsNone(result["portal"])
+        self.assertEqual(result["debug"]["candidates_total"], 0)
