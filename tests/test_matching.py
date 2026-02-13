@@ -510,6 +510,8 @@ class StageFallbackTests(TestCase):
         self.assertFalse(result["matched"])
         self.assertEqual(gateway.search_events_by_subdivision_time.call_count, 3)
         self.assertGreaterEqual(gateway.search_events_by_time.call_count, 4)
+        self.assertIn("stage3_time", result["debug"])
+        self.assertEqual(result["debug"]["stage3_time"], 0)
 
     def test_stage4_offenders_finds_event_when_time_mismatch(self):
         event_id = uuid.uuid4()
@@ -522,7 +524,7 @@ class StageFallbackTests(TestCase):
             event_type="Тип",
             article_of_law="12.1",
         )
-        offender = OffenderDTO(
+        offender1 = OffenderDTO(
             offender_id=uuid.uuid4(),
             event_id=event_id,
             second_name="Смирнова",
@@ -530,16 +532,27 @@ class StageFallbackTests(TestCase):
             patronymic_name="Сергеевна",
             date_of_birth=date(1996, 3, 3),
         )
+        offender2 = OffenderDTO(
+            offender_id=uuid.uuid4(),
+            event_id=event_id,
+            second_name="Климов",
+            first_name="Иван",
+            patronymic_name="Петрович",
+            date_of_birth=date(1990, 7, 1),
+        )
         candidate = {
-            "event": HydratedEvent(event=event, offenders=[offender]),
-            "overlap": 1,
+            "event": HydratedEvent(event=event, offenders=[offender1, offender2]),
+            "overlap": 2,
             "delta_minutes": 60 * 24,
         }
         attributes = ExtractedAttributes(
             date_time=datetime(2026, 2, 12, 10, 35),
             time_found=True,
             subdivision_id=str(subdivision_id),
-            offenders=[{"full_name": "Смирнова Мария Сергеевна", "birth_year": 1996}],
+            offenders=[
+                {"full_name": "Смирнова Мария Сергеевна", "birth_year": 1996},
+                {"full_name": "Климов Иван Петрович", "birth_year": 1990},
+            ],
             subdivision_name="КПП-1 Ухтомское",
             subdivision_candidates=[{"score": 0.95}],
         )
@@ -556,8 +569,12 @@ class StageFallbackTests(TestCase):
         self.assertEqual(result["match_method"], "subdivision+offenders")
         self.assertTrue(result["time_mismatch"])
         self.assertIn("date_time", result["diffs"])
-        self.assertEqual(result["offenders_counts"]["portal_total"], 1)
-        self.assertEqual(result["offenders_counts"]["matched"], 1)
+        self.assertEqual(result["offenders_counts"]["portal_total"], 2)
+        self.assertEqual(result["offenders_counts"]["matched"], 2)
+        self.assertEqual(
+            result["diffs"]["date_time"]["message"],
+            "Событие найдено по подразделению и нарушителям; дата/время отличаются",
+        )
 
     def test_stage1_to_stage4_with_zero_candidates_returns_not_found_without_exception(self):
         attributes = ExtractedAttributes(

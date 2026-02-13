@@ -651,6 +651,7 @@ def _build_stage4_offender_candidates(
     gateway = get_portal_gateway()
     event_ids: set[UUID] = set()
     searched_names: list[str] = []
+    offender_queries: list[dict] = []
     for offender in attributes.offenders:
         full_name = str(offender.get("full_name") or "").strip()
         if not full_name:
@@ -669,6 +670,22 @@ def _build_stage4_offender_candidates(
             birth_date=birth_date,
             subdivision_id=attributes.subdivision_id if subdivision_high_conf else None,
             limit=MATCH_STAGE4_OFFENDER_EVENT_LIMIT,
+        )
+        offender_queries.append(
+            {
+                "surname": surname,
+                "birth_year": birth_year,
+                "birth_date": date_to_str(birth_date),
+                "subdivision_id": str(attributes.subdivision_id)
+                if (subdivision_high_conf and attributes.subdivision_id)
+                else None,
+                "rows": len(by_offender),
+                "sql": (
+                    "search_by_offender_subdivision"
+                    if (subdivision_high_conf and attributes.subdivision_id)
+                    else "search_by_offender"
+                ),
+            }
         )
         event_ids.update(by_offender)
 
@@ -703,6 +720,7 @@ def _build_stage4_offender_candidates(
         "event_ids_found": len(event_ids),
         "hydrated_events": len(loaded_events),
         "scored_candidates": len(candidates),
+        "offender_queries": offender_queries,
         "subdivision_limited": bool(subdivision_high_conf and attributes.subdivision_id),
         "sql": ["search_by_offender", "search_by_offender_subdivision", "event_snapshot", "event_offenders"],
     }
@@ -826,6 +844,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     match_method = None
     best_flags: dict = {}
     best_candidate = None
+    best_delta = None
     best_score = -1
     time_mismatch = False
     subdivision_mismatch = False
@@ -887,7 +906,15 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     else:
         best_event = None
 
-    if best_candidate is None and attributes.offenders:
+    should_run_stage4 = (
+        attributes.offenders
+        and (
+            len(scored_candidates) == 0
+            or best_candidate is None
+            or best_candidate.get("flags_true", 0) < 2
+        )
+    )
+    if should_run_stage4:
         stage4_candidates, stage4_meta = _build_stage4_offender_candidates(
             attributes,
             subdivision_confidence_percent >= SUBDIVISION_MATCH_THRESHOLD * 100,
@@ -924,6 +951,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     top_overlap_b = max((item["overlap"] for item in candidates_b), default=0)
     debug_meta = {
         "candidates_total": len(scored_candidates),
+        "stage1_subdivision_time": stage_debug.get("stage1", {}).get("subdivision_rows", 0),
+        "stage1_time": stage_debug.get("stage1", {}).get("time_rows", 0),
+        "stage2_subdivision_time": stage_debug.get("stage2", {}).get("subdivision_rows", 0),
+        "stage2_time": stage_debug.get("stage2", {}).get("time_rows", 0),
+        "stage3_subdivision_time": stage_debug.get("stage3", {}).get("subdivision_rows", 0),
+        "stage3_time": stage_debug.get("stage3", {}).get("time_rows", 0),
         "subdivision_candidates_total": attributes.subdivision_candidates_total,
         "subdivision_candidates_after_pu_filter": (
             attributes.subdivision_candidates_after_pu_filter
@@ -1055,6 +1088,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         diffs["date_time"] = {
             "expected": format_dt_dmy_hm(attributes.date_time),
             "actual": format_dt_dmy_hm(best_event.event.date_detection),
+            "extracted": format_dt_dmy_hm(attributes.date_time),
+            "portal": format_dt_dmy_hm(best_event.event.date_detection),
+            "message": "Событие найдено по подразделению и нарушителям; дата/время отличаются",
             "delta_minutes": best_delta,
         }
 
