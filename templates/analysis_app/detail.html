@@ -30,7 +30,7 @@
 
     <section class="analysis-detail">
       <div class="detail-header">
-        <h3 id="event-title">Событие {{ selected_event.idx }}</h3>
+        <h3 id="event-title">{% if selected_event.title %}{{ selected_event.title }}{% else %}Событие {{ selected_event.idx }}{% endif %}</h3>
         <p class="detail-score">
           Совпадение: {{ selected_event.match.score_percent|default:"0" }}%
         </p>
@@ -308,7 +308,7 @@
     };
 
     const renderEvent = (event) => {
-      dom.title.textContent = `Событие ${event.idx}`;
+      dom.title.textContent = event.title || `Событие ${event.idx}`;
       dom.text.innerHTML = event.highlighted_html;
       dom.score.textContent = `Совпадение: ${event.match.score_percent ?? 0}%`;
       dom.attrTimestamp.textContent = event.extracted_timestamp_display || "—";
