@@ -1062,3 +1062,21 @@ class HighlightedHtmlOffenderStatusTests(TestCase):
         self.assertIn('<span class="hl hl-yellow">1980 г.р.;</span>', html)
         self.assertIn('<span class="hl hl-red">Петров Петр Петрович</span>', html)
         self.assertIn('<span class="hl hl-red">01.01.1990</span>', html)
+
+    def test_build_highlighted_html_highlights_staff_rank_and_name_in_green(self):
+        text = "(пр-к Кылосова О.Д.), гражданин РФ Иванов Иван Иванович"
+        staff_text = "пр-к Кылосова О.Д."
+        staff_start = text.index(staff_text)
+        extracted = {
+            "staff": [
+                {
+                    "display": staff_text,
+                    "span": [staff_start, staff_start + len(staff_text)],
+                }
+            ],
+            "offenders": [],
+        }
+
+        html = _build_highlighted_html(text, extracted, {})
+
+        self.assertIn('<span class="hl hl-green hl-staff">пр-к Кылосова О.Д.</span>', html)

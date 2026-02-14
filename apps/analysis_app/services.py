@@ -429,10 +429,34 @@ def extract_attributes(
 
     extracted_staff = extract_staff_mentions(text)
     excluded_staff = build_staff_from_excluded_mentions(excluded_mentions, text)
-    staff_map = {item.display: item.to_dict() for item in extracted_staff}
-    for item in excluded_staff:
-        staff_map.setdefault(item.display, item.to_dict())
-    staff = list(staff_map.values())
+    staff: list[dict] = []
+    seen_staff_keys: set[tuple[str, str, str]] = set()
+    seen_staff_spans: list[tuple[int, int]] = []
+    for item in [*extracted_staff, *excluded_staff]:
+        item_dict = item.to_dict()
+        span = item_dict.get("span")
+        span_tuple = None
+        if isinstance(span, tuple) and len(span) == 2:
+            span_tuple = (int(span[0]), int(span[1]))
+        elif isinstance(span, list) and len(span) == 2:
+            span_tuple = (int(span[0]), int(span[1]))
+
+        if span_tuple:
+            overlaps = any(min(span_tuple[1], s[1]) - max(span_tuple[0], s[0]) > 0 for s in seen_staff_spans)
+            if overlaps:
+                continue
+
+        key = (
+            str(item_dict.get("surname") or "").lower().replace("ё", "е"),
+            str(item_dict.get("initials") or "").lower().replace("ё", "е"),
+            str(item_dict.get("rank_norm") or "").lower().replace("ё", "е"),
+        )
+        if key in seen_staff_keys:
+            continue
+        seen_staff_keys.add(key)
+        if span_tuple:
+            seen_staff_spans.append(span_tuple)
+        staff.append(item_dict)
     subdivision_candidates, candidate_meta = match_subdivision(
         text,
         top_k=5,
