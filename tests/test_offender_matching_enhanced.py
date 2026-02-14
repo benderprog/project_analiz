@@ -367,3 +367,16 @@ class EmployeeContextParenthesesRegressionTests(SimpleTestCase):
         self.assertEqual(len(eligible), 0)
         self.assertEqual(len(excluded), 1)
         self.assertTrue(excluded[0].employee_context)
+
+    def test_staff_keeps_surface_surname_without_duplicate_normalized_variant(self):
+        text = "(пр-к Кылосова О.Д.), гражданка РФ Смирнова Мария Сергеевна"
+
+        from apps.analysis_app.services import extract_attributes
+
+        with mock.patch("apps.analysis_app.services.match_subdivision", return_value=([], {})):
+            attrs = extract_attributes(text)
+
+        self.assertEqual(len(attrs.staff), 1)
+        self.assertEqual(attrs.staff[0]["display"], "пр-к Кылосова О.Д.")
+        self.assertEqual(attrs.staff[0]["surname"], "Кылосова")
+        self.assertNotIn("Кылосов", [item["display"] for item in attrs.staff])

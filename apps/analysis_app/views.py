@@ -254,6 +254,7 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         "warn": "hl-yellow",
         "err": "hl-red",
     }
+    offender_spans: list[tuple[int, int]] = []
     for offender in offenders:
         offender_status = status_to_css.get(status_map.get(_status_key_for_offender(offender), "warn"), "hl-yellow")
         full_name = offender.get("full_name")
@@ -263,10 +264,24 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         else:
             offender_span = _find_case_insensitive_span(text, full_name) if full_name else None
         if offender_span:
+            offender_spans.append(offender_span)
             spans.append((offender_span[0], offender_span[1], offender_status))
         dob_span = offender.get("dob_span")
         if dob_span and len(dob_span) == 2:
             spans.append((int(dob_span[0]), int(dob_span[1]), offender_status))
+
+    for staff_item in extracted.get("staff") or []:
+        staff_span = staff_item.get("span") if isinstance(staff_item, dict) else None
+        if not (staff_span and len(staff_span) == 2):
+            continue
+        staff_span = (int(staff_span[0]), int(staff_span[1]))
+        overlaps_offender = any(
+            min(staff_span[1], offender_span[1]) - max(staff_span[0], offender_span[0]) > 0
+            for offender_span in offender_spans
+        )
+        if overlaps_offender:
+            continue
+        spans.append((staff_span[0], staff_span[1], "hl-green hl-staff"))
 
     return highlight_text(text, spans)
 
