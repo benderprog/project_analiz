@@ -328,18 +328,33 @@ def _match_end_index(match) -> int | None:
 def normalize_article(value: object) -> str:
     if value is None:
         return ""
-    normalized = str(value).strip()
+    normalized = (
+        str(value)
+        .replace("\xa0", " ")
+        .replace("\u202f", " ")
+        .replace("\u200b", "")
+        .strip()
+    )
     if not normalized or normalized.lower() in {"null", "none"}:
         return ""
     normalized = normalized.lower().replace("ё", "е")
     normalized = re.sub(r"\s+", "", normalized)
+    if normalized in {"null", "none"}:
+        return ""
     return normalized
 
 
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
-    normalized = str(value).lower().replace("ё", "е")
+    normalized = (
+        str(value)
+        .replace("\xa0", " ")
+        .replace("\u202f", " ")
+        .replace("\u200b", "")
+        .lower()
+        .replace("ё", "е")
+    )
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized.strip()
 
@@ -1807,15 +1822,19 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
 
     predicted_type_name = _event_type_name(predicted_type)
     portal_type_name = _event_type_name(best_event.event.event_type)
-    if predicted_type_name and portal_type_name:
-        event_type_ok = normalize_text(predicted_type_name) == normalize_text(portal_type_name)
-    else:
+    predicted_type_normalized = normalize_text(predicted_type_name)
+    portal_type_normalized = normalize_text(portal_type_name)
+    if not predicted_type_normalized and not portal_type_normalized:
         event_type_ok = None
+    else:
+        event_type_ok = predicted_type_normalized == portal_type_normalized
 
     predicted_article_normalized = normalize_article(predicted_article)
     portal_article_normalized = normalize_article(best_event.event.article_of_law)
     if not predicted_article_normalized and not portal_article_normalized:
         article_ok = None
+    elif predicted_article_normalized and not portal_article_normalized:
+        article_ok = False
     else:
         article_ok = predicted_article_normalized == portal_article_normalized
     if not best_flags:
