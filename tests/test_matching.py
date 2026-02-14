@@ -8,6 +8,7 @@ from django.template.loader import render_to_string
 from django.test import TestCase
 from django.utils import timezone
 
+from apps.classifier.models import EventType, EventTypePattern
 from apps.analysis_app.services import (
     DEFAULT_DOB,
     ExtractedAttributes,
@@ -1080,3 +1081,67 @@ class HighlightedHtmlOffenderStatusTests(TestCase):
         html = _build_highlighted_html(text, extracted, {})
 
         self.assertIn('<span class="hl hl-green hl-staff">пр-к Кылосова О.Д.</span>', html)
+
+    def test_build_highlighted_html_highlights_event_pattern_matches(self):
+        text = "Нарушитель: Иванов Иван Иванович. Составлен протокол. Составлен протокол повторно."
+        offender_text = "Иванов Иван Иванович"
+        offender_start = text.index(offender_text)
+        extracted = {
+            "offenders": [
+                {
+                    "full_name": offender_text,
+                    "span": [offender_start, offender_start + len(offender_text)],
+                }
+            ]
+        }
+        first_phrase_start = text.index("Составлен протокол")
+        second_phrase_start = text.rindex("Составлен протокол")
+        match_result = {
+            "predicted": {
+                "event_pattern": {
+                    "spans": [
+                        [offender_start, offender_start + 9],
+                        [first_phrase_start, first_phrase_start + len("Составлен протокол")],
+                        [second_phrase_start, second_phrase_start + len("Составлен протокол")],
+                    ]
+                }
+            }
+        }
+
+        html = _build_highlighted_html(text, extracted, match_result)
+
+        self.assertEqual(html.count("hl-eventpattern"), 2)
+        self.assertIn('<span class="hl hl-green hl-eventpattern">Составлен протокол</span>', html)
+        self.assertIn('<span class="hl hl-yellow">Иванов Иван Иванович</span>', html)
+
+
+class EventPatternClassificationTests(TestCase):
+    def test_match_event_exposes_pattern_spans_for_predicted_event(self):
+        event_type = EventType.objects.create(event_type="Составление протокола")
+        EventTypePattern.objects.create(
+            event_type=event_type,
+            pattern=r"составлен\s+протокол",
+            article_of_law="12.1",
+        )
+        text = "В ходе рейда составлен протокол и затем составлен протокол повторно."
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})):
+            result = match_event(attributes, text)
+
+        predicted = result["predicted"]
+        self.assertEqual(predicted["event_type"], "Составление протокола")
+        self.assertEqual(predicted["article_of_law"], "12.1")
+        self.assertIsNotNone(predicted["event_pattern"])
+        self.assertEqual(len(predicted["event_pattern"]["spans"]), 2)
+        self.assertEqual(
+            predicted["event_pattern"]["matched_texts"],
+            ["составлен протокол", "составлен протокол"],
+        )

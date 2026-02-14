@@ -222,29 +222,34 @@ def _build_offender_report(match_result: dict) -> dict:
 
 def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> str:
     spans: list[tuple[int, int, str]] = []
+    strong_spans: list[tuple[int, int]] = []
+
+    def _add_span(start: int, end: int, css_class: str, *, is_strong: bool = True) -> None:
+        if end <= start:
+            return
+        spans.append((start, end, css_class))
+        if is_strong:
+            strong_spans.append((start, end))
+
     date_span = _find_datetime_span(text)
     if date_span:
-        spans.append((date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}"))
+        _add_span(date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}")
 
     subdivision_span = extracted.get("subdivision_span")
     if subdivision_span:
-        spans.append(
-            (
-                subdivision_span[0],
-                subdivision_span[1],
-                f"hl-{_status_for_subdivision(match_result)}",
-            )
+        _add_span(
+            subdivision_span[0],
+            subdivision_span[1],
+            f"hl-{_status_for_subdivision(match_result)}",
         )
     else:
         subdivision = extracted.get("subdivision_name")
         subdivision_span = _find_case_insensitive_span(text, subdivision) if subdivision else None
         if subdivision_span:
-            spans.append(
-                (
-                    subdivision_span[0],
-                    subdivision_span[1],
-                    f"hl-{_status_for_subdivision(match_result)}",
-                )
+            _add_span(
+                subdivision_span[0],
+                subdivision_span[1],
+                f"hl-{_status_for_subdivision(match_result)}",
             )
 
     offenders = extracted.get("offenders") or []
@@ -265,10 +270,10 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
             offender_span = _find_case_insensitive_span(text, full_name) if full_name else None
         if offender_span:
             offender_spans.append(offender_span)
-            spans.append((offender_span[0], offender_span[1], offender_status))
+            _add_span(offender_span[0], offender_span[1], offender_status)
         dob_span = offender.get("dob_span")
         if dob_span and len(dob_span) == 2:
-            spans.append((int(dob_span[0]), int(dob_span[1]), offender_status))
+            _add_span(int(dob_span[0]), int(dob_span[1]), offender_status)
 
     for staff_item in extracted.get("staff") or []:
         staff_span = staff_item.get("span") if isinstance(staff_item, dict) else None
@@ -281,7 +286,24 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         )
         if overlaps_offender:
             continue
-        spans.append((staff_span[0], staff_span[1], "hl-green hl-staff"))
+        _add_span(staff_span[0], staff_span[1], "hl-green hl-staff")
+
+    event_pattern_spans = (
+        (match_result.get("predicted") or {})
+        .get("event_pattern", {})
+        .get("spans", [])
+    )
+    for span in event_pattern_spans[:5]:
+        if not isinstance(span, (list, tuple)) or len(span) != 2:
+            continue
+        event_span = (int(span[0]), int(span[1]))
+        overlaps_strong = any(
+            min(event_span[1], strong_span[1]) - max(event_span[0], strong_span[0]) > 0
+            for strong_span in strong_spans
+        )
+        if overlaps_strong:
+            continue
+        _add_span(event_span[0], event_span[1], "hl-green hl-eventpattern", is_strong=False)
 
     return highlight_text(text, spans)
 

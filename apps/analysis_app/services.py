@@ -855,7 +855,35 @@ def _looks_like_regex(pattern: str) -> bool:
     return any(char in pattern for char in ".^$*+?{}[]\\|()")
 
 
-def _classify_event_type(text: str) -> tuple[str | None, str | None]:
+def _collect_pattern_spans(
+    text: str,
+    pattern: str,
+    *,
+    is_regex: bool,
+    max_matches: int = 5,
+) -> list[tuple[int, int]]:
+    if not text or not pattern:
+        return []
+
+    lookup_pattern = pattern if is_regex else re.escape(pattern)
+    try:
+        matches = re.finditer(lookup_pattern, text, re.IGNORECASE)
+    except re.error:
+        logger.warning("Invalid regex pattern skipped: %s", pattern)
+        return []
+
+    spans: list[tuple[int, int]] = []
+    for match in matches:
+        start, end = match.start(), match.end()
+        if end <= start:
+            continue
+        spans.append((start, end))
+        if len(spans) >= max_matches:
+            break
+    return spans
+
+
+def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None]:
     lowered = text.lower()
     best_match = None
     best_length = -1
@@ -866,8 +894,9 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
         if not pattern:
             continue
 
+        is_regex = _looks_like_regex(pattern)
         matched = False
-        if _looks_like_regex(pattern):
+        if is_regex:
             try:
                 matched = re.search(pattern, lowered, re.IGNORECASE) is not None
             except re.error:
@@ -883,9 +912,22 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
                 best_length = match_length
 
     if not best_match:
-        return None, None
+        return None, None, None
 
-    return best_match.event_type.event_type, best_match.article_of_law
+    best_pattern = best_match.pattern.strip()
+    pattern_spans = _collect_pattern_spans(
+        text,
+        best_pattern,
+        is_regex=_looks_like_regex(best_pattern),
+    )
+    event_pattern = {
+        "pattern_id": str(best_match.event_type_pattern_id),
+        "pattern": best_pattern,
+        "spans": pattern_spans,
+        "matched_texts": [text[start:end] for start, end in pattern_spans],
+    }
+
+    return best_match.event_type.event_type, best_match.article_of_law, event_pattern
 
 
 def _select_event_by_subdivision_time(
@@ -1292,7 +1334,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
-    predicted_type, predicted_article = _classify_event_type(text)
+    predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
 
@@ -1397,6 +1439,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "predicted": {
                 "event_type": predicted_type,
                 "article_of_law": predicted_article,
+                "event_pattern": predicted_event_pattern,
             },
             "match_method": None,
             "time_mismatch": False,
@@ -1528,6 +1571,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "predicted": {
             "event_type": best_flags.get("predicted_type"),
             "article_of_law": best_flags.get("predicted_article"),
+            "event_pattern": predicted_event_pattern,
         },
         "offender_matches": offender_matches,
         "match_method": match_method,
