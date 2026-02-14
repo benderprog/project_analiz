@@ -374,9 +374,9 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:
         comments.append("Нарушители отличаются от данных БД.")
-    if not match_result.get("event_type_ok", False):
+    if match_result.get("event_type_ok") is False:
         comments.append("Тип события отличается от классификации.")
-    if not match_result.get("article_ok", False):
+    if match_result.get("article_ok") is False:
         comments.append("Статья закона отличается от классификации.")
     if match_result.get("time_mismatch"):
         date_diff = (diffs.get("date_time") or {})
@@ -400,6 +400,14 @@ def _build_comments(match_result: dict) -> list[str]:
     if match_result.get("date_time_present") and not match_result.get("time_found"):
         comments.append("Не определилось время (использована только дата).")
     return comments
+
+
+def _status_from_flag(flag: bool | None) -> str:
+    if flag is True:
+        return "green"
+    if flag is False:
+        return "red"
+    return "neutral"
 
 
 def _build_event_card(paragraph: AnalysisParagraph) -> dict:
@@ -490,8 +498,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "timestamp": _status_for_timestamp(match_result),
             "subdivision": _status_for_subdivision(match_result),
             "offenders": _status_for_offenders(match_result),
-            "event_type": "green" if match_result.get("event_type_ok") else "red",
-            "article": "green" if match_result.get("article_ok") else "red",
+            "event_type": _status_from_flag(match_result.get("event_type_ok")),
+            "article": _status_from_flag(match_result.get("article_ok")),
         },
         "comments": _build_comments(match_result),
     }
