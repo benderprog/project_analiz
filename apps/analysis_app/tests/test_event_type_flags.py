@@ -38,7 +38,7 @@ class EventTypeFlagsTest(SimpleTestCase):
         )
 
         with (
-            patch("apps.analysis_app.services._classify_event_type", return_value=(predicted_event_type, "20.3.3", "pattern")),
+            patch("apps.analysis_app.services._classify_event_type", return_value=(predicted_event_type, "20.3.3", {"event_type_label": predicted_event_type})),
             patch("apps.analysis_app.services.get_event_candidates", return_value=([best_candidate], {"stages": [], "stage_queries": []})),
             patch("apps.analysis_app.services._portal_offenders", return_value=[]),
             patch("apps.analysis_app.services.match_offenders", return_value=(1.0, {
@@ -57,7 +57,7 @@ class EventTypeFlagsTest(SimpleTestCase):
         self.assertNotIn("event_type", result["diffs"])
         self.assertIn("article_of_law", result["diffs"])
 
-    def test_null_portal_article_returns_article_ok_none(self):
+    def test_null_portal_article_returns_article_ok_false(self):
         predicted_event_type = "Кража"
         portal_event = EventDTO(
             event_id=uuid4(),
@@ -83,7 +83,7 @@ class EventTypeFlagsTest(SimpleTestCase):
         )
 
         with (
-            patch("apps.analysis_app.services._classify_event_type", return_value=(predicted_event_type, "18.4 ч.1", "pattern")),
+            patch("apps.analysis_app.services._classify_event_type", return_value=(predicted_event_type, "18.4 ч.1", {"event_type_label": predicted_event_type})),
             patch("apps.analysis_app.services.get_event_candidates", return_value=([best_candidate], {"stages": [], "stage_queries": []})),
             patch("apps.analysis_app.services._portal_offenders", return_value=[]),
             patch("apps.analysis_app.services.match_offenders", return_value=(1.0, {
@@ -98,10 +98,10 @@ class EventTypeFlagsTest(SimpleTestCase):
             result = match_event(attributes, "test")
 
         self.assertTrue(result["event_type_ok"])
-        self.assertIsNone(result["article_ok"])
+        self.assertFalse(result["article_ok"])
         self.assertNotIn("event_type", result["diffs"])
-        self.assertNotIn("article_of_law", result["diffs"])
+        self.assertIn("article_of_law", result["diffs"])
 
         comments = _build_comments(result)
-        self.assertNotIn("Статья закона отличается от классификации.", comments)
+        self.assertIn("Статья закона отличается от классификации.", comments)
         self.assertNotIn("Тип события отличается от классификации.", comments)
