@@ -160,6 +160,48 @@ class MatchingTests(TestCase):
         self.assertFalse(result_type_bad["event_type_ok"])
 
 
+    def test_match_event_type_matches_when_portal_article_is_null(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="Отдел NULL", parent_pu=pu
+        )
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Курил в неустановленном месте",
+            article_of_law="NULL",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+        )
+
+        with patch(
+            "apps.analysis_app.services._classify_event_type",
+            return_value=("Курил в неустановленном месте", "18.4 ч.2", None),
+        ):
+            result = match_event(attributes, "Тестовый текст")
+
+        self.assertTrue(result["event_type_ok"])
+        self.assertFalse(result["article_ok"])
+
     def test_match_event_normalizes_article_when_comparing(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
         subdivision = Subdivision.objects.using("portal").create(
@@ -763,6 +805,69 @@ class TemplateRenderingTests(TestCase):
         )
 
         self.assertNotIn("{{ selected_event.match.offenders_counts", html)
+
+
+    def test_detail_template_renders_exactly_two_event_type_badges(self):
+        event = {
+            "idx": 1,
+            "preview": "preview",
+            "highlighted_html": "text",
+            "extracted_timestamp_display": "—",
+            "portal_timestamp_display": "—",
+            "extracted": {
+                "subdivision_name": None,
+                "subdivision_candidates": [],
+                "offenders": [],
+                "staff": [],
+            },
+            "portal": {
+                "subdivision_name": None,
+                "offenders": [],
+                "event_type": "Курил в неустановленном месте",
+                "article_of_law": "NULL",
+            },
+            "predicted": {
+                "event_type": "Курил в неустановленном месте",
+                "article_of_law": "18.4 ч.2",
+            },
+            "status": {
+                "timestamp": "green",
+                "subdivision": "green",
+                "offenders": "green",
+                "event_type": "green",
+                "article": "red",
+            },
+            "match": {
+                "matched": True,
+                "score_percent": 100,
+                "time_delta_minutes": 0,
+                "subdivision_match_percent": 100,
+                "offenders_summary": "Совпало нарушителей: 0 из 0",
+                "offenders_details": [],
+                "offenders_counts": {
+                    "matched": 0,
+                    "portal_total": 0,
+                    "svodka_total": 0,
+                    "dob_mismatch": 0,
+                    "missing_in_portal": 0,
+                    "missing_in_svodka": 0,
+                },
+            },
+            "comments": ["Статья закона отличается от классификации."],
+        }
+        run = SimpleNamespace(run_id="run-1", status="done")
+        html = render_to_string(
+            "analysis_app/detail.html",
+            {
+                "run": run,
+                "events": [event],
+                "selected_event": event,
+            },
+        )
+
+        self.assertEqual(html.count('data-badge="event-type"'), 1)
+        self.assertEqual(html.count('data-badge="article"'), 1)
+
 
 
 class OffenderReportDeduplicationTests(TestCase):
