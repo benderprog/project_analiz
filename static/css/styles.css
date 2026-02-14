@@ -209,6 +209,10 @@ body {
   background: #c62828;
 }
 
+.badge-neutral {
+  background: #757575;
+}
+
 .detail-block h4 .badge {
   margin-left: 8px;
   vertical-align: middle;

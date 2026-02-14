@@ -326,15 +326,22 @@ def _match_end_index(match) -> int | None:
 
 
 def normalize_article(value: object) -> str:
-    if not value:
+    if value is None:
         return ""
-    normalized = str(value).strip().lower()
-    if normalized == "null":
+    normalized = str(value).strip()
+    if not normalized or normalized.lower() in {"null", "none"}:
         return ""
-    normalized = normalized.replace("часть", "ч")
-    normalized = re.sub(r"ч\.?", "ч", normalized)
+    normalized = normalized.lower().replace("ё", "е")
     normalized = re.sub(r"\s+", "", normalized)
     return normalized
+
+
+def normalize_text(value: object) -> str:
+    if value is None:
+        return ""
+    normalized = str(value).lower().replace("ё", "е")
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
 
 
 def _match_start_index(match) -> int | None:
@@ -1758,8 +1765,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "match_method": None,
             "time_mismatch": False,
             "subdivision_mismatch": False,
-            "event_type_ok": False,
-            "article_ok": False,
+            "event_type_ok": None,
+            "article_ok": None,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -1783,47 +1790,34 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         and offenders_counts.get("missing_in_portal", 0) == 0
         and offenders_counts.get("missing_in_svodka", 0) == 0
     )
-    def _normalized_text(value: object) -> str:
+    def _event_type_name(value: object) -> str:
         if value is None:
             return ""
-        return str(value).strip()
-
-    def _event_type_parts(value: object) -> tuple[str, str]:
-        if value is None:
-            return "", ""
         if isinstance(value, dict):
-            event_type_id = _normalized_text(
-                value.get("id") or value.get("event_type_id") or value.get("pk")
-            )
-            event_type_name = _normalized_text(
-                value.get("name") or value.get("event_type") or value.get("title")
-            )
-            return event_type_id, event_type_name
-        event_type_id = _normalized_text(
-            getattr(value, "id", None)
-            or getattr(value, "event_type_id", None)
-            or getattr(value, "pk", None)
-        )
-        event_type_name = _normalized_text(
+            return str(
+                value.get("name") or value.get("event_type") or value.get("title") or ""
+            ).strip()
+        return str(
             getattr(value, "name", None)
             or getattr(value, "event_type", None)
             or getattr(value, "title", None)
             or value
-        )
-        return event_type_id, event_type_name
+            or ""
+        ).strip()
 
-    predicted_type_id, predicted_type_name = _event_type_parts(predicted_type)
-    portal_type_id, portal_type_name = _event_type_parts(best_event.event.event_type)
-    portal_type_present = bool(portal_type_id or portal_type_name)
-    if portal_type_present:
-        if predicted_type_id and portal_type_id:
-            type_ok = predicted_type_id == portal_type_id
-        else:
-            type_ok = bool(predicted_type_name) and predicted_type_name == portal_type_name
+    predicted_type_name = _event_type_name(predicted_type)
+    portal_type_name = _event_type_name(best_event.event.event_type)
+    if predicted_type_name and portal_type_name:
+        event_type_ok = normalize_text(predicted_type_name) == normalize_text(portal_type_name)
     else:
-        type_ok = False
-    article_ok = normalize_article(predicted_article) == normalize_article(best_event.event.article_of_law)
-    event_type_ok = bool(type_ok)
+        event_type_ok = None
+
+    predicted_article_normalized = normalize_article(predicted_article)
+    portal_article_normalized = normalize_article(best_event.event.article_of_law)
+    if not predicted_article_normalized and not portal_article_normalized:
+        article_ok = None
+    else:
+        article_ok = predicted_article_normalized == portal_article_normalized
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -1840,12 +1834,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "offenders_counts": offenders_counts,
     }
     diffs = {}
-    if not best_flags.get("type_match"):
+    if best_flags.get("type_match") is False:
         diffs["event_type"] = {
             "expected": best_flags.get("predicted_type"),
             "actual": best_event.event.event_type,
         }
-    if not best_flags.get("article_match"):
+    if best_flags.get("article_match") is False:
         diffs["article_of_law"] = {
             "expected": best_flags.get("predicted_article"),
             "actual": best_event.event.article_of_law,

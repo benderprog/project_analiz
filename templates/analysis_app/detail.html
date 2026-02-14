@@ -198,7 +198,7 @@
       </div>
 
       <div class="detail-block">
-        <h4>Тип события<span class="badge badge-{% if selected_event.status.event_type == "green" %}green{% else %}red{% endif %}" data-badge="event-type" title="Тип события">{% if selected_event.status.event_type == "green" %}✓{% else %}✕{% endif %}</span><span class="badge badge-{% if selected_event.status.article == "green" %}green{% else %}red{% endif %}" data-badge="article" title="Статья">{% if selected_event.status.article == "green" %}✓{% else %}✕{% endif %}</span></h4>
+        <h4>Тип события<span class="badge badge-{{ selected_event.status.event_type }}" data-badge="event-type" title="Тип события">{% if selected_event.status.event_type == "green" %}✓{% elif selected_event.status.event_type == "red" %}✕{% else %}—{% endif %}</span><span class="badge badge-{{ selected_event.status.article }}" data-badge="article" title="Статья">{% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}</span></h4>
         <p id="predicted-type">
           Определено:
           {{ selected_event.predicted.event_type|default:"не удалось" }}
@@ -231,7 +231,7 @@
   {{ events|json_script:"events-data" }}
   <script>
     const events = JSON.parse(document.getElementById("events-data").textContent);
-    const badgeIcons = { green: "✓", yellow: "!", red: "✕" };
+    const badgeIcons = { green: "✓", yellow: "!", red: "✕", neutral: "—" };
     const listItems = document.querySelectorAll(".event-item");
 
     const dom = {
@@ -346,14 +346,14 @@
       });
 
       if (dom.badges.eventType) {
-        const eventTypeStatus = event.status.event_type === "green" ? "green" : "red";
+        const eventTypeStatus = event.status.event_type || "neutral";
         dom.badges.eventType.className = `badge badge-${eventTypeStatus}`;
-        dom.badges.eventType.textContent = eventTypeStatus === "green" ? "✓" : "✕";
+        dom.badges.eventType.textContent = badgeIcons[eventTypeStatus] || "—";
       }
       if (dom.badges.article) {
-        const articleStatus = event.status.article === "green" ? "green" : "red";
+        const articleStatus = event.status.article || "neutral";
         dom.badges.article.className = `badge badge-${articleStatus}`;
-        dom.badges.article.textContent = articleStatus === "green" ? "✓" : "✕";
+        dom.badges.article.textContent = badgeIcons[articleStatus] || "—";
       }
 
       dom.predictedType.textContent = `Определено: ${
