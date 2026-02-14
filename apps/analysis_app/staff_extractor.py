@@ -8,6 +8,10 @@ _TOKEN_RE = re.compile(r"[А-ЯЁа-яё0-9.-]+")
 _SURNAME_INITIALS_RE = re.compile(
     r"(?P<surname>[А-ЯЁ][а-яё]{2,})\s+(?P<initials>(?:[А-ЯЁ]\s*\.?\s*){2})(?:\+\d+)?"
 )
+_RANK_PREFIX_RE = re.compile(
+    r"(?:^|[\s(,;:])(?P<rank>(?:(?:ст\.\s*)?(?:пр-к|л-т|м-н)|лейтенант|капитан|майор|подполковник|полковник|мичман|старшина|генерал|адмирал|контр-адмирал|капитан-лейтенант|прапорщик|кап\.?)(?:\s+(?:2|3)\s+ранга)?)\s*$",
+    re.IGNORECASE,
+)
 
 _RANK_MARKERS = {
     "л-т",
@@ -67,6 +71,11 @@ def _inside_parentheses(text: str, span: tuple[int, int]) -> bool:
 
 
 def _extract_rank_before(text: str, surname_start: int) -> str:
+    prefix = text[max(0, surname_start - 40) : surname_start]
+    rank_match = _RANK_PREFIX_RE.search(prefix)
+    if rank_match:
+        return rank_match.group("rank").strip(" ,;:")
+
     tokens = [(m.group(0), m.start(), m.end()) for m in _TOKEN_RE.finditer(text)]
     index = next((i for i, (_, s, e) in enumerate(tokens) if s <= surname_start < e), None)
     if index is None or index == 0:
@@ -96,6 +105,12 @@ def _extract_rank_before(text: str, surname_start: int) -> str:
     return re.sub(r"\s+", " ", " ".join(rank_tokens)).strip(" ,;:")
 
 
+def _normalize_rank(raw: str) -> str:
+    rank = re.sub(r"\s+", " ", raw).strip()
+    rank = re.sub(r"(?i)^ст\.\s+пр-к$", "ст.пр-к", rank)
+    return rank
+
+
 def extract_staff_mentions(text: str) -> list[StaffMention]:
     found: list[StaffMention] = []
     seen: set[str] = set()
@@ -112,7 +127,7 @@ def extract_staff_mentions(text: str) -> list[StaffMention]:
         if not rank_raw:
             continue
 
-        rank_norm = re.sub(r"\s+", " ", rank_raw).strip()
+        rank_norm = _normalize_rank(rank_raw)
         display = f"{rank_norm} {surname} {initials}".strip() if rank_norm else f"{surname} {initials}"
         key = f"{surname.lower()}|{initials}|{rank_norm.lower()}"
         if key in seen:
@@ -160,7 +175,7 @@ def build_staff_from_excluded_mentions(excluded_mentions: list, text: str) -> li
         result.append(
             StaffMention(
                 rank_raw=rank_raw,
-                rank_norm=re.sub(r"\s+", " ", rank_raw).strip(),
+                rank_norm=_normalize_rank(rank_raw),
                 surname=surname,
                 initials=initials,
                 display=display.strip(),
