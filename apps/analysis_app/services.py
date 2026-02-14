@@ -344,6 +344,13 @@ def normalize_article(value: object) -> str:
     return normalized
 
 
+def _normalize_portal_article(value: object) -> str | None:
+    normalized = normalize_article(value)
+    if not normalized or normalized in {"-", "—"}:
+        return None
+    return normalized
+
+
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
@@ -1829,12 +1836,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     else:
         event_type_ok = predicted_type_normalized == portal_type_normalized
 
-    predicted_article_normalized = normalize_article(predicted_article)
-    portal_article_normalized = normalize_article(best_event.event.article_of_law)
-    if not predicted_article_normalized and not portal_article_normalized:
+    predicted_article_normalized = normalize_article(predicted_article) or None
+    portal_article_normalized = _normalize_portal_article(best_event.event.article_of_law)
+    if predicted_article_normalized is None or portal_article_normalized is None:
         article_ok = None
-    elif predicted_article_normalized and not portal_article_normalized:
-        article_ok = False
     else:
         article_ok = predicted_article_normalized == portal_article_normalized
     if not best_flags:
