@@ -1840,8 +1840,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     portal_type_name = _event_type_name(best_event.event.event_type)
     predicted_type_normalized = _normalize_optional_compare_value(predicted_type_name)
     portal_type_normalized = _normalize_optional_compare_value(portal_type_name)
-    if predicted_type_normalized is None or portal_type_normalized is None:
+    if predicted_type_normalized is None and portal_type_normalized is None:
         event_type_ok = None
+    elif predicted_type_normalized is None or portal_type_normalized is None:
+        event_type_ok = False
     else:
         event_type_ok = predicted_type_normalized == portal_type_normalized
 

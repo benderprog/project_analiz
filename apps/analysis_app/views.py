@@ -509,7 +509,6 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "offenders": _status_for_offenders(match_result),
             "event_type": _status_from_flag(match_result.get("event_type_ok")),
             "article": _status_from_flag(match_result.get("article_ok")),
-            "article_visible": match_result.get("article_ok") is not None,
         },
         "comments": _build_comments(match_result),
     }
