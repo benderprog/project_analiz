@@ -410,6 +410,15 @@ def _status_from_flag(flag: bool | None) -> str:
     return "neutral"
 
 
+def _display_article(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "null" or text in {"-", "—"}:
+        return None
+    return text
+
+
 def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     result = paragraph.result
     extracted = result.extracted_attributes or {}
@@ -488,7 +497,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "subdivision_name": portal.get("subdivision_name"),
             "offenders": _format_offenders(portal.get("offenders") or [], source="portal"),
             "event_type": portal.get("event_type"),
-            "article_of_law": portal.get("article_of_law"),
+            "article_of_law": _display_article(portal.get("article_of_law")),
         },
         "predicted": {
             "event_type": predicted.get("event_type"),
@@ -500,6 +509,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "offenders": _status_for_offenders(match_result),
             "event_type": _status_from_flag(match_result.get("event_type_ok")),
             "article": _status_from_flag(match_result.get("article_ok")),
+            "article_visible": match_result.get("article_ok") is not None,
         },
         "comments": _build_comments(match_result),
     }

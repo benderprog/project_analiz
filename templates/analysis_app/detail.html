@@ -198,7 +198,7 @@
       </div>
 
       <div class="detail-block">
-        <h4>Тип события<span class="badge badge-{{ selected_event.status.event_type }}" data-badge="event-type" title="Тип события">{% if selected_event.status.event_type == "green" %}✓{% elif selected_event.status.event_type == "red" %}✕{% else %}—{% endif %}</span><span class="badge badge-{{ selected_event.status.article }}" data-badge="article" title="Статья">{% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}</span></h4>
+        <h4>Тип события<span class="badge badge-{{ selected_event.status.event_type }}" data-badge="event-type" title="Тип события">{% if selected_event.status.event_type == "green" %}✓{% elif selected_event.status.event_type == "red" %}✕{% else %}—{% endif %}</span>{% if selected_event.status.article_visible %}<span class="badge badge-{{ selected_event.status.article }}" data-badge="article" title="Статья">{% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}</span>{% endif %}</h4>
         <p id="predicted-type">
           Определено:
           {{ selected_event.predicted.event_type|default:"не удалось" }}
@@ -209,9 +209,7 @@
         <p id="portal-type">
           В БД:
           {{ selected_event.portal.event_type|default:"не задан" }}
-          {% if selected_event.portal.article_of_law %}
-            ({{ selected_event.portal.article_of_law }})
-          {% endif %}
+          ({{ selected_event.portal.article_of_law|default:"—" }})
         </p>
       </div>
 
@@ -351,6 +349,7 @@
         dom.badges.eventType.textContent = badgeIcons[eventTypeStatus] || "—";
       }
       if (dom.badges.article) {
+        dom.badges.article.style.display = event.status.article_visible ? "inline-flex" : "none";
         const articleStatus = event.status.article || "neutral";
         dom.badges.article.className = `badge badge-${articleStatus}`;
         dom.badges.article.textContent = badgeIcons[articleStatus] || "—";
@@ -361,7 +360,7 @@
       }${event.predicted.article_of_law ? ` (${event.predicted.article_of_law})` : ""}`;
       dom.portalType.textContent = `В БД: ${
         event.portal.event_type || "не задан"
-      }${event.portal.article_of_law ? ` (${event.portal.article_of_law})` : ""}`;
+      } (${event.portal.article_of_law || "—"})`;
 
       dom.commentsList.innerHTML = renderListItems(event.comments);
     };
