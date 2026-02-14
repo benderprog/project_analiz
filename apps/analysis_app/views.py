@@ -288,8 +288,12 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
             continue
         _add_span(staff_span[0], staff_span[1], "hl-green hl-staff")
 
-    predicted = (match_result or {}).get("predicted") or {}
-    event_pattern = predicted.get("event_pattern") or (match_result or {}).get("event_pattern") or {}
+    predicted = (match_result or {}).get("predicted")
+    if not isinstance(predicted, dict):
+        predicted = {}
+    event_pattern = predicted.get("event_pattern") or (match_result or {}).get("event_pattern")
+    if not isinstance(event_pattern, dict):
+        event_pattern = {}
     event_pattern_spans = event_pattern.get("spans") or []
     for span in event_pattern_spans[:5]:
         if not isinstance(span, (list, tuple)) or len(span) != 2:

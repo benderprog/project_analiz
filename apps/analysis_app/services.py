@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import uuid
 from collections import defaultdict
@@ -10,6 +11,8 @@ from functools import lru_cache
 from uuid import UUID
 
 from django.conf import settings
+from django.db.models.signals import post_delete, post_save
+from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
@@ -54,6 +57,14 @@ _DOB_YEAR_IN_PARENS_RE = re.compile(
     r"\(\s*(\d{4})\s*(?:г\s*\.?\s*р\.?)?\s*\)",
     re.IGNORECASE,
 )
+
+_EVENT_PATTERN_STOPWORDS = {
+    "что", "этот", "быть", "при", "или", "для", "как", "также", "было", "были", "когда",
+    "года", "год", "так", "того", "под", "над", "между", "без", "лишь", "после", "перед",
+    "если", "весь", "всех", "того", "про", "это", "эти", "этом", "текст", "сводка", "данные",
+    "был", "она", "они", "его", "ему", "нее", "них", "the", "this", "that", "with", "from",
+}
+_EVENT_PATTERN_TOKEN_RE = re.compile(r"[а-яёa-z0-9]+", re.IGNORECASE)
 
 
 
@@ -883,6 +894,172 @@ def _collect_pattern_spans(
     return spans
 
 
+def _cosine_similarity(vec_a, vec_b) -> float:
+    numerator = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for a, b in zip(vec_a, vec_b):
+        numerator += float(a) * float(b)
+        norm_a += float(a) * float(a)
+        norm_b += float(b) * float(b)
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return numerator / (math.sqrt(norm_a) * math.sqrt(norm_b))
+
+
+def _extract_key_tokens(value: str, *, min_len: int = 4) -> list[str]:
+    if not value:
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in _EVENT_PATTERN_TOKEN_RE.findall(value.lower().replace("ё", "е")):
+        if len(token) < min_len or token in _EVENT_PATTERN_STOPWORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        result.append(token)
+    return result
+
+
+def _has_token_overlap(pattern: str, text: str) -> bool:
+    pattern_tokens = set(_extract_key_tokens(pattern))
+    if not pattern_tokens:
+        return False
+    text_tokens = set(_extract_key_tokens(text))
+    return bool(pattern_tokens & text_tokens)
+
+
+def _is_edit_distance_le_one(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) < len(right):
+        left, right = right, left
+
+    i = j = edits = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) == len(right):
+            i += 1
+            j += 1
+        else:
+            i += 1
+    if i < len(left) or j < len(right):
+        edits += 1
+    return edits <= 1
+
+
+def _collect_semantic_pattern_spans(text: str, pattern: str, max_matches: int = 5) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    if not text or not pattern:
+        return spans
+
+    for token in _extract_key_tokens(pattern, min_len=3):
+        direct_match = re.search(re.escape(token), text, re.IGNORECASE)
+        if direct_match:
+            span = (direct_match.start(), direct_match.end())
+            if span not in spans:
+                spans.append(span)
+            if len(spans) >= max_matches:
+                break
+            continue
+
+        if len(token) < 7:
+            continue
+
+        for match in _EVENT_PATTERN_TOKEN_RE.finditer(text):
+            candidate = match.group(0).lower().replace("ё", "е")
+            if len(candidate) < 7:
+                continue
+            if _is_edit_distance_le_one(token, candidate):
+                span = (match.start(), match.end())
+                if span not in spans:
+                    spans.append(span)
+                break
+        if len(spans) >= max_matches:
+            break
+
+    return spans
+
+
+@lru_cache(maxsize=1)
+def _get_event_pattern_embedding_cache() -> tuple[dict, ...]:
+    rows = list(EventTypePattern.objects.select_related("event_type"))
+    active_rows = [row for row in rows if (row.pattern or "").strip()]
+    if not active_rows or settings.SKIP_SEMANTIC_MODEL:
+        return ()
+
+    try:
+        model = get_sentence_model()
+    except Exception as exc:  # pragma: no cover - defensive path for unavailable model
+        logger.info("Semantic model unavailable, skipping event semantic match: %s", exc)
+        return ()
+
+    pattern_texts = [row.pattern.strip() for row in active_rows]
+    embeddings = model.encode(pattern_texts)
+    cached: list[dict] = []
+    for row, embedding, pattern_text in zip(active_rows, embeddings, pattern_texts):
+        cached.append(
+            {
+                "pattern_id": str(row.event_type_pattern_id),
+                "pattern": pattern_text,
+                "event_type_id": str(row.event_type.event_type_id),
+                "event_type": row.event_type.event_type,
+                "article_of_law": row.article_of_law,
+                "embedding": embedding,
+                "row": row,
+            }
+        )
+    return tuple(cached)
+
+
+@receiver(post_save, sender=EventTypePattern)
+@receiver(post_delete, sender=EventTypePattern)
+def _invalidate_event_pattern_embedding_cache(**kwargs) -> None:
+    _get_event_pattern_embedding_cache.cache_clear()
+
+
+def _find_semantic_event_pattern(text: str):
+    cached_patterns = _get_event_pattern_embedding_cache()
+    if not cached_patterns:
+        return None, 0.0, []
+
+    try:
+        model = get_sentence_model()
+    except Exception as exc:  # pragma: no cover - defensive path for unavailable model
+        logger.info("Semantic model unavailable, skipping event semantic match: %s", exc)
+        return None, 0.0, []
+
+    text_embedding = model.encode([text])[0]
+    best_pattern = None
+    best_score = 0.0
+    threshold = float(getattr(settings, "EVENT_PATTERN_SEMANTIC_THRESHOLD", 0.20))
+
+    for item in cached_patterns:
+        score = _cosine_similarity(text_embedding, item["embedding"])
+        if score > best_score:
+            best_score = score
+            best_pattern = item
+
+    if not best_pattern:
+        return None, best_score, []
+
+    overlap = _has_token_overlap(best_pattern["pattern"], text)
+    if best_score < threshold or (not overlap and best_score < threshold + 0.10):
+        return None, best_score, []
+
+    spans = _collect_semantic_pattern_spans(text, best_pattern["pattern"])
+    return best_pattern, best_score, spans
+
+
 def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None]:
     lowered = text.lower()
     best_match = None
@@ -911,23 +1088,36 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None
                 best_match = row
                 best_length = match_length
 
-    if not best_match:
+    if best_match:
+        best_pattern = best_match.pattern.strip()
+        pattern_spans = _collect_pattern_spans(
+            text,
+            best_pattern,
+            is_regex=_looks_like_regex(best_pattern),
+        )
+        event_pattern = {
+            "pattern_id": str(best_match.event_type_pattern_id),
+            "pattern": best_pattern,
+            "score": 1.0,
+            "method": "exact",
+            "spans": pattern_spans,
+            "matched_texts": [text[start:end] for start, end in pattern_spans],
+        }
+        return best_match.event_type.event_type, best_match.article_of_law, event_pattern
+
+    semantic_match, semantic_score, semantic_spans = _find_semantic_event_pattern(text)
+    if not semantic_match:
         return None, None, None
 
-    best_pattern = best_match.pattern.strip()
-    pattern_spans = _collect_pattern_spans(
-        text,
-        best_pattern,
-        is_regex=_looks_like_regex(best_pattern),
-    )
     event_pattern = {
-        "pattern_id": str(best_match.event_type_pattern_id),
-        "pattern": best_pattern,
-        "spans": pattern_spans,
-        "matched_texts": [text[start:end] for start, end in pattern_spans],
+        "pattern_id": semantic_match["pattern_id"],
+        "pattern": semantic_match["pattern"],
+        "score": round(float(semantic_score), 6),
+        "method": "semantic",
+        "spans": semantic_spans,
+        "matched_texts": [text[start:end] for start, end in semantic_spans],
     }
-
-    return best_match.event_type.event_type, best_match.article_of_law, event_pattern
+    return semantic_match["event_type"], semantic_match["article_of_law"], event_pattern
 
 
 def _select_event_by_subdivision_time(
