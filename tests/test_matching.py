@@ -1160,3 +1160,114 @@ class EventPatternClassificationTests(TestCase):
             predicted["event_pattern"]["matched_texts"],
             ["составлен протокол", "составлен протокол"],
         )
+
+    def test_semantic_fallback_matches_pattern_with_typo_and_spans(self):
+        event_type = EventType.objects.create(event_type="Финансирование ВСУ")
+        EventTypePattern.objects.create(
+            event_type=event_type,
+            pattern="признаки финансирования ВСУ",
+            article_of_law="20.3.3",
+        )
+        text = "В сообщении установлены признаки финансрования ВСУ через третьих лиц."
+
+        class StubSemanticModel:
+            def encode(self, texts):
+                vectors = []
+                for item in texts:
+                    lowered = item.lower()
+                    vectors.append([
+                        1.0 if "признаки" in lowered else 0.0,
+                        1.0 if ("финансирован" in lowered or "финансрован" in lowered) else 0.0,
+                        1.0 if "всу" in lowered else 0.0,
+                    ])
+                return vectors
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_sentence_model", return_value=StubSemanticModel()), \
+             patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})), \
+             self.settings(SKIP_SEMANTIC_MODEL=False):
+            from apps.analysis_app import services as services_module
+            services_module._get_event_pattern_embedding_cache.cache_clear()
+            result = match_event(attributes, text)
+
+        predicted = result["predicted"]
+        self.assertEqual(predicted["event_type"], "Финансирование ВСУ")
+        self.assertEqual(predicted["article_of_law"], "20.3.3")
+        self.assertEqual(predicted["event_pattern"]["method"], "semantic")
+        highlighted = [text[start:end].lower() for start, end in predicted["event_pattern"]["spans"]]
+        self.assertTrue(any("признаки" in piece for piece in highlighted))
+        self.assertTrue(any("всу" in piece for piece in highlighted))
+
+    def test_semantic_fallback_does_not_match_random_text_below_threshold(self):
+        event_type = EventType.objects.create(event_type="Контрабанда")
+        EventTypePattern.objects.create(
+            event_type=event_type,
+            pattern="незаконное перемещение товаров через границу",
+            article_of_law="201",
+        )
+
+        class StubSemanticModel:
+            def encode(self, texts):
+                return [[0.0, 0.0, 0.0] for _ in texts]
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_sentence_model", return_value=StubSemanticModel()), \
+             patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})), \
+             self.settings(EVENT_PATTERN_SEMANTIC_THRESHOLD=0.2, SKIP_SEMANTIC_MODEL=False):
+            from apps.analysis_app import services as services_module
+            services_module._get_event_pattern_embedding_cache.cache_clear()
+            result = match_event(attributes, "абсолютно случайный текст без тематических совпадений")
+
+        self.assertIsNone(result["predicted"]["event_pattern"])
+        self.assertIsNone(result["predicted"]["event_type"])
+
+    def test_exact_match_has_priority_over_semantic_fallback(self):
+        event_type_exact = EventType.objects.create(event_type="Точный тип")
+        event_type_semantic = EventType.objects.create(event_type="Семантический тип")
+        EventTypePattern.objects.create(
+            event_type=event_type_exact,
+            pattern="составлен протокол",
+            article_of_law="12.1",
+        )
+        EventTypePattern.objects.create(
+            event_type=event_type_semantic,
+            pattern="совершенно другой шаблон",
+            article_of_law="99.9",
+        )
+
+        class StubSemanticModel:
+            def encode(self, texts):
+                return [[1.0, 1.0, 1.0] for _ in texts]
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_sentence_model", return_value=StubSemanticModel()), \
+             patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})), \
+             self.settings(SKIP_SEMANTIC_MODEL=False):
+            from apps.analysis_app import services as services_module
+            services_module._get_event_pattern_embedding_cache.cache_clear()
+            result = match_event(attributes, "По делу составлен протокол в отношении нарушителя.")
+
+        self.assertEqual(result["predicted"]["event_type"], "Точный тип")
+        self.assertEqual(result["predicted"]["article_of_law"], "12.1")
+        self.assertEqual(result["predicted"]["event_pattern"]["method"], "exact")
