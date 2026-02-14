@@ -303,6 +303,20 @@ class SubdivisionMatcherTests(TestCase):
         self.assertIn(str(second.portal_subdivision_id), candidate_ids)
         self.assertGreaterEqual(len(candidates), 2)
 
+
+    def test_build_comments_uses_separate_type_and_article_flags(self):
+        comments = analysis_views._build_comments(
+            {
+                "matched": True,
+                "event_type_ok": True,
+                "article_ok": False,
+                "diffs": {"article_of_law": {"expected": "18.1", "actual": "18.2"}},
+            }
+        )
+
+        self.assertFalse(any("Тип события отличается" in comment for comment in comments))
+        self.assertTrue(any("Статья закона отличается" in comment for comment in comments))
+
     def test_build_comments_includes_locality_mismatch(self):
         comments = analysis_views._build_comments(
             {
