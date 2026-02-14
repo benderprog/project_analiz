@@ -1113,6 +1113,21 @@ class HighlightedHtmlOffenderStatusTests(TestCase):
         self.assertEqual(html.count("hl-eventpattern"), 2)
         self.assertIn('<span class="hl hl-green hl-eventpattern">Составлен протокол</span>', html)
         self.assertIn('<span class="hl hl-yellow">Иванов Иван Иванович</span>', html)
+    def test_build_highlighted_html_handles_none_predicted(self):
+        html = _build_highlighted_html("текст", {}, {"predicted": None})
+
+        self.assertIsInstance(html, str)
+
+    def test_build_highlighted_html_handles_none_event_pattern(self):
+        html = _build_highlighted_html("текст", {}, {"predicted": {"event_pattern": None}})
+
+        self.assertIsInstance(html, str)
+
+    def test_build_highlighted_html_handles_none_event_pattern_spans(self):
+        html = _build_highlighted_html("текст", {}, {"predicted": {"event_pattern": {"spans": None}}})
+
+        self.assertIsInstance(html, str)
+
 
 
 class EventPatternClassificationTests(TestCase):
