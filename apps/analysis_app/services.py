@@ -325,6 +325,18 @@ def _match_end_index(match) -> int | None:
     return None
 
 
+def normalize_article(value: object) -> str:
+    if not value:
+        return ""
+    normalized = str(value).strip().lower()
+    if normalized == "null":
+        return ""
+    normalized = normalized.replace("часть", "ч")
+    normalized = re.sub(r"ч\.?", "ч", normalized)
+    normalized = re.sub(r"\s+", "", normalized)
+    return normalized
+
+
 def _match_start_index(match) -> int | None:
     span_attr = getattr(match, "span", None)
     if span_attr is not None:
@@ -1747,6 +1759,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "time_mismatch": False,
             "subdivision_mismatch": False,
             "event_type_ok": False,
+            "article_ok": False,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -1809,8 +1822,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             type_ok = bool(predicted_type_name) and predicted_type_name == portal_type_name
     else:
         type_ok = False
-    article_ok = _normalized_text(predicted_article) == _normalized_text(best_event.event.article_of_law)
-    event_type_ok = bool(type_ok and article_ok)
+    article_ok = normalize_article(predicted_article) == normalize_article(best_event.event.article_of_law)
+    event_type_ok = bool(type_ok)
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -1819,7 +1832,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
     best_flags = {
         **best_flags,
-        "type_match": type_ok,
+        "type_match": event_type_ok,
         "article_match": article_ok,
         "predicted_type": predicted_type,
         "predicted_article": predicted_article,
@@ -1921,6 +1934,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "time_mismatch": time_mismatch,
         "subdivision_mismatch": subdivision_mismatch,
         "event_type_ok": event_type_ok,
+        "article_ok": article_ok,
         "diffs": diffs,
         "debug": debug_meta,
     }

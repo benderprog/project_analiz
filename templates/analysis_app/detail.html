@@ -198,7 +198,7 @@
       </div>
 
       <div class="detail-block">
-        <h4>Тип события<span class="badge badge-{% if selected_event.status.event_type == "green" %}green{% else %}red{% endif %}" data-badge="event-type">{% if selected_event.status.event_type == "green" %}✓{% else %}✕{% endif %}</span></h4>
+        <h4>Тип события<span class="badge badge-{% if selected_event.status.event_type == "green" %}green{% else %}red{% endif %}" data-badge="event-type" title="Тип события">{% if selected_event.status.event_type == "green" %}✓{% else %}✕{% endif %}</span><span class="badge badge-{% if selected_event.status.article == "green" %}green{% else %}red{% endif %}" data-badge="article" title="Статья">{% if selected_event.status.article == "green" %}✓{% else %}✕{% endif %}</span></h4>
         <p id="predicted-type">
           Определено:
           {{ selected_event.predicted.event_type|default:"не удалось" }}
@@ -259,6 +259,7 @@
         subdivision: document.querySelector('[data-badge="subdivision"]'),
         offenders: document.querySelector('[data-badge="offenders"]'),
         eventType: document.querySelector('[data-badge="event-type"]'),
+        article: document.querySelector('[data-badge="article"]'),
       },
     };
 
@@ -348,6 +349,11 @@
         const eventTypeStatus = event.status.event_type === "green" ? "green" : "red";
         dom.badges.eventType.className = `badge badge-${eventTypeStatus}`;
         dom.badges.eventType.textContent = eventTypeStatus === "green" ? "✓" : "✕";
+      }
+      if (dom.badges.article) {
+        const articleStatus = event.status.article === "green" ? "green" : "red";
+        dom.badges.article.className = `badge badge-${articleStatus}`;
+        dom.badges.article.textContent = articleStatus === "green" ? "✓" : "✕";
       }
 
       dom.predictedType.textContent = `Определено: ${

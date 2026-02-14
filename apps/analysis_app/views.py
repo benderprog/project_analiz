@@ -374,9 +374,9 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:
         comments.append("Нарушители отличаются от данных БД.")
-    if "event_type" in diffs:
+    if not match_result.get("event_type_ok", False):
         comments.append("Тип события отличается от классификации.")
-    if "article_of_law" in diffs:
+    if not match_result.get("article_ok", False):
         comments.append("Статья закона отличается от классификации.")
     if match_result.get("time_mismatch"):
         date_diff = (diffs.get("date_time") or {})
@@ -491,6 +491,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "subdivision": _status_for_subdivision(match_result),
             "offenders": _status_for_offenders(match_result),
             "event_type": "green" if match_result.get("event_type_ok") else "red",
+            "article": "green" if match_result.get("article_ok") else "red",
         },
         "comments": _build_comments(match_result),
     }
