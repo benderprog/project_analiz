@@ -65,6 +65,15 @@ _EVENT_PATTERN_STOPWORDS = {
     "был", "она", "они", "его", "ему", "нее", "них", "the", "this", "that", "with", "from",
 }
 _EVENT_PATTERN_TOKEN_RE = re.compile(r"[а-яёa-z0-9]+", re.IGNORECASE)
+_EVENT_PATTERN_ACRONYM_RE = re.compile(r"\b[A-ZА-ЯЁ]{2,6}\b")
+_EVENT_PATTERN_LEGAL_GENERIC_TOKENS = {
+    "право", "правонарушение", "правонарушения", "признаки", "признак", "статья",
+    "закона", "кодекса", "материал", "материалы", "дело", "состав", "административн",
+    "уголовн", "российск", "федерации", "нарушение", "лицо", "факт", "установлено",
+}
+_EVENT_PATTERN_WINDOW_MIN = 4
+_EVENT_PATTERN_WINDOW_MAX = 10
+_EVENT_PATTERN_MAX_WINDOWS = 90
 
 
 
@@ -957,37 +966,96 @@ def _is_edit_distance_le_one(left: str, right: str) -> bool:
     return edits <= 1
 
 
-def _collect_semantic_pattern_spans(text: str, pattern: str, max_matches: int = 5) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    if not text or not pattern:
-        return spans
+def _normalize_text_with_mapping(text: str) -> tuple[str, list[int]]:
+    if not text:
+        return "", []
+    chars: list[str] = []
+    mapping: list[int] = []
+    for idx, char in enumerate(text):
+        lowered = char.lower().replace("ё", "е")
+        chars.append(lowered)
+        mapping.append(idx)
+    return "".join(chars), mapping
 
-    for token in _extract_key_tokens(pattern, min_len=3):
-        direct_match = re.search(re.escape(token), text, re.IGNORECASE)
-        if direct_match:
-            span = (direct_match.start(), direct_match.end())
-            if span not in spans:
-                spans.append(span)
-            if len(spans) >= max_matches:
-                break
-            continue
 
-        if len(token) < 7:
-            continue
+def _build_event_pattern_windows(normalized_text: str) -> list[dict]:
+    matches = list(_EVENT_PATTERN_TOKEN_RE.finditer(normalized_text))
+    if not matches:
+        return []
 
-        for match in _EVENT_PATTERN_TOKEN_RE.finditer(text):
-            candidate = match.group(0).lower().replace("ё", "е")
-            if len(candidate) < 7:
-                continue
-            if _is_edit_distance_le_one(token, candidate):
-                span = (match.start(), match.end())
-                if span not in spans:
-                    spans.append(span)
-                break
-        if len(spans) >= max_matches:
+    windows: list[dict] = []
+    for size in range(_EVENT_PATTERN_WINDOW_MIN, _EVENT_PATTERN_WINDOW_MAX + 1):
+        if size > len(matches):
             break
+        for start_idx in range(0, len(matches) - size + 1):
+            end_idx = start_idx + size - 1
+            start = matches[start_idx].start()
+            end = matches[end_idx].end()
+            chunk = normalized_text[start:end].strip()
+            if not chunk:
+                continue
+            windows.append({
+                "text": chunk,
+                "span": (start, end),
+                "tokens": [m.group(0) for m in matches[start_idx:end_idx + 1]],
+            })
+            if len(windows) >= _EVENT_PATTERN_MAX_WINDOWS:
+                return windows
+    return windows
 
-    return spans
+
+def _extract_pattern_acronyms(pattern: str) -> set[str]:
+    return {
+        token.lower().replace("ё", "е")
+        for token in _EVENT_PATTERN_ACRONYM_RE.findall(pattern or "")
+    }
+
+
+def _extract_rare_tokens(value: str) -> list[str]:
+    rare_tokens: list[str] = []
+    seen: set[str] = set()
+    for token in _EVENT_PATTERN_TOKEN_RE.findall((value or "").lower().replace("ё", "е")):
+        if len(token) < 5:
+            continue
+        if token in _EVENT_PATTERN_STOPWORDS:
+            continue
+        if token in _EVENT_PATTERN_LEGAL_GENERIC_TOKENS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        rare_tokens.append(token)
+    return rare_tokens
+
+
+def _window_is_generic(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    generic_count = 0
+    for token in tokens:
+        token_norm = token.lower().replace("ё", "е")
+        if token_norm in _EVENT_PATTERN_STOPWORDS:
+            generic_count += 1
+            continue
+        if token_norm in _EVENT_PATTERN_LEGAL_GENERIC_TOKENS:
+            generic_count += 1
+            continue
+        if any(token_norm.startswith(prefix) for prefix in _EVENT_PATTERN_LEGAL_GENERIC_TOKENS if prefix.endswith("н")):
+            generic_count += 1
+    return (generic_count / len(tokens)) >= 0.7
+
+
+def _event_span_to_original(span: tuple[int, int], mapping: list[int]) -> list[int] | None:
+    if not mapping:
+        return None
+    start, end = span
+    if start < 0 or end <= start or end > len(mapping):
+        return None
+    start_idx = mapping[start]
+    end_idx = mapping[end - 1] + 1
+    if end_idx <= start_idx:
+        return None
+    return [int(start_idx), int(end_idx)]
 
 
 @lru_cache(maxsize=1)
@@ -1007,6 +1075,7 @@ def _get_event_pattern_embedding_cache() -> tuple[dict, ...]:
     embeddings = model.encode(pattern_texts)
     cached: list[dict] = []
     for row, embedding, pattern_text in zip(active_rows, embeddings, pattern_texts):
+        normalized_pattern = pattern_text.lower().replace("ё", "е")
         cached.append(
             {
                 "pattern_id": str(row.event_type_pattern_id),
@@ -1015,7 +1084,9 @@ def _get_event_pattern_embedding_cache() -> tuple[dict, ...]:
                 "event_type": row.event_type.event_type,
                 "article_of_law": row.article_of_law,
                 "embedding": embedding,
-                "row": row,
+                "normalized_pattern": normalized_pattern,
+                "acronyms": _extract_pattern_acronyms(pattern_text),
+                "rare_tokens": _extract_rare_tokens(pattern_text),
             }
         )
     return tuple(cached)
@@ -1030,34 +1101,67 @@ def _invalidate_event_pattern_embedding_cache(**kwargs) -> None:
 def _find_semantic_event_pattern(text: str):
     cached_patterns = _get_event_pattern_embedding_cache()
     if not cached_patterns:
-        return None, 0.0, []
+        return None
 
     try:
         model = get_sentence_model()
     except Exception as exc:  # pragma: no cover - defensive path for unavailable model
         logger.info("Semantic model unavailable, skipping event semantic match: %s", exc)
-        return None, 0.0, []
+        return None
 
-    text_embedding = model.encode([text])[0]
-    best_pattern = None
-    best_score = 0.0
+    normalized_text, mapping = _normalize_text_with_mapping(text)
+    windows = _build_event_pattern_windows(normalized_text)
+    if not windows:
+        return None
+
+    window_vectors = model.encode([item["text"] for item in windows])
     threshold = float(getattr(settings, "EVENT_PATTERN_SEMANTIC_THRESHOLD", 0.20))
 
-    for item in cached_patterns:
-        score = _cosine_similarity(text_embedding, item["embedding"])
-        if score > best_score:
-            best_score = score
-            best_pattern = item
+    best_match: dict | None = None
+    for pattern in cached_patterns:
+        best_score = -1.0
+        best_window_idx = -1
+        for idx, window_vector in enumerate(window_vectors):
+            score = _cosine_similarity(window_vector, pattern["embedding"])
+            if score > best_score:
+                best_score = score
+                best_window_idx = idx
+        if best_window_idx < 0:
+            continue
 
-    if not best_pattern:
-        return None, best_score, []
+        best_window = windows[best_window_idx]
+        final_score = best_score
 
-    overlap = _has_token_overlap(best_pattern["pattern"], text)
-    if best_score < threshold or (not overlap and best_score < threshold + 0.10):
-        return None, best_score, []
+        acronym_boost = 0.0
+        for acronym in pattern.get("acronyms") or set():
+            if re.search(rf"\b{re.escape(acronym)}\b", normalized_text, re.IGNORECASE):
+                acronym_boost = 0.35
+                break
 
-    spans = _collect_semantic_pattern_spans(text, best_pattern["pattern"])
-    return best_pattern, best_score, spans
+        rare_token_boost = 0.0
+        for token in pattern.get("rare_tokens") or []:
+            if token in normalized_text:
+                rare_token_boost = 0.15
+                break
+
+        generic_penalty = -0.15 if _window_is_generic(best_window.get("tokens") or []) else 0.0
+        final_score = best_score + acronym_boost + rare_token_boost + generic_penalty
+
+        if final_score < threshold:
+            continue
+
+        candidate = {
+            **pattern,
+            "score": round(float(final_score), 6),
+            "raw_score": round(float(best_score), 6),
+            "span": _event_span_to_original(best_window["span"], mapping),
+            "evidence_text": text[best_window["span"][0]:best_window["span"][1]],
+            "method": "semantic_window",
+        }
+        if best_match is None or candidate["score"] > best_match["score"]:
+            best_match = candidate
+
+    return best_match
 
 
 def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None]:
@@ -1094,28 +1198,35 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None
             text,
             best_pattern,
             is_regex=_looks_like_regex(best_pattern),
+            max_matches=1,
         )
+        span = list(pattern_spans[0]) if pattern_spans else None
+        evidence_text = text[span[0]:span[1]] if span else None
         event_pattern = {
+            "event_type_id": str(best_match.event_type.event_type_id),
+            "event_type_label": best_match.event_type.event_type,
             "pattern_id": str(best_match.event_type_pattern_id),
-            "pattern": best_pattern,
+            "pattern_text": best_pattern,
             "score": 1.0,
             "method": "exact",
-            "spans": pattern_spans,
-            "matched_texts": [text[start:end] for start, end in pattern_spans],
+            "span": span,
+            "evidence_text": evidence_text,
         }
         return best_match.event_type.event_type, best_match.article_of_law, event_pattern
 
-    semantic_match, semantic_score, semantic_spans = _find_semantic_event_pattern(text)
+    semantic_match = _find_semantic_event_pattern(text)
     if not semantic_match:
         return None, None, None
 
     event_pattern = {
+        "event_type_id": semantic_match["event_type_id"],
+        "event_type_label": semantic_match["event_type"],
         "pattern_id": semantic_match["pattern_id"],
-        "pattern": semantic_match["pattern"],
-        "score": round(float(semantic_score), 6),
-        "method": "semantic",
-        "spans": semantic_spans,
-        "matched_texts": [text[start:end] for start, end in semantic_spans],
+        "pattern_text": semantic_match["pattern"],
+        "score": semantic_match["score"],
+        "method": semantic_match["method"],
+        "span": semantic_match["span"],
+        "evidence_text": semantic_match["evidence_text"],
     }
     return semantic_match["event_type"], semantic_match["article_of_law"], event_pattern
 
@@ -1630,6 +1741,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "event_type": predicted_type,
                 "article_of_law": predicted_article,
                 "event_pattern": predicted_event_pattern,
+                "event_type_match": predicted_event_pattern,
             },
             "match_method": None,
             "time_mismatch": False,
@@ -1762,6 +1874,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "event_type": best_flags.get("predicted_type"),
             "article_of_law": best_flags.get("predicted_article"),
             "event_pattern": predicted_event_pattern,
+            "event_type_match": predicted_event_pattern,
         },
         "offender_matches": offender_matches,
         "match_method": match_method,

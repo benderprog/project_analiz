@@ -291,21 +291,18 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
     predicted = (match_result or {}).get("predicted")
     if not isinstance(predicted, dict):
         predicted = {}
-    event_pattern = predicted.get("event_pattern") or (match_result or {}).get("event_pattern")
-    if not isinstance(event_pattern, dict):
-        event_pattern = {}
-    event_pattern_spans = event_pattern.get("spans") or []
-    for span in event_pattern_spans[:5]:
-        if not isinstance(span, (list, tuple)) or len(span) != 2:
-            continue
+    event_match = predicted.get("event_type_match") or predicted.get("event_pattern")
+    if not isinstance(event_match, dict):
+        event_match = {}
+    span = event_match.get("span")
+    if isinstance(span, (list, tuple)) and len(span) == 2:
         event_span = (int(span[0]), int(span[1]))
         overlaps_strong = any(
             min(event_span[1], strong_span[1]) - max(event_span[0], strong_span[0]) > 0
             for strong_span in strong_spans
         )
-        if overlaps_strong:
-            continue
-        _add_span(event_span[0], event_span[1], "hl-green hl-eventpattern", is_strong=False)
+        if not overlaps_strong:
+            _add_span(event_span[0], event_span[1], "hl-green hl-eventpattern", is_strong=False)
 
     return highlight_text(text, spans)
 
