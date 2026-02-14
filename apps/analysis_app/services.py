@@ -351,6 +351,13 @@ def _normalize_portal_article(value: object) -> str | None:
     return normalized
 
 
+def _normalize_optional_compare_value(value: object) -> str | None:
+    normalized = normalize_text(value)
+    if not normalized or normalized in {"null", "none", "-", "—"}:
+        return None
+    return normalized
+
+
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
@@ -1827,19 +1834,23 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             or ""
         ).strip()
 
-    predicted_type_name = _event_type_name(predicted_type)
+    predicted_type_name = _event_type_name(
+        (predicted_event_pattern or {}).get("event_type_label") or predicted_type
+    )
     portal_type_name = _event_type_name(best_event.event.event_type)
-    predicted_type_normalized = normalize_text(predicted_type_name)
-    portal_type_normalized = normalize_text(portal_type_name)
-    if not predicted_type_normalized and not portal_type_normalized:
+    predicted_type_normalized = _normalize_optional_compare_value(predicted_type_name)
+    portal_type_normalized = _normalize_optional_compare_value(portal_type_name)
+    if predicted_type_normalized is None or portal_type_normalized is None:
         event_type_ok = None
     else:
         event_type_ok = predicted_type_normalized == portal_type_normalized
 
-    predicted_article_normalized = normalize_article(predicted_article) or None
+    predicted_article_normalized = _normalize_portal_article(predicted_article)
     portal_article_normalized = _normalize_portal_article(best_event.event.article_of_law)
-    if predicted_article_normalized is None or portal_article_normalized is None:
+    if predicted_article_normalized is None and portal_article_normalized is None:
         article_ok = None
+    elif predicted_article_normalized is None or portal_article_normalized is None:
+        article_ok = False
     else:
         article_ok = predicted_article_normalized == portal_article_normalized
     if not best_flags:
@@ -1850,20 +1861,20 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
     best_flags = {
         **best_flags,
-        "type_match": event_type_ok,
-        "article_match": article_ok,
+        "event_type_ok": event_type_ok,
+        "article_ok": article_ok,
         "predicted_type": predicted_type,
         "predicted_article": predicted_article,
         "offenders_score": round(offenders_score * 100, 2),
         "offenders_counts": offenders_counts,
     }
     diffs = {}
-    if best_flags.get("type_match") is False:
+    if best_flags.get("event_type_ok") is False:
         diffs["event_type"] = {
             "expected": best_flags.get("predicted_type"),
             "actual": best_event.event.event_type,
         }
-    if best_flags.get("article_match") is False:
+    if best_flags.get("article_ok") is False:
         diffs["article_of_law"] = {
             "expected": best_flags.get("predicted_article"),
             "actual": best_event.event.article_of_law,
