@@ -110,6 +110,47 @@ class MatchingTests(TestCase):
         self.assertEqual(result["offenders_counts"]["svodka_total"], 2)
         self.assertEqual(result["offenders_counts"]["portal_total"], 1)
 
+    def test_match_event_sets_event_type_ok_by_type_and_article(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="Отдел ET", parent_pu=pu
+        )
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+        )
+
+        with patch("apps.analysis_app.services._classify_event_type", return_value=("Тип", "12.1", None)):
+            result_ok = match_event(attributes, "Тестовый текст")
+        self.assertTrue(result_ok["event_type_ok"])
+
+        with patch("apps.analysis_app.services._classify_event_type", return_value=("Тип", "", None)):
+            result_bad = match_event(attributes, "Тестовый текст")
+        self.assertFalse(result_bad["event_type_ok"])
+
     def test_match_event_local_naive_time_delta(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
         subdivision = Subdivision.objects.using("portal").create(
