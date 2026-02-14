@@ -490,6 +490,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "timestamp": _status_for_timestamp(match_result),
             "subdivision": _status_for_subdivision(match_result),
             "offenders": _status_for_offenders(match_result),
+            "event_type": "green" if match_result.get("event_type_ok") else "red",
         },
         "comments": _build_comments(match_result),
     }

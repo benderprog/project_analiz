@@ -1746,6 +1746,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "match_method": None,
             "time_mismatch": False,
             "subdivision_mismatch": False,
+            "event_type_ok": False,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -1769,8 +1770,47 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         and offenders_counts.get("missing_in_portal", 0) == 0
         and offenders_counts.get("missing_in_svodka", 0) == 0
     )
-    type_ok = predicted_type and predicted_type == best_event.event.event_type
-    article_ok = predicted_article and predicted_article == best_event.event.article_of_law
+    def _normalized_text(value: object) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    def _event_type_parts(value: object) -> tuple[str, str]:
+        if value is None:
+            return "", ""
+        if isinstance(value, dict):
+            event_type_id = _normalized_text(
+                value.get("id") or value.get("event_type_id") or value.get("pk")
+            )
+            event_type_name = _normalized_text(
+                value.get("name") or value.get("event_type") or value.get("title")
+            )
+            return event_type_id, event_type_name
+        event_type_id = _normalized_text(
+            getattr(value, "id", None)
+            or getattr(value, "event_type_id", None)
+            or getattr(value, "pk", None)
+        )
+        event_type_name = _normalized_text(
+            getattr(value, "name", None)
+            or getattr(value, "event_type", None)
+            or getattr(value, "title", None)
+            or value
+        )
+        return event_type_id, event_type_name
+
+    predicted_type_id, predicted_type_name = _event_type_parts(predicted_type)
+    portal_type_id, portal_type_name = _event_type_parts(best_event.event.event_type)
+    portal_type_present = bool(portal_type_id or portal_type_name)
+    if portal_type_present:
+        if predicted_type_id and portal_type_id:
+            type_ok = predicted_type_id == portal_type_id
+        else:
+            type_ok = bool(predicted_type_name) and predicted_type_name == portal_type_name
+    else:
+        type_ok = False
+    article_ok = _normalized_text(predicted_article) == _normalized_text(best_event.event.article_of_law)
+    event_type_ok = bool(type_ok and article_ok)
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -1880,6 +1920,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "match_method": match_method,
         "time_mismatch": time_mismatch,
         "subdivision_mismatch": subdivision_mismatch,
+        "event_type_ok": event_type_ok,
         "diffs": diffs,
         "debug": debug_meta,
     }
