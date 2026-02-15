@@ -1,6 +1,9 @@
 {% extends "analysis_app/base.html" %}
 
 {% block content %}
+<style>
+  .badge + .badge { margin-left: .35rem; }
+</style>
 <section class="card">
   <h2>Результаты анализа</h2>
   <p>Run ID: {{ run.run_id }}</p>

@@ -1823,17 +1823,20 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     def _event_type_name(value: object) -> str:
         if value is None:
             return ""
+        if isinstance(value, str):
+            return value.strip()
+        fields = ("name", "event_type", "event_type_name", "label", "title", "display_name")
         if isinstance(value, dict):
-            return str(
-                value.get("name") or value.get("event_type") or value.get("title") or ""
-            ).strip()
-        return str(
-            getattr(value, "name", None)
-            or getattr(value, "event_type", None)
-            or getattr(value, "title", None)
-            or value
-            or ""
-        ).strip()
+            for field in fields:
+                field_value = value.get(field)
+                if isinstance(field_value, str) and field_value.strip():
+                    return field_value.strip()
+            return ""
+        for field in fields:
+            field_value = getattr(value, field, None)
+            if isinstance(field_value, str) and field_value.strip():
+                return field_value.strip()
+        return str(value).strip()
 
     predicted_type_name = _event_type_name(
         (predicted_event_pattern or {}).get("event_type_label") or predicted_type
@@ -1874,8 +1877,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     diffs = {}
     if best_flags.get("event_type_ok") is False:
         diffs["event_type"] = {
-            "expected": best_flags.get("predicted_type"),
-            "actual": best_event.event.event_type,
+            "expected": predicted_type_name,
+            "actual": portal_type_name,
         }
     if best_flags.get("article_ok") is False:
         diffs["article_of_law"] = {
@@ -1952,7 +1955,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "timestamp": format_dt_dmy_hm(best_event.event.date_detection),
             "subdivision_name": portal_subdivision_name,
             "offenders": portal_offenders_payload,
-            "event_type": best_event.event.event_type,
+            "event_type": portal_type_name,
             "article_of_law": best_event.event.article_of_law,
         },
         "predicted": {
