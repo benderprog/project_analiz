@@ -218,6 +218,13 @@ body {
   vertical-align: middle;
 }
 
+.event-article-label {
+  margin: 0 8px;
+  font-size: 0.95em;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
 .hl {
   padding: 0 2px;
   border-radius: 4px;

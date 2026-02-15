@@ -201,7 +201,16 @@
       </div>
 
       <div class="detail-block">
-        <h4>Тип события<span class="badge badge-{{ selected_event.status.event_type }}" data-badge="event-type" title="Тип события">{% if selected_event.status.event_type == "green" %}✓{% elif selected_event.status.event_type == "red" %}✕{% else %}—{% endif %}</span><span class="badge badge-{{ selected_event.status.article }}" data-badge="article" title="Статья">{% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}</span></h4>
+        <h4>
+          Тип события
+          <span class="badge badge-{{ selected_event.status.event_type }}" data-badge="event-type" title="Тип события">
+            {% if selected_event.status.event_type == "green" %}✓{% elif selected_event.status.event_type == "red" %}✕{% else %}—{% endif %}
+          </span>
+          <span class="event-article-label">Статья</span>
+          <span class="badge badge-{{ selected_event.status.article }}" data-badge="article" title="Статья">
+            {% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}
+          </span>
+        </h4>
         <p id="predicted-type">
           Определено:
           {{ selected_event.predicted.event_type|default:"не удалось" }}
