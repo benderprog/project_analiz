@@ -43,6 +43,7 @@ class EventTypeFlagsTest(SimpleTestCase):
             subdivision_id=str(uuid4()),
             offenders=[],
             subdivision_name="Тест",
+            article_of_law="18.1 ч.1",
         )
 
         with (
@@ -65,6 +66,7 @@ class EventTypeFlagsTest(SimpleTestCase):
         self.assertEqual(result["article_status"], "yellow")
         self.assertNotIn("event_type", result["diffs"])
         self.assertNotIn("article_of_law", result["diffs"])
+        self.assertFalse(result["article_match_classifier"])
 
     def test_event_type_object_uses_human_readable_attribute(self):
         predicted_event_type = "Кража"
@@ -107,14 +109,14 @@ class EventTypeFlagsTest(SimpleTestCase):
             result = match_event(attributes, "test")
 
         self.assertTrue(result["event_type_ok"])
-        self.assertTrue(result["article_ok"])
-        self.assertEqual(result["article_status"], "yellow")
+        self.assertIsNone(result["article_ok"])
+        self.assertEqual(result["article_status"], "neutral")
         self.assertEqual(result["portal"]["event_type"], predicted_event_type)
         self.assertNotIn("event_type", result["diffs"])
         comments = _build_comments(result)
         self.assertNotIn("Тип события отличается от классификации.", comments)
-        self.assertIn("Статья закона не совпадает с классификатором, но совпадает с БД.", comments)
-        self.assertIn("По классификатору ожидается: 18.4 ч.1.", comments)
+        self.assertNotIn("Статья закона не совпадает с классификатором, но совпадает с БД.", comments)
+        self.assertNotIn("По классификатору ожидается:", " ".join(comments))
 
 
     def test_uses_svodka_article_for_predicted_payload_when_missing_in_text(self):
@@ -170,7 +172,7 @@ class EventTypeFlagsTest(SimpleTestCase):
         self.assertEqual(result["classifier_article_of_law"], classifier_article)
         self.assertEqual(result["article_status"], "red")
 
-    def test_null_portal_article_returns_red_when_article_extracted(self):
+    def test_null_portal_article_returns_neutral_when_portal_article_missing(self):
         predicted_event_type = "Кража"
         portal_event = EventDTO(
             event_id=uuid4(),
@@ -211,11 +213,22 @@ class EventTypeFlagsTest(SimpleTestCase):
             result = match_event(attributes, "по ч. 1 ст. 18.4")
 
         self.assertTrue(result["event_type_ok"])
-        self.assertFalse(result["article_ok"])
-        self.assertEqual(result["article_status"], "red")
+        self.assertIsNone(result["article_ok"])
+        self.assertEqual(result["article_status"], "neutral")
         self.assertNotIn("event_type", result["diffs"])
-        self.assertIn("article_of_law", result["diffs"])
+        self.assertNotIn("article_of_law", result["diffs"])
 
         comments = _build_comments(result)
-        self.assertIn("Статья закона отличается от данных БД.", comments)
+        self.assertNotIn("Статья закона отличается от данных БД.", comments)
         self.assertNotIn("Тип события отличается от классификации.", comments)
+
+    def test_classifier_expectation_comment_added_on_red_when_classifier_mismatch(self):
+        comments = _build_comments({
+            "matched": True,
+            "diffs": {"article_of_law": {"expected": "18.1", "actual": "18.2"}},
+            "article_status": "red",
+            "article_match_classifier": False,
+            "classifier_article_of_law": "20.1 ч.2",
+        })
+
+        self.assertIn("По классификатору ожидается: 20.1 ч.2.", comments)
