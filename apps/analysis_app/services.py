@@ -1748,7 +1748,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
     predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
-    extracted_article = _extract_article_from_text(text)
+    svodka_article = _extract_article_from_text(text)
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
 
@@ -1852,7 +1852,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
-                "article_of_law": extracted_article,
+                "article_of_law": svodka_article,
                 "event_pattern": predicted_event_pattern,
                 "event_type_match": predicted_event_pattern,
             },
@@ -1865,7 +1865,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "article_match_db": True,
             "article_match_classifier": True,
             "classifier_article_of_law": predicted_article,
-            "svodka_article_of_law": extracted_article,
+            "svodka_article_of_law": svodka_article,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -1921,7 +1921,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         event_type_ok = predicted_type_normalized == portal_type_normalized
 
     article_meta = _calc_article_status(
-        extracted_article=extracted_article,
+        extracted_article=svodka_article,
         classifier_article=predicted_article,
         portal_article=best_event.event.article_of_law,
     )
@@ -1940,9 +1940,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "article_match_db": article_meta.get("article_match_db"),
         "article_match_classifier": article_meta.get("article_match_classifier"),
         "classifier_article_of_law": predicted_article,
-        "svodka_article_of_law": extracted_article,
+        "svodka_article_of_law": svodka_article,
         "predicted_type": predicted_type,
-        "predicted_article": extracted_article,
+        "predicted_article": svodka_article,
         "classifier_article": predicted_article,
         "offenders_score": round(offenders_score * 100, 2),
         "offenders_counts": offenders_counts,
@@ -1955,7 +1955,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
     if article_meta.get("article_status") == "red":
         diffs["article_of_law"] = {
-            "expected": extracted_article,
+            "expected": svodka_article,
             "actual": best_event.event.article_of_law,
         }
     if not best_flags.get("subdivision_ok"):
@@ -2047,7 +2047,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "article_match_db": article_meta.get("article_match_db"),
         "article_match_classifier": article_meta.get("article_match_classifier"),
         "classifier_article_of_law": predicted_article,
-        "svodka_article_of_law": extracted_article,
+        "svodka_article_of_law": svodka_article,
         "diffs": diffs,
         "debug": debug_meta,
     }
