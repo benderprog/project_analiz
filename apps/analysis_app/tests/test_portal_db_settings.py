@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
+from django.db import connections
 from django.test import RequestFactory, TestCase
 
 from apps.analysis_app.admin import PortalDbConnectionSettingsAdmin
@@ -67,6 +68,24 @@ class PortalDbAdminTests(TestCase):
         settings_obj.refresh_from_db()
         self.assertEqual(settings_obj.password_encrypted, "existing-token")
 
+
+    @patch("apps.analysis_app.admin.psycopg2.connect")
+    def test_check_connection_uses_fallback_password_when_model_password_blank(self, mocked_connect):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.host = "localhost"
+        settings_obj.port = 5432
+        settings_obj.db_name = "portal"
+        settings_obj.user = "portal"
+        settings_obj.password_encrypted = ""
+        settings_obj.save()
+
+        connections.databases["portal"]["PASSWORD"] = "runtime-pass"
+
+        self.admin._connect_to_db(settings_obj)
+
+        self.assertEqual(mocked_connect.call_args.kwargs["password"], "runtime-pass")
+        self.assertIsNotNone(mocked_connect.call_args.kwargs["password"])
+
     @patch.object(PortalDbConnectionSettingsAdmin, "_connect_to_db", side_effect=RuntimeError("boom"))
     def test_check_connection_handles_failure(self, _):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
@@ -108,3 +127,27 @@ class PortalDbRuntimeTests(TestCase):
             connections.databases["portal"].get("OPTIONS"),
             {"options": "-c default_transaction_read_only=on"},
         )
+
+    @patch("apps.analysis_app.portal_db_runtime.decrypt_password", return_value="")
+    def test_apply_portal_db_settings_keeps_current_password_when_password_empty(self, _):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.TEST
+        settings_obj.host = "test-host"
+        settings_obj.port = 5432
+        settings_obj.db_name = "test_db"
+        settings_obj.user = "test_user"
+        settings_obj.password_encrypted = ""
+        settings_obj.save()
+
+        original = dict(connections.databases["portal"])
+        try:
+            connections.databases["portal"]["PASSWORD"] = "existing-runtime-password"
+            apply_portal_db_settings()
+
+            self.assertEqual(
+                connections.databases["portal"]["PASSWORD"],
+                "existing-runtime-password",
+            )
+            self.assertIsNotNone(connections.databases["portal"]["PASSWORD"])
+        finally:
+            connections.databases["portal"] = original
