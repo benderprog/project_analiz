@@ -17,17 +17,18 @@ def resolve_portal_password(
     current_settings: dict | None = None,
 ) -> str:
     current_settings = current_settings or {}
-    fallback_password = current_settings.get("PASSWORD") or os.getenv("PORTAL_DB_PASSWORD", "")
+    env_password = os.getenv("PORTAL_DB_PASSWORD", "")
+    current_password = current_settings.get("PASSWORD")
 
     if not db_obj.password_encrypted:
-        return fallback_password
+        return env_password or current_password or ""
 
     try:
         decrypted_password = decrypt_password(db_obj.password_encrypted)
     except Exception:  # noqa: BLE001
-        return fallback_password
+        return env_password or current_password or ""
 
-    return decrypted_password or fallback_password
+    return decrypted_password or env_password or current_password or ""
 
 
 def build_django_db_settings(db_obj: PortalDbConnectionSettings, current_settings: dict) -> dict:
@@ -59,6 +60,12 @@ def apply_portal_db_settings() -> None:
 
     current = connections.databases.get("portal", {})
     desired = build_django_db_settings(db_obj, current)
+
+    if not desired.get("PASSWORD"):
+        if current.get("PASSWORD") not in (None, ""):
+            desired["PASSWORD"] = current["PASSWORD"]
+        else:
+            desired.pop("PASSWORD", None)
 
     if _same_connection_settings(current, desired):
         return
