@@ -18,8 +18,11 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.instance and self.instance.password_encrypted:
             self.fields["password"].help_text = (
-                "Пароль задан (********). Оставьте поле пустым, чтобы не менять."
+                "Пароль сохранён. Оставьте пустым, чтобы не менять."
             )
 
     def save(self, commit=True):
-        raise RuntimeError("Use PortalDbConnectionSettingsAdmin.save_model()")
+        obj = super().save(commit=False)
+        if commit:
+            obj.save()
+        return obj

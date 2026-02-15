@@ -70,6 +70,46 @@ class PortalDbAdminTests(TestCase):
         self.assertEqual(settings_obj.password_encrypted, "existing-token")
 
 
+
+    def test_admin_form_save_with_commit_false_does_not_raise(self):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.host = "localhost"
+        settings_obj.port = 5432
+        settings_obj.db_name = "portal"
+        settings_obj.user = "portal"
+        settings_obj.password_encrypted = "existing-token"
+        settings_obj.save()
+
+        form = PortalDbConnectionSettingsAdminForm(
+            data={
+                "profile": "TEST",
+                "host": "localhost",
+                "port": 5432,
+                "db_name": "portal",
+                "user": "portal",
+                "password": "",
+            },
+            instance=settings_obj,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        saved_obj = form.save(commit=False)
+
+        self.assertEqual(saved_obj.pk, settings_obj.pk)
+
+    def test_admin_form_shows_hint_when_password_exists(self):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.password_encrypted = "existing-token"
+        settings_obj.save(update_fields=["password_encrypted", "updated_at"])
+
+        form = PortalDbConnectionSettingsAdminForm(instance=settings_obj)
+
+        self.assertEqual(form.fields["password"].widget.attrs.get("placeholder"), "********")
+        self.assertEqual(
+            form.fields["password"].help_text,
+            "Пароль сохранён. Оставьте пустым, чтобы не менять.",
+        )
+
     @patch("apps.analysis_app.admin.psycopg2.connect")
     def test_check_connection_uses_fallback_password_when_model_password_blank(self, mocked_connect):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
