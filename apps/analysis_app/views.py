@@ -252,6 +252,19 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
                 f"hl-{_status_for_subdivision(match_result)}",
             )
 
+    safe_match_result = match_result or {}
+    article_status = safe_match_result.get("article_status") or _status_from_flag(safe_match_result.get("article_ok"))
+    article_css = {
+        "green": "hl-green",
+        "yellow": "hl-yellow",
+        "red": "hl-red",
+    }.get(article_status)
+    article_spans = extracted.get("article_spans") or []
+    if article_css:
+        for span in article_spans:
+            if isinstance(span, (list, tuple)) and len(span) == 2:
+                _add_span(int(span[0]), int(span[1]), article_css)
+
     offenders = extracted.get("offenders") or []
     status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
     status_to_css = {
@@ -377,16 +390,18 @@ def _build_comments(match_result: dict) -> list[str]:
     if match_result.get("event_type_ok") is False:
         comments.append("Тип события отличается от классификации.")
     article_status = match_result.get("article_status")
-    if article_status == "red":
+    article_ok = match_result.get("article_ok")
+    article_classifier_ok = match_result.get("article_classifier_ok")
+    if article_ok is False:
         comments.append("Статья закона отличается от данных БД.")
-    elif article_status == "yellow":
-        comments.append("Статья закона не совпадает с классификатором, но совпадает с БД.")
+    elif article_ok is True and article_classifier_ok is False:
+        comments.append("Статья закона отличается от классификации.")
 
     classifier_article_raw = (
         match_result.get("classifier_article_of_law")
         or (match_result.get("predicted") or {}).get("classifier_article_of_law")
     )
-    if match_result.get("article_match_classifier") is False:
+    if article_classifier_ok is False:
         classifier_article = _display_article(classifier_article_raw)
         if classifier_article:
             comments.append(f"По классификатору ожидается: {classifier_article}.")
@@ -443,12 +458,15 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         not match_result
         or "event_type_ok" not in match_result
         or "article_ok" not in match_result
+        or "article_classifier_ok" not in match_result
         or "article_status" not in match_result
+        or "article_spans" not in extracted
         or (
             match_result.get("matched") is True
             and (
                 not isinstance(match_result.get("predicted"), dict)
                 or match_result.get("predicted", {}).get("event_type") is None
+                or match_result.get("predicted", {}).get("classifier_article_of_law") is None
             )
         )
     )
@@ -458,9 +476,21 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             selected_pu_id = getattr(paragraph_run, "selected_pu_id", None)
             extracted_attrs = extract_attributes(text, selected_pu_id=selected_pu_id)
             new_match_result = match_event(extracted_attrs, text)
+            extracted = {
+                "date_time": format_local_naive(extracted_attrs.date_time),
+                "time_found": extracted_attrs.time_found,
+                "subdivision_id": extracted_attrs.subdivision_id,
+                "subdivision_name": extracted_attrs.subdivision_name,
+                "subdivision_candidates": extracted_attrs.subdivision_candidates,
+                "subdivision_span": extracted_attrs.subdivision_span,
+                "article_spans": [list(span) for span in extracted_attrs.article_spans],
+                "offenders": [offender_to_json(offender) for offender in extracted_attrs.offenders],
+                "staff": extracted_attrs.staff,
+            }
             match_result = new_match_result
+            result.extracted_attributes = extracted
             result.match_result = new_match_result
-            result.save(update_fields=["match_result"])
+            result.save(update_fields=["extracted_attributes", "match_result"])
         except Exception:  # noqa: BLE001 - page should remain renderable
             match_result = result.match_result or match_result
     preview = text[:80] + ("…" if len(text) > 80 else "")
@@ -620,6 +650,7 @@ class UploadView(View):
                         "subdivision_name": attributes.subdivision_name,
                         "subdivision_candidates": attributes.subdivision_candidates,
                         "subdivision_span": attributes.subdivision_span,
+                        "article_spans": [list(span) for span in attributes.article_spans],
                         "offenders": [
                             offender_to_json(offender) for offender in attributes.offenders
                         ],
