@@ -376,8 +376,13 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Нарушители отличаются от данных БД.")
     if match_result.get("event_type_ok") is False:
         comments.append("Тип события отличается от классификации.")
-    if match_result.get("article_ok") is False:
-        comments.append("Статья закона отличается от классификации.")
+    article_status = match_result.get("article_status")
+    if article_status == "red":
+        comments.append("Статья закона отличается от данных БД.")
+    elif article_status == "yellow":
+        comments.append("Статья закона не совпадает с классификатором, но совпадает с БД.")
+    if match_result.get("svodka_article_of_law") is None and article_status in {"red", "yellow"}:
+        comments.append("Статья закона не определена в тексте сводки.")
     if match_result.get("time_mismatch"):
         date_diff = (diffs.get("date_time") or {})
         if date_diff.get("message"):
@@ -429,6 +434,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         not match_result
         or "event_type_ok" not in match_result
         or "article_ok" not in match_result
+        or "article_status" not in match_result
         or (
             match_result.get("matched") is True
             and (
@@ -525,14 +531,14 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         },
         "predicted": {
             "event_type": predicted.get("event_type"),
-            "article_of_law": predicted.get("article_of_law"),
+            "article_of_law": _display_article(predicted.get("article_of_law")),
         },
         "status": {
             "timestamp": _status_for_timestamp(match_result),
             "subdivision": _status_for_subdivision(match_result),
             "offenders": _status_for_offenders(match_result),
             "event_type": _status_from_flag(match_result.get("event_type_ok")),
-            "article": _status_from_flag(match_result.get("article_ok")),
+            "article": (match_result.get("article_status") or _status_from_flag(match_result.get("article_ok"))),
         },
         "comments": _build_comments(match_result),
     }

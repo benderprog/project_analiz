@@ -351,6 +351,69 @@ def _normalize_portal_article(value: object) -> str | None:
     return normalized
 
 
+_ARTICLE_WITH_PART_THEN_ARTICLE_RE = re.compile(
+    r"(?:\bпо\b\s*)?\bч\.?\s*(?P<part>\d+)\s*\bст\.?\s*(?P<article>\d+(?:\.\d+)*)",
+    re.IGNORECASE,
+)
+_ARTICLE_WITH_ARTICLE_THEN_PART_RE = re.compile(
+    r"(?:\bпо\b\s*)?\bст\.?\s*(?P<article>\d+(?:\.\d+)*)\s*\bч\.?\s*(?P<part>\d+)",
+    re.IGNORECASE,
+)
+_ARTICLE_ONLY_RE = re.compile(
+    r"(?:\bпо\b\s*)?\bст\.?\s*(?P<article>\d+(?:\.\d+)*)",
+    re.IGNORECASE,
+)
+
+
+def _extract_article_from_text(text: str) -> str | None:
+    if not text:
+        return None
+
+    for regex in (_ARTICLE_WITH_PART_THEN_ARTICLE_RE, _ARTICLE_WITH_ARTICLE_THEN_PART_RE):
+        match = regex.search(text)
+        if match:
+            article = match.group("article")
+            part = match.group("part")
+            return f"{article} ч.{part}"
+
+    match = _ARTICLE_ONLY_RE.search(text)
+    if not match:
+        return None
+    return match.group("article")
+
+
+def _calc_article_status(
+    extracted_article: str | None,
+    classifier_article: str | None,
+    portal_article: object,
+) -> dict:
+    ex_norm = _normalize_portal_article(extracted_article)
+    cls_norm = _normalize_portal_article(classifier_article)
+    db_norm = _normalize_portal_article(portal_article)
+
+    if ex_norm is None and cls_norm is None and db_norm is None:
+        return {
+            "article_status": "neutral",
+            "article_match_db": True,
+            "article_match_classifier": True,
+        }
+
+    article_match_db = ex_norm == db_norm
+    article_match_classifier = ex_norm == cls_norm
+    if not article_match_db:
+        article_status = "red"
+    elif article_match_classifier:
+        article_status = "green"
+    else:
+        article_status = "yellow"
+
+    return {
+        "article_status": article_status,
+        "article_match_db": article_match_db,
+        "article_match_classifier": article_match_classifier,
+    }
+
+
 def _normalize_optional_compare_value(value: object) -> str | None:
     normalized = normalize_text(value)
     if not normalized or normalized in {"null", "none", "-", "—"}:
@@ -1685,6 +1748,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
     predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
+    extracted_article = _extract_article_from_text(text)
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
 
@@ -1788,7 +1852,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
-                "article_of_law": predicted_article,
+                "article_of_law": extracted_article,
                 "event_pattern": predicted_event_pattern,
                 "event_type_match": predicted_event_pattern,
             },
@@ -1797,6 +1861,11 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "subdivision_mismatch": False,
             "event_type_ok": None,
             "article_ok": None,
+            "article_status": "neutral",
+            "article_match_db": True,
+            "article_match_classifier": True,
+            "classifier_article_of_law": predicted_article,
+            "svodka_article_of_law": extracted_article,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -1851,14 +1920,12 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     else:
         event_type_ok = predicted_type_normalized == portal_type_normalized
 
-    predicted_article_normalized = _normalize_portal_article(predicted_article)
-    portal_article_normalized = _normalize_portal_article(best_event.event.article_of_law)
-    if predicted_article_normalized is None and portal_article_normalized is None:
-        article_ok = None
-    elif predicted_article_normalized is None or portal_article_normalized is None:
-        article_ok = False
-    else:
-        article_ok = predicted_article_normalized == portal_article_normalized
+    article_meta = _calc_article_status(
+        extracted_article=extracted_article,
+        classifier_article=predicted_article,
+        portal_article=best_event.event.article_of_law,
+    )
+    article_ok = article_meta["article_match_db"]
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -1869,8 +1936,14 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         **best_flags,
         "event_type_ok": event_type_ok,
         "article_ok": article_ok,
+        "article_status": article_meta.get("article_status"),
+        "article_match_db": article_meta.get("article_match_db"),
+        "article_match_classifier": article_meta.get("article_match_classifier"),
+        "classifier_article_of_law": predicted_article,
+        "svodka_article_of_law": extracted_article,
         "predicted_type": predicted_type,
-        "predicted_article": predicted_article,
+        "predicted_article": extracted_article,
+        "classifier_article": predicted_article,
         "offenders_score": round(offenders_score * 100, 2),
         "offenders_counts": offenders_counts,
     }
@@ -1880,9 +1953,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "expected": predicted_type_name,
             "actual": portal_type_name,
         }
-    if best_flags.get("article_ok") is False:
+    if article_meta.get("article_status") == "red":
         diffs["article_of_law"] = {
-            "expected": best_flags.get("predicted_article"),
+            "expected": extracted_article,
             "actual": best_event.event.article_of_law,
         }
     if not best_flags.get("subdivision_ok"):
@@ -1970,6 +2043,11 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_mismatch": subdivision_mismatch,
         "event_type_ok": event_type_ok,
         "article_ok": article_ok,
+        "article_status": article_meta.get("article_status"),
+        "article_match_db": article_meta.get("article_match_db"),
+        "article_match_classifier": article_meta.get("article_match_classifier"),
+        "classifier_article_of_law": predicted_article,
+        "svodka_article_of_law": extracted_article,
         "diffs": diffs,
         "debug": debug_meta,
     }

@@ -20,7 +20,7 @@ class PortalEventTypeObject:
 
 
 class EventTypeFlagsTest(SimpleTestCase):
-    def test_event_type_ok_with_article_mismatch(self):
+    def test_event_type_ok_with_classifier_article_mismatch(self):
         predicted_event_type = "Кража"
         portal_event = EventDTO(
             event_id=uuid4(),
@@ -58,12 +58,13 @@ class EventTypeFlagsTest(SimpleTestCase):
                 "missing_in_svodka": 0,
             }, {})),
         ):
-            result = match_event(attributes, "test")
+            result = match_event(attributes, "по ч. 1 ст. 18.1")
 
         self.assertTrue(result["event_type_ok"])
-        self.assertFalse(result["article_ok"])
+        self.assertTrue(result["article_ok"])
+        self.assertEqual(result["article_status"], "yellow")
         self.assertNotIn("event_type", result["diffs"])
-        self.assertIn("article_of_law", result["diffs"])
+        self.assertNotIn("article_of_law", result["diffs"])
 
     def test_event_type_object_uses_human_readable_attribute(self):
         predicted_event_type = "Кража"
@@ -106,12 +107,15 @@ class EventTypeFlagsTest(SimpleTestCase):
             result = match_event(attributes, "test")
 
         self.assertTrue(result["event_type_ok"])
+        self.assertTrue(result["article_ok"])
+        self.assertEqual(result["article_status"], "yellow")
         self.assertEqual(result["portal"]["event_type"], predicted_event_type)
         self.assertNotIn("event_type", result["diffs"])
         comments = _build_comments(result)
         self.assertNotIn("Тип события отличается от классификации.", comments)
+        self.assertIn("Статья закона не совпадает с классификатором, но совпадает с БД.", comments)
 
-    def test_null_portal_article_returns_article_ok_false(self):
+    def test_null_portal_article_returns_red_when_article_extracted(self):
         predicted_event_type = "Кража"
         portal_event = EventDTO(
             event_id=uuid4(),
@@ -149,13 +153,14 @@ class EventTypeFlagsTest(SimpleTestCase):
                 "missing_in_svodka": 0,
             }, {})),
         ):
-            result = match_event(attributes, "test")
+            result = match_event(attributes, "по ч. 1 ст. 18.4")
 
         self.assertTrue(result["event_type_ok"])
         self.assertFalse(result["article_ok"])
+        self.assertEqual(result["article_status"], "red")
         self.assertNotIn("event_type", result["diffs"])
         self.assertIn("article_of_law", result["diffs"])
 
         comments = _build_comments(result)
-        self.assertIn("Статья закона отличается от классификации.", comments)
+        self.assertIn("Статья закона отличается от данных БД.", comments)
         self.assertNotIn("Тип события отличается от классификации.", comments)
