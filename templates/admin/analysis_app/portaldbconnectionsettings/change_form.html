@@ -1,0 +1,17 @@
+{% extends "admin/change_form.html" %}
+
+{% block object-tools-items %}
+  {% if change and original %}
+    <li>
+      <a href="{% url 'admin:analysis_app_portaldbconnectionsettings_check_connection' original.pk %}">
+        Проверить подключение
+      </a>
+    </li>
+    <li>
+      <a href="{% url 'admin:analysis_app_portaldbconnectionsettings_use_test_db' original.pk %}">
+        Тестовая БД
+      </a>
+    </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}
