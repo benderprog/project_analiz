@@ -9,7 +9,7 @@ class PortalConfigTests(SimpleTestCase):
             "profiles": {
                 "dev": {
                     "database": {
-                        "name": "portal_db",
+                        "name": "portal_db_test",
                         "user": "portal",
                         "password": "",
                         "host": "localhost",

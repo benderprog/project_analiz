@@ -3,7 +3,8 @@
 ## Вариант 1: удалить базы полностью
 ```sql
 DROP DATABASE app_db;
-DROP DATABASE portal_db;
+DROP DATABASE portal_db_test;
+-- для PROD по соглашению используется имя portal_db
 ```
 Создайте их заново и примените миграции:
 ```bash

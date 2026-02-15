@@ -41,7 +41,7 @@ class PortalConfigTests(SimpleTestCase):
         os.environ.update(
             {
                 "PORTAL_PROFILE": "dev",
-                "PORTAL_DB_NAME": "portal_db",
+                "PORTAL_DB_NAME": "portal_db_test",
                 "PORTAL_DB_USER": "portal_user",
                 "PORTAL_DB_PASSWORD": "portal_pass",
                 "PORTAL_DB_HOST": "127.0.0.1",
@@ -51,7 +51,7 @@ class PortalConfigTests(SimpleTestCase):
         cfg = load_yaml(fixture_path)
         db_settings = apply_portal_database_settings(globals(), cfg)
         self.assertEqual(db_settings["HOST"], "127.0.0.1")
-        self.assertEqual(db_settings["NAME"], "portal_db")
+        self.assertEqual(db_settings["NAME"], "portal_db_test")
         self.assertEqual(db_settings["USER"], "portal_user")
         self.assertEqual(db_settings["PORT"], "5433")
 
@@ -125,7 +125,7 @@ class PortalConfigTests(SimpleTestCase):
             {
                 "PORTAL_CONFIG_PATH": str(fixture_path),
                 "PORTAL_PROFILE": "dev",
-                "PORTAL_DB_NAME": "portal_db",
+                "PORTAL_DB_NAME": "portal_db_test",
                 "PORTAL_DB_USER": "portal_user",
                 "PORTAL_DB_PASSWORD": "portal_pass",
                 "PORTAL_DB_HOST": "127.0.0.1",
@@ -138,7 +138,7 @@ class PortalConfigTests(SimpleTestCase):
         self.assertIn("Resolved config path:", output)
         self.assertIn("Active profile: dev", output)
         self.assertIn("Portal DB host: 127.0.0.1", output)
-        self.assertIn("Portal DB name: portal_db", output)
+        self.assertIn("Portal DB name: portal_db_test", output)
         self.assertIn("Portal DB user: portal_user", output)
         self.assertIn("Resolved SQL base dir:", output)
         self.assertIn("SQL missing files:", output)

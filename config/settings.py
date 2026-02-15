@@ -67,7 +67,7 @@ DATABASES = {
     },
     "portal": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("PORTAL_DB_NAME", "portal_db"),
+        "NAME": os.getenv("PORTAL_DB_NAME", "portal_db_test"),
         "USER": os.getenv("PORTAL_DB_USER", "portal"),
         "PASSWORD": os.getenv("PORTAL_DB_PASSWORD", "portal"),
         "HOST": os.getenv("PORTAL_DB_HOST", "localhost"),
