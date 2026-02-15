@@ -1,8 +1,11 @@
 from django.contrib import admin, messages
 from django.core.management import call_command
+from django.db import connections
 from django.shortcuts import redirect
 from django.urls import path, reverse
 from django.utils import timezone
+
+import os
 
 import psycopg2
 
@@ -15,9 +18,9 @@ from apps.analysis_app.models import (
 )
 from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.portal_records import PortalPURecord
-from apps.analysis_app.portal_db_runtime import apply_portal_db_settings
+from apps.analysis_app.portal_db_runtime import apply_portal_db_settings, resolve_portal_password
 from apps.analysis_app.portal_db_settings_service import get_test_portal_db_params
-from apps.analysis_app.utils.portal_db_crypto import decrypt_password, encrypt_password
+from apps.analysis_app.utils.portal_db_crypto import encrypt_password
 from apps.portaldb.gateway import get_portal_gateway
 
 
@@ -112,7 +115,10 @@ class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
         apply_portal_db_settings()
 
     def _connect_to_db(self, obj):
-        password = decrypt_password(obj.password_encrypted)
+        current_portal_settings = connections.databases.get("portal", {})
+        password = resolve_portal_password(obj, current_portal_settings)
+        if not password:
+            password = os.getenv("PORTAL_DB_PASSWORD", "")
         return psycopg2.connect(
             dbname=obj.db_name,
             user=obj.user,

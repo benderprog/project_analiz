@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from django.db import connections
 
 from apps.analysis_app.models import PortalDbConnectionSettings
@@ -10,7 +12,25 @@ def get_portal_settings_singleton() -> PortalDbConnectionSettings | None:
     return PortalDbConnectionSettings.objects.order_by("id").first()
 
 
-def build_django_db_settings(db_obj: PortalDbConnectionSettings) -> dict:
+def resolve_portal_password(
+    db_obj: PortalDbConnectionSettings,
+    current_settings: dict | None = None,
+) -> str:
+    current_settings = current_settings or {}
+    fallback_password = current_settings.get("PASSWORD") or os.getenv("PORTAL_DB_PASSWORD", "")
+
+    if not db_obj.password_encrypted:
+        return fallback_password
+
+    try:
+        decrypted_password = decrypt_password(db_obj.password_encrypted)
+    except Exception:  # noqa: BLE001
+        return fallback_password
+
+    return decrypted_password or fallback_password
+
+
+def build_django_db_settings(db_obj: PortalDbConnectionSettings, current_settings: dict) -> dict:
     options = {}
     if db_obj.profile == PortalDbConnectionSettings.Profile.PROD:
         options = {"options": "-c default_transaction_read_only=on"}
@@ -18,7 +38,7 @@ def build_django_db_settings(db_obj: PortalDbConnectionSettings) -> dict:
         "ENGINE": "django.db.backends.postgresql",
         "NAME": db_obj.db_name,
         "USER": db_obj.user,
-        "PASSWORD": decrypt_password(db_obj.password_encrypted),
+        "PASSWORD": resolve_portal_password(db_obj, current_settings),
         "HOST": db_obj.host,
         "PORT": str(db_obj.port),
         "OPTIONS": options,
@@ -26,8 +46,10 @@ def build_django_db_settings(db_obj: PortalDbConnectionSettings) -> dict:
 
 
 def _same_connection_settings(current: dict, desired: dict) -> bool:
-    keys = ("ENGINE", "NAME", "USER", "PASSWORD", "HOST", "PORT", "OPTIONS")
-    return all((current.get(key) or {}) == (desired.get(key) or {}) for key in keys)
+    keys = ("ENGINE", "NAME", "USER", "PASSWORD", "HOST", "PORT")
+    if not all(current.get(key) == desired.get(key) for key in keys):
+        return False
+    return (current.get("OPTIONS") or {}) == (desired.get("OPTIONS") or {})
 
 
 def apply_portal_db_settings() -> None:
@@ -35,8 +57,8 @@ def apply_portal_db_settings() -> None:
     if not db_obj:
         return
 
-    desired = build_django_db_settings(db_obj)
     current = connections.databases.get("portal", {})
+    desired = build_django_db_settings(db_obj, current)
 
     if _same_connection_settings(current, desired):
         return
