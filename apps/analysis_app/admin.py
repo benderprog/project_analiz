@@ -5,8 +5,6 @@ from django.shortcuts import redirect
 from django.urls import path, reverse
 from django.utils import timezone
 
-import os
-
 import psycopg2
 
 from apps.analysis_app.admin_forms import PortalDbConnectionSettingsAdminForm
@@ -117,16 +115,16 @@ class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
     def _connect_to_db(self, obj):
         current_portal_settings = connections.databases.get("portal", {})
         password = resolve_portal_password(obj, current_portal_settings)
-        if not password:
-            password = os.getenv("PORTAL_DB_PASSWORD", "")
-        return psycopg2.connect(
-            dbname=obj.db_name,
-            user=obj.user,
-            password=password,
-            host=obj.host,
-            port=obj.port,
-            connect_timeout=5,
-        )
+        connect_kwargs = {
+            "dbname": obj.db_name,
+            "user": obj.user,
+            "host": obj.host,
+            "port": obj.port,
+            "connect_timeout": 5,
+        }
+        if password not in (None, ""):
+            connect_kwargs["password"] = password
+        return psycopg2.connect(**connect_kwargs)
 
     def check_connection_view(self, request, object_id):
         obj = self.get_object(request, object_id)
@@ -156,13 +154,28 @@ class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
             self.message_user(request, "Настройка не найдена.", level=messages.ERROR)
             return redirect("admin:analysis_app_portaldbconnectionsettings_changelist")
         params = get_test_portal_db_params()
+        encrypted_password = ""
+        if params["password"]:
+            try:
+                encrypted_password = encrypt_password(params["password"])
+            except RuntimeError as exc:
+                self.message_user(
+                    request,
+                    f"Не удалось применить тестовую БД: {exc}",
+                    level=messages.ERROR,
+                )
+                return redirect(
+                    "admin:analysis_app_portaldbconnectionsettings_change",
+                    object_id,
+                )
+
         obj.profile = PortalDbConnectionSettings.Profile.TEST
         obj.host = params["host"]
         obj.port = params["port"]
         obj.db_name = params["db_name"]
         obj.user = params["user"]
-        if params["password"]:
-            obj.password_encrypted = encrypt_password(params["password"])
+        if encrypted_password:
+            obj.password_encrypted = encrypted_password
         obj.save()
         apply_portal_db_settings()
         self.message_user(request, "Применены параметры тестовой БД.", level=messages.SUCCESS)

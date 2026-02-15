@@ -1,3 +1,4 @@
+import os
 from unittest.mock import patch
 
 from django.contrib.admin.sites import AdminSite
@@ -106,6 +107,62 @@ class PortalDbAdminTests(TestCase):
         self.assertIn("boom", settings_obj.last_check_error)
         self.assertIsNotNone(settings_obj.last_check_at)
 
+    @patch("apps.analysis_app.admin.psycopg2.connect")
+    def test_check_connection_does_not_pass_none_password(self, mocked_connect):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.host = "localhost"
+        settings_obj.port = 5432
+        settings_obj.db_name = "portal"
+        settings_obj.user = "portal"
+        settings_obj.password_encrypted = ""
+        settings_obj.save()
+
+        original = dict(connections.databases["portal"])
+        try:
+            connections.databases["portal"]["PASSWORD"] = ""
+            with patch.dict(os.environ, {"PORTAL_DB_PASSWORD": ""}, clear=False):
+                self.admin._connect_to_db(settings_obj)
+        finally:
+            connections.databases["portal"] = original
+
+        self.assertNotIn("password", mocked_connect.call_args.kwargs)
+
+    def test_use_test_db_view_handles_encryption_runtime_error(self):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.PROD
+        settings_obj.host = "prod-host"
+        settings_obj.port = 15432
+        settings_obj.db_name = "prod-db"
+        settings_obj.user = "prod-user"
+        settings_obj.password_encrypted = "prod-token"
+        settings_obj.save()
+
+        request = self.factory.get("/")
+        request.user = self.user
+
+        with (
+            patch("apps.analysis_app.admin.get_test_portal_db_params") as mocked_params,
+            patch("apps.analysis_app.admin.encrypt_password", side_effect=RuntimeError("missing crypto")),
+            patch("apps.analysis_app.admin.apply_portal_db_settings") as mocked_apply,
+            patch.object(self.admin, "message_user") as mocked_message,
+        ):
+            mocked_params.return_value = {
+                "host": "test-host",
+                "port": 5432,
+                "db_name": "test-db",
+                "user": "test-user",
+                "password": "secret",
+            }
+            response = self.admin.use_test_db_view(request, str(settings_obj.pk))
+
+        settings_obj.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(settings_obj.profile, PortalDbConnectionSettings.Profile.PROD)
+        self.assertEqual(settings_obj.host, "prod-host")
+        self.assertEqual(settings_obj.password_encrypted, "prod-token")
+        mocked_apply.assert_not_called()
+        mocked_message.assert_called_once()
+
 
 class PortalDbRuntimeTests(TestCase):
     def test_apply_portal_db_settings_sets_readonly_options_for_prod(self):
@@ -149,5 +206,49 @@ class PortalDbRuntimeTests(TestCase):
                 "existing-runtime-password",
             )
             self.assertIsNotNone(connections.databases["portal"]["PASSWORD"])
+        finally:
+            connections.databases["portal"] = original
+
+    @patch("apps.analysis_app.portal_db_runtime.decrypt_password", side_effect=RuntimeError("bad-token"))
+    def test_apply_portal_db_settings_uses_env_password_when_decrypt_fails(self, _):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.TEST
+        settings_obj.host = "test-host"
+        settings_obj.port = 5432
+        settings_obj.db_name = "test_db"
+        settings_obj.user = "test_user"
+        settings_obj.password_encrypted = "bad-token"
+        settings_obj.save()
+
+        original = dict(connections.databases["portal"])
+        try:
+            connections.databases["portal"]["PASSWORD"] = "current-password"
+            with patch.dict(os.environ, {"PORTAL_DB_PASSWORD": "env-password"}, clear=False):
+                apply_portal_db_settings()
+
+            self.assertEqual(connections.databases["portal"]["PASSWORD"], "env-password")
+            self.assertNotEqual(connections.databases["portal"]["PASSWORD"], "")
+        finally:
+            connections.databases["portal"] = original
+
+    @patch("apps.analysis_app.portal_db_runtime.decrypt_password", side_effect=RuntimeError("bad-token"))
+    def test_apply_portal_db_settings_uses_current_password_when_env_missing(self, _):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.TEST
+        settings_obj.host = "test-host"
+        settings_obj.port = 5432
+        settings_obj.db_name = "test_db"
+        settings_obj.user = "test_user"
+        settings_obj.password_encrypted = "bad-token"
+        settings_obj.save()
+
+        original = dict(connections.databases["portal"])
+        try:
+            connections.databases["portal"]["PASSWORD"] = "current-password"
+            with patch.dict(os.environ, {"PORTAL_DB_PASSWORD": ""}, clear=False):
+                apply_portal_db_settings()
+
+            self.assertEqual(connections.databases["portal"]["PASSWORD"], "current-password")
+            self.assertNotEqual(connections.databases["portal"]["PASSWORD"], "")
         finally:
             connections.databases["portal"] = original
