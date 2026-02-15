@@ -424,6 +424,30 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     extracted = result.extracted_attributes or {}
     match_result = result.match_result or {}
     text = paragraph.text
+
+    needs_backfill = (
+        not match_result
+        or "event_type_ok" not in match_result
+        or "article_ok" not in match_result
+        or (
+            match_result.get("matched") is True
+            and (
+                not isinstance(match_result.get("predicted"), dict)
+                or match_result.get("predicted", {}).get("event_type") is None
+            )
+        )
+    )
+    if needs_backfill:
+        try:
+            paragraph_run = getattr(paragraph, "run", None)
+            selected_pu_id = getattr(paragraph_run, "selected_pu_id", None)
+            extracted_attrs = extract_attributes(text, selected_pu_id=selected_pu_id)
+            new_match_result = match_event(extracted_attrs, text)
+            match_result = new_match_result
+            result.match_result = new_match_result
+            result.save(update_fields=["match_result"])
+        except Exception:  # noqa: BLE001 - page should remain renderable
+            match_result = result.match_result or match_result
     preview = text[:80] + ("…" if len(text) > 80 else "")
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}

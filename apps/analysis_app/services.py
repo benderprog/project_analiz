@@ -365,6 +365,7 @@ def normalize_text(value: object) -> str:
         str(value)
         .replace("\xa0", " ")
         .replace("\u202f", " ")
+        .replace("\u2007", " ")
         .replace("\u200b", "")
         .lower()
         .replace("ё", "е")
