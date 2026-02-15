@@ -381,6 +381,9 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Статья закона отличается от данных БД.")
     elif article_status == "yellow":
         comments.append("Статья закона не совпадает с классификатором, но совпадает с БД.")
+        classifier_article = _display_article(match_result.get("classifier_article_of_law"))
+        if classifier_article:
+            comments.append(f"По классификатору ожидается: {classifier_article}.")
     if match_result.get("svodka_article_of_law") is None and article_status in {"red", "yellow"}:
         comments.append("Статья закона не определена в тексте сводки.")
     if match_result.get("time_mismatch"):

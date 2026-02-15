@@ -114,6 +114,61 @@ class EventTypeFlagsTest(SimpleTestCase):
         comments = _build_comments(result)
         self.assertNotIn("Тип события отличается от классификации.", comments)
         self.assertIn("Статья закона не совпадает с классификатором, но совпадает с БД.", comments)
+        self.assertIn("По классификатору ожидается: 18.4 ч.1.", comments)
+
+
+    def test_uses_svodka_article_for_predicted_payload_when_missing_in_text(self):
+        predicted_event_type = "Кража"
+        classifier_article = "18.4 ч.1"
+        portal_article = "18.4 ч.1"
+        portal_event = EventDTO(
+            event_id=uuid4(),
+            date_detection=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            subdivision_id=uuid4(),
+            event_type=predicted_event_type,
+            article_of_law=portal_article,
+        )
+        best_candidate = {
+            "event": HydratedEvent(event=portal_event, offenders=[]),
+            "flags_true": 2,
+            "date_ok": True,
+            "subdivision_ok": True,
+            "offenders_ok": False,
+            "delta_minutes": 0,
+        }
+        attributes = ExtractedAttributes(
+            date_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            time_found=True,
+            subdivision_id=str(uuid4()),
+            offenders=[],
+            subdivision_name="Тест",
+        )
+
+        with (
+            patch(
+                "apps.analysis_app.services._classify_event_type",
+                return_value=(predicted_event_type, classifier_article, {"event_type_label": predicted_event_type}),
+            ),
+            patch(
+                "apps.analysis_app.services.get_event_candidates",
+                return_value=([best_candidate], {"stages": [], "stage_queries": []}),
+            ),
+            patch("apps.analysis_app.services._portal_offenders", return_value=[]),
+            patch("apps.analysis_app.services.match_offenders", return_value=(1.0, {
+                "svodka_total": 0,
+                "portal_total": 0,
+                "matched": 0,
+                "dob_mismatch": 0,
+                "missing_in_portal": 0,
+                "missing_in_svodka": 0,
+            }, {})),
+        ):
+            result = match_event(attributes, "в тексте нет статьи")
+
+        self.assertIsNone(result["predicted"]["article_of_law"])
+        self.assertIsNone(result["svodka_article_of_law"])
+        self.assertEqual(result["classifier_article_of_law"], classifier_article)
+        self.assertEqual(result["article_status"], "red")
 
     def test_null_portal_article_returns_red_when_article_extracted(self):
         predicted_event_type = "Кража"
