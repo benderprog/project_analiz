@@ -213,13 +213,18 @@
         </h4>
         <p id="predicted-type">
           Определено:
-          {{ selected_event.predicted.event_type|default:"не удалось" }}
-          ({{ selected_event.predicted.article_of_law|default:"—" }})
+          <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
+          (<span data-field="pred-article">{{ selected_event.predicted.article_of_law|default:"—" }}</span>)
         </p>
         <p id="portal-type">
           В БД:
-          {{ selected_event.portal.event_type|default:"не задан" }}
-          ({{ selected_event.portal.article_of_law|default:"—" }})
+          <span data-field="portal-event-type">{{ selected_event.portal.event_type|default:"не задан" }}</span>
+          (<span data-field="portal-article">{{ selected_event.portal.article_of_law|default:"—" }}</span>)
+        </p>
+        <p id="classifier-type">
+          По классификатору:
+          <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
+          (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
       </div>
 
@@ -259,9 +264,15 @@
       metricSubdivision: document.getElementById("metric-subdivision"),
       metricOffenders: document.getElementById("metric-offenders"),
       offendersDetails: document.getElementById("offenders-details"),
-      predictedType: document.getElementById("predicted-type"),
-      portalType: document.getElementById("portal-type"),
       commentsList: document.getElementById("comments-list"),
+      fields: {
+        predEventType: document.querySelector('[data-field="pred-event-type"]'),
+        predArticle: document.querySelector('[data-field="pred-article"]'),
+        portalEventType: document.querySelector('[data-field="portal-event-type"]'),
+        portalArticle: document.querySelector('[data-field="portal-article"]'),
+        clsEventType: document.querySelector('[data-field="cls-event-type"]'),
+        clsArticle: document.querySelector('[data-field="cls-article"]'),
+      },
       badges: {
         timestamp: document.querySelector('[data-badge="timestamp"]'),
         subdivision: document.querySelector('[data-badge="subdivision"]'),
@@ -364,12 +375,12 @@
         dom.badges.article.textContent = badgeIcons[articleStatus] || "—";
       }
 
-      dom.predictedType.textContent = `Определено: ${
-        event.predicted.event_type || "не удалось"
-      } (${event.predicted.article_of_law || "—"})`;
-      dom.portalType.textContent = `В БД: ${
-        event.portal.event_type || "не задан"
-      } (${event.portal.article_of_law || "—"})`;
+      if (dom.fields.predEventType) dom.fields.predEventType.textContent = event.predicted?.event_type || "не удалось";
+      if (dom.fields.predArticle) dom.fields.predArticle.textContent = event.predicted?.article_of_law || "—";
+      if (dom.fields.portalEventType) dom.fields.portalEventType.textContent = event.portal?.event_type || "не задан";
+      if (dom.fields.portalArticle) dom.fields.portalArticle.textContent = event.portal?.article_of_law || "—";
+      if (dom.fields.clsEventType) dom.fields.clsEventType.textContent = event.predicted?.event_type || "не удалось";
+      if (dom.fields.clsArticle) dom.fields.clsArticle.textContent = event.predicted?.classifier_article_of_law || "—";
 
       dom.commentsList.innerHTML = renderListItems(event.comments);
     };

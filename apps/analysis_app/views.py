@@ -466,6 +466,10 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     preview = text[:80] + ("…" if len(text) > 80 else "")
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}
+    classifier_article = (
+        match_result.get("classifier_article_of_law")
+        or predicted.get("classifier_article_of_law")
+    )
     extracted_dt = parse_datetime(extracted.get("date_time") or "")
     portal_dt = parse_datetime(portal.get("timestamp") or "")
     extracted_timestamp_display = match_result.get(
@@ -541,6 +545,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         "predicted": {
             "event_type": predicted.get("event_type"),
             "article_of_law": _display_article(predicted.get("article_of_law")),
+            "classifier_article_of_law": _display_article(classifier_article),
         },
         "status": {
             "timestamp": _status_for_timestamp(match_result),
