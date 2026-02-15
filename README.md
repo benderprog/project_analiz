@@ -1,14 +1,29 @@
 # project_analiz
 
-## Portal DB admin settings
+Сервис на Django для анализа документов и сопоставления с данными портала (подразделения, ПУ, события), включая админ-настройку runtime-подключения к portal DB.
 
-Для настройки подключения `portal` через Django admin используется раздел
-**«Настройка подключения к базе данных»**.
+## Где смотреть документацию
 
-Дополнительные env-переменные:
+- [Аудит текущей документации](docs/audit.md)
+- [Быстрый локальный запуск](docs/quickstart_local.md)
+- [Переменные окружения](docs/env.md)
+- [Подключение к Portal DB через админку](docs/portal_db_connection.md)
+- [Офлайн-модели](docs/offline_models.md)
+- [Docker в закрытом контуре](docs/docker.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Security notes](docs/security_notes.md)
 
-- `PORTAL_DB_TEST_HOST`, `PORTAL_DB_TEST_PORT`, `PORTAL_DB_TEST_NAME`,
-  `PORTAL_DB_TEST_USER`, `PORTAL_DB_TEST_PASSWORD` — тестовый профиль.
-- Если `PORTAL_DB_TEST_*` не заданы, используются `PORTAL_DB_*`.
-- `PORTAL_DB_FERNET_KEY` — ключ Fernet для шифрования пароля portal БД в app_db.
-  Если не задан, ключ детерминированно вычисляется из `SECRET_KEY`.
+## High-level схема
+
+1. Запрос проходит через `PortalDbRuntimeSettingsMiddleware`, который перед каждым запросом применяет runtime-настройки подключения к alias `portal`.
+2. Настройки берутся из `PortalDbConnectionSettings` (singleton в app_db), пароль хранится в зашифрованном виде.
+3. Модели приложения `portaldb` ходят в alias `portal` через DB router.
+4. Семантическая модель загружается local-first (`SEMANTIC_MODEL_PATH` или `./models/<SEMANTIC_MODEL_NAME>`), в offline режиме без локальной модели выбрасывается ошибка.
+
+Source: config/settings.py (`MIDDLEWARE`, `DATABASES`, `PORTAL_DB_ALIAS`)  
+Source: apps/analysis_app/middleware.py (`PortalDbRuntimeSettingsMiddleware.__call__`)  
+Source: apps/analysis_app/portal_db_runtime.py (`apply_portal_db_settings`)  
+Source: apps/analysis_app/models.py (`PortalDbConnectionSettings`)  
+Source: config/db_router.py (`PortalDBRouter`)  
+Source: apps/analysis_app/semantic.py (`get_sentence_model`)  
+Source: apps/analysis_app/semantic_model_resolver.py (`resolve_semantic_model_path`, `is_offline_mode`)
