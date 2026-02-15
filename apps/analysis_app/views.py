@@ -381,7 +381,13 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append("Статья закона отличается от данных БД.")
     elif article_status == "yellow":
         comments.append("Статья закона не совпадает с классификатором, но совпадает с БД.")
-        classifier_article = _display_article(match_result.get("classifier_article_of_law"))
+
+    classifier_article_raw = (
+        match_result.get("classifier_article_of_law")
+        or (match_result.get("predicted") or {}).get("classifier_article_of_law")
+    )
+    if match_result.get("article_match_classifier") is False:
+        classifier_article = _display_article(classifier_article_raw)
         if classifier_article:
             comments.append(f"По классификатору ожидается: {classifier_article}.")
     if match_result.get("svodka_article_of_law") is None and article_status in {"red", "yellow"}:

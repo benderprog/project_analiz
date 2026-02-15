@@ -159,6 +159,7 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
+    article_of_law: str | None = None
     staff: list[dict] = field(default_factory=list)
     subdivision_candidates: list[dict] = field(default_factory=list)
     subdivision_span: list[int] | None = None
@@ -325,51 +326,83 @@ def _match_end_index(match) -> int | None:
     return None
 
 
-def normalize_article(value: object) -> str:
+def normalize_article(value: object) -> tuple[str, str | None] | None:
     if value is None:
-        return ""
+        return None
     normalized = (
         str(value)
         .replace("\xa0", " ")
         .replace("\u202f", " ")
         .replace("\u200b", "")
         .strip()
+        .lower()
+        .replace("ё", "е")
     )
-    if not normalized or normalized.lower() in {"null", "none"}:
-        return ""
-    normalized = normalized.lower().replace("ё", "е")
-    normalized = re.sub(r"\s+", "", normalized)
-    if normalized in {"null", "none"}:
-        return ""
-    return normalized
+    if not normalized or normalized in {"null", "none", "-", "—"}:
+        return None
+
+    part_match = re.search(r"(?:\bч\.?|\bчаст(?:ь|и|е|ью))\s*(\d+)", normalized, re.IGNORECASE)
+    part = part_match.group(1) if part_match else None
+
+    article_match = re.search(
+        r"(?:\bст\.?|\bстатья|\bстатьи|\bстатье|\bстатью)\s*(\d+(?:\.\d+)*)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if article_match:
+        article = article_match.group(1)
+        return article, part
+
+    scrubbed = re.sub(
+        r"(?:\bч\.?|\bчаст(?:ь|и|е|ью))\s*\d+",
+        " ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    fallback_match = re.search(r"\b(\d+(?:\.\d+)*)\b", scrubbed)
+    if not fallback_match:
+        return None
+    return fallback_match.group(1), part
 
 
 def _normalize_portal_article(value: object) -> str | None:
     normalized = normalize_article(value)
-    if not normalized or normalized in {"-", "—"}:
+    if normalized is None:
         return None
-    return normalized
+    article, part = normalized
+    return f"{article}|{part or ''}"
 
+
+_ARTICLE_MARKER_RE = r"(?:ст\.?|статья|статьи|статье|статью)"
+_PART_MARKER_RE = r"(?:ч\.?|част(?:ь|и|е|ью))"
 
 _ARTICLE_WITH_PART_THEN_ARTICLE_RE = re.compile(
-    r"(?:\bпо\b\s*)?\bч\.?\s*(?P<part>\d+)\s*\bст\.?\s*(?P<article>\d+(?:\.\d+)*)",
+    rf"(?:\bпо\b\s*)?\b{_PART_MARKER_RE}\s*(?P<part>\d+)\s*\b{_ARTICLE_MARKER_RE}\s*(?P<article>\d+(?:\.\d+)*)",
     re.IGNORECASE,
 )
 _ARTICLE_WITH_ARTICLE_THEN_PART_RE = re.compile(
-    r"(?:\bпо\b\s*)?\bст\.?\s*(?P<article>\d+(?:\.\d+)*)\s*\bч\.?\s*(?P<part>\d+)",
+    rf"(?:\bпо\b\s*)?\b{_ARTICLE_MARKER_RE}\s*(?P<article>\d+(?:\.\d+)*)\s*\b{_PART_MARKER_RE}\s*(?P<part>\d+)",
+    re.IGNORECASE,
+)
+_PART_OF_ARTICLE_RE = re.compile(
+    rf"\b{_PART_MARKER_RE}\s*(?P<part>\d+)\s*\b{_ARTICLE_MARKER_RE}(?:\s+\d+)?\s*(?P<article>\d+(?:\.\d+)*)",
     re.IGNORECASE,
 )
 _ARTICLE_ONLY_RE = re.compile(
-    r"(?:\bпо\b\s*)?\bст\.?\s*(?P<article>\d+(?:\.\d+)*)",
+    rf"(?:\bпо\b\s*)?\b{_ARTICLE_MARKER_RE}\s*(?P<article>\d+(?:\.\d+)*)",
     re.IGNORECASE,
 )
 
 
-def _extract_article_from_text(text: str) -> str | None:
+def extract_article_of_law(text: str) -> str | None:
     if not text:
         return None
 
-    for regex in (_ARTICLE_WITH_PART_THEN_ARTICLE_RE, _ARTICLE_WITH_ARTICLE_THEN_PART_RE):
+    for regex in (
+        _ARTICLE_WITH_PART_THEN_ARTICLE_RE,
+        _ARTICLE_WITH_ARTICLE_THEN_PART_RE,
+        _PART_OF_ARTICLE_RE,
+    ):
         match = regex.search(text)
         if match:
             article = match.group("article")
@@ -391,17 +424,26 @@ def _calc_article_status(
     cls_norm = _normalize_portal_article(classifier_article)
     db_norm = _normalize_portal_article(portal_article)
 
-    if ex_norm is None and cls_norm is None and db_norm is None:
+    if db_norm is None:
         return {
             "article_status": "neutral",
-            "article_match_db": True,
-            "article_match_classifier": True,
+            "article_match_db": None,
+            "article_match_classifier": None,
+        }
+
+    if ex_norm is None:
+        return {
+            "article_status": "red",
+            "article_match_db": False,
+            "article_match_classifier": None,
         }
 
     article_match_db = ex_norm == db_norm
-    article_match_classifier = ex_norm == cls_norm
+    article_match_classifier = None if cls_norm is None else ex_norm == cls_norm
     if not article_match_db:
         article_status = "red"
+    elif article_match_classifier is None:
+        article_status = "neutral"
     elif article_match_classifier:
         article_status = "green"
     else:
@@ -518,6 +560,7 @@ def extract_attributes(
 ) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
+    article_of_law = extract_article_of_law(text)
     offenders_all = extract_offenders(text)
     for offender in offenders_all:
         second_name = offender.get("second_name") or ""
@@ -625,6 +668,7 @@ def extract_attributes(
         offenders=offenders,
         staff=staff,
         subdivision_name=subdivision_name,
+        article_of_law=article_of_law,
         subdivision_candidates=subdivision_candidates,
         subdivision_span=subdivision_span,
         selected_pu_id=selected_pu_id,
@@ -1748,7 +1792,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
     predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
-    svodka_article = _extract_article_from_text(text)
+    svodka_article = attributes.article_of_law
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
 
@@ -1853,6 +1897,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "predicted": {
                 "event_type": predicted_type,
                 "article_of_law": svodka_article,
+                "classifier_article_of_law": predicted_article,
                 "event_pattern": predicted_event_pattern,
                 "event_type_match": predicted_event_pattern,
             },
@@ -1862,10 +1907,11 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "event_type_ok": None,
             "article_ok": None,
             "article_status": "neutral",
-            "article_match_db": True,
-            "article_match_classifier": True,
+            "article_match_db": None,
+            "article_match_classifier": None,
             "classifier_article_of_law": predicted_article,
             "svodka_article_of_law": svodka_article,
+            "portal_article_of_law": None,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -2034,6 +2080,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "predicted": {
             "event_type": best_flags.get("predicted_type"),
             "article_of_law": best_flags.get("predicted_article"),
+            "classifier_article_of_law": predicted_article,
             "event_pattern": predicted_event_pattern,
             "event_type_match": predicted_event_pattern,
         },
@@ -2048,6 +2095,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "article_match_classifier": article_meta.get("article_match_classifier"),
         "classifier_article_of_law": predicted_article,
         "svodka_article_of_law": svodka_article,
+        "portal_article_of_law": best_event.event.article_of_law,
         "diffs": diffs,
         "debug": debug_meta,
     }
