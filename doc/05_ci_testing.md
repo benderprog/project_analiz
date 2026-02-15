@@ -5,7 +5,7 @@ Workflow `.github/workflows/tests.yml` запускается на push и pull 
 
 - поднимает сервис PostgreSQL 16;
 - создает роли `app` и `portal` с правом `CREATEDB` (нужно для создания Django test DB);
-- создает базы `app_db` и `portal_db` для локальной логики приложения;
+- создает базы `app_db` и `portal_db_test` для локальной логики приложения (продовое имя — `portal_db`);
 - выполняет миграции для основной и `portal` БД;
 - запускает `python manage.py test`.
 
@@ -29,7 +29,8 @@ psql -h 127.0.0.1 -U postgres -d postgres <<'SQL'
 CREATE ROLE app LOGIN PASSWORD 'app' CREATEDB;
 CREATE ROLE portal LOGIN PASSWORD 'portal' CREATEDB;
 CREATE DATABASE app_db OWNER app;
-CREATE DATABASE portal_db OWNER portal;
+CREATE DATABASE portal_db_test OWNER portal;
+-- для PROD по соглашению используется имя portal_db
 SQL
 ```
 

@@ -34,7 +34,7 @@ jobs:
       APP_DB_PASSWORD: app
       APP_DB_HOST: 127.0.0.1
       APP_DB_PORT: "5432"
-      PORTAL_DB_NAME: portal_db
+      PORTAL_DB_NAME: portal_db_test
       PORTAL_DB_USER: portal
       PORTAL_DB_PASSWORD: portal
       PORTAL_DB_HOST: 127.0.0.1
@@ -68,7 +68,7 @@ jobs:
           CREATE ROLE app LOGIN PASSWORD 'app' CREATEDB;
           CREATE ROLE portal LOGIN PASSWORD 'portal' CREATEDB;
           CREATE DATABASE app_db OWNER app;
-          CREATE DATABASE portal_db OWNER portal;
+          CREATE DATABASE portal_db_test OWNER portal;
           SQL
 
       - name: Run migrations
