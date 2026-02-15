@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from django.test import SimpleTestCase
 
-from apps.analysis_app.services import _calc_article_status, extract_article_of_law, normalize_article
+from apps.analysis_app.services import (
+    _calc_article_status,
+    extract_article_mentions,
+    extract_article_of_law,
+    normalize_article,
+)
 
 
 class ArticleStatusTest(SimpleTestCase):
@@ -11,6 +16,13 @@ class ArticleStatusTest(SimpleTestCase):
 
     def test_extract_article_requires_marker(self):
         self.assertIsNone(extract_article_of_law("в тексте только 18.1 ч.1 без маркеров"))
+
+
+    def test_extract_article_mentions_returns_canonical_and_spans(self):
+        article, spans = extract_article_mentions("по ч. 1 ст. 18.1 и по статье 20.3")
+
+        self.assertEqual(article, "18.1 ч. 1")
+        self.assertGreaterEqual(len(spans), 2)
 
     def test_green_when_matches_classifier_and_db(self):
         result = _calc_article_status("18.1 ч.1", "18.1 ч.1", "18.1 ч.1")
@@ -33,17 +45,17 @@ class ArticleStatusTest(SimpleTestCase):
         self.assertFalse(result["article_match_db"])
         self.assertTrue(result["article_match_classifier"])
 
-    def test_neutral_when_no_portal_article(self):
+    def test_red_when_no_portal_article(self):
         for portal_article in ("NULL", "—", None):
             result = _calc_article_status("18.1 ч.1", "18.1 ч.1", portal_article)
 
-            self.assertEqual(result["article_status"], "neutral")
-            self.assertIsNone(result["article_match_db"])
-            self.assertIsNone(result["article_match_classifier"])
+            self.assertEqual(result["article_status"], "red")
+            self.assertFalse(result["article_match_db"])
+            self.assertTrue(result["article_match_classifier"])
 
     def test_red_when_text_has_no_article_but_db_has(self):
         result = _calc_article_status(None, "18.1 ч.1", "18.1 ч.1")
 
         self.assertEqual(result["article_status"], "red")
         self.assertFalse(result["article_match_db"])
-        self.assertIsNone(result["article_match_classifier"])
+        self.assertFalse(result["article_match_classifier"])

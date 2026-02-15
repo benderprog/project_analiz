@@ -160,6 +160,7 @@ class ExtractedAttributes:
     offenders: list[dict]
     subdivision_name: str | None
     article_of_law: str | None = None
+    article_spans: list[tuple[int, int]] = field(default_factory=list)
     staff: list[dict] = field(default_factory=list)
     subdivision_candidates: list[dict] = field(default_factory=list)
     subdivision_span: list[int] | None = None
@@ -394,25 +395,45 @@ _ARTICLE_ONLY_RE = re.compile(
 )
 
 
-def extract_article_of_law(text: str) -> str | None:
-    if not text:
-        return None
+def _canonical_article(article: str, part: str | None = None) -> str:
+    if part:
+        return f"{article} ч. {part}"
+    return article
 
+
+def extract_article_mentions(text: str) -> tuple[str | None, list[tuple[int, int]]]:
+    if not text:
+        return None, []
+
+    matches: list[tuple[str, tuple[int, int]]] = []
     for regex in (
         _ARTICLE_WITH_PART_THEN_ARTICLE_RE,
         _ARTICLE_WITH_ARTICLE_THEN_PART_RE,
         _PART_OF_ARTICLE_RE,
     ):
-        match = regex.search(text)
-        if match:
-            article = match.group("article")
-            part = match.group("part")
-            return f"{article} ч.{part}"
+        for match in regex.finditer(text):
+            matches.append(
+                (
+                    _canonical_article(match.group("article"), match.group("part")),
+                    (match.start(), match.end()),
+                )
+            )
 
-    match = _ARTICLE_ONLY_RE.search(text)
-    if not match:
-        return None
-    return match.group("article")
+    if not matches:
+        for match in _ARTICLE_ONLY_RE.finditer(text):
+            matches.append((_canonical_article(match.group("article")), (match.start(), match.end())))
+
+    if not matches:
+        return None, []
+
+    primary = matches[0][0]
+    spans = [span for _, span in matches]
+    return primary, spans
+
+
+def extract_article_of_law(text: str) -> str | None:
+    article, _spans = extract_article_mentions(text)
+    return article
 
 
 def _calc_article_status(
@@ -424,30 +445,14 @@ def _calc_article_status(
     cls_norm = _normalize_portal_article(classifier_article)
     db_norm = _normalize_portal_article(portal_article)
 
-    if db_norm is None:
-        return {
-            "article_status": "neutral",
-            "article_match_db": None,
-            "article_match_classifier": None,
-        }
-
-    if ex_norm is None:
-        return {
-            "article_status": "red",
-            "article_match_db": False,
-            "article_match_classifier": None,
-        }
-
-    article_match_db = ex_norm == db_norm
-    article_match_classifier = None if cls_norm is None else ex_norm == cls_norm
-    if not article_match_db:
-        article_status = "red"
-    elif article_match_classifier is None:
-        article_status = "neutral"
-    elif article_match_classifier:
+    article_match_db = ex_norm is not None and db_norm is not None and ex_norm == db_norm
+    article_match_classifier = ex_norm is not None and cls_norm is not None and ex_norm == cls_norm
+    if article_match_db and article_match_classifier:
         article_status = "green"
-    else:
+    elif article_match_db:
         article_status = "yellow"
+    else:
+        article_status = "red"
 
     return {
         "article_status": article_status,
@@ -560,7 +565,7 @@ def extract_attributes(
 ) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
-    article_of_law = extract_article_of_law(text)
+    article_of_law, article_spans = extract_article_mentions(text)
     offenders_all = extract_offenders(text)
     for offender in offenders_all:
         second_name = offender.get("second_name") or ""
@@ -669,6 +674,7 @@ def extract_attributes(
         staff=staff,
         subdivision_name=subdivision_name,
         article_of_law=article_of_law,
+        article_spans=article_spans,
         subdivision_candidates=subdivision_candidates,
         subdivision_span=subdivision_span,
         selected_pu_id=selected_pu_id,
@@ -1905,10 +1911,11 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "time_mismatch": False,
             "subdivision_mismatch": False,
             "event_type_ok": None,
-            "article_ok": None,
-            "article_status": "neutral",
-            "article_match_db": None,
-            "article_match_classifier": None,
+            "article_ok": False,
+            "article_classifier_ok": False,
+            "article_status": "red",
+            "article_match_db": False,
+            "article_match_classifier": False,
             "classifier_article_of_law": predicted_article,
             "svodka_article_of_law": svodka_article,
             "portal_article_of_law": None,
@@ -1972,6 +1979,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         portal_article=best_event.event.article_of_law,
     )
     article_ok = article_meta["article_match_db"]
+    article_classifier_ok = article_meta["article_match_classifier"]
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -1982,6 +1990,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         **best_flags,
         "event_type_ok": event_type_ok,
         "article_ok": article_ok,
+        "article_classifier_ok": article_classifier_ok,
         "article_status": article_meta.get("article_status"),
         "article_match_db": article_meta.get("article_match_db"),
         "article_match_classifier": article_meta.get("article_match_classifier"),
@@ -2090,6 +2099,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "subdivision_mismatch": subdivision_mismatch,
         "event_type_ok": event_type_ok,
         "article_ok": article_ok,
+        "article_classifier_ok": article_classifier_ok,
         "article_status": article_meta.get("article_status"),
         "article_match_db": article_meta.get("article_match_db"),
         "article_match_classifier": article_meta.get("article_match_classifier"),
