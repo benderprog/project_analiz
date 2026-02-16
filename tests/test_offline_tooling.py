@@ -61,3 +61,23 @@ def test_offline_bundle_writes_portal_nested_config_and_sql_paths():
     assert "portal/portal.yml" in content
     assert "configs/portal/sql" in content
     assert "PORTAL_CONFIG_PATH=/app/configs/portal.yml" in content
+
+
+def test_offline_compose_db_services_use_named_volumes_for_persistence():
+    compose_path = REPO_ROOT / "docker" / "offline" / "compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+
+    assert "db_app:" in content
+    assert "portal_db_test:" in content
+    assert "- app_db_data:/var/lib/postgresql/data" in content
+    assert "- portal_db_data:/var/lib/postgresql/data" in content
+
+
+def test_offline_script_has_idempotent_restore_and_reset_db_command():
+    script_path = REPO_ROOT / "scripts" / "offline" / "offline.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "restore skipped, DB already initialized" in content
+    assert "OFFLINE_RESTORE" in content
+    assert "reset-db" in content
+    assert "compose_cmd down --remove-orphans" in content

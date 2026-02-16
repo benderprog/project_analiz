@@ -68,6 +68,8 @@ bash scripts/offline/offline.sh import
 bash scripts/offline/offline.sh up
 ```
 
+`up` restores DB dumps only for first initialization (empty volumes). On subsequent runs it keeps current data and prints `restore skipped, DB already initialized: ...`.
+
 Open:
 
 - <http://127.0.0.1:8000/admin>
@@ -79,7 +81,19 @@ Runtime helper commands:
 bash scripts/offline/offline.sh ps
 bash scripts/offline/offline.sh logs
 bash scripts/offline/offline.sh down
+# optional: force dump restore on next up
+OFFLINE_RESTORE=1 bash scripts/offline/offline.sh up
+# factory reset (drop DB volumes + restore dumps + migrations + web)
+bash scripts/offline/offline.sh reset-db
 ```
+
+## 3a) DB persistence and restore policy
+
+- `db_app` and `portal_db_test` store Postgres data in named Docker volumes mounted to `/var/lib/postgresql/data`.
+- First `up` on empty volumes performs restore from bundled dumps.
+- Later `up`/`down`/`up` cycles do **not** overwrite DB data.
+- `restore` command now means explicit re-restore from dumps (force mode).
+- For full factory reset use `reset-db` (removes volumes and recreates DBs from dumps).
 
 ## 3) Bundle structure
 
