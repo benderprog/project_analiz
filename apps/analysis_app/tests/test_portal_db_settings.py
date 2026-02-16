@@ -9,7 +9,7 @@ from django.test import RequestFactory, TestCase
 from apps.analysis_app.admin import PortalDbConnectionSettingsAdmin
 from apps.analysis_app.admin_forms import PortalDbConnectionSettingsAdminForm
 from apps.analysis_app.models import PortalDbConnectionSettings
-from apps.analysis_app.portal_db_runtime import apply_portal_db_settings
+from apps.analysis_app.portal_db_runtime import _reset_django_connection, apply_portal_db_settings
 from apps.analysis_app.utils import portal_db_crypto
 
 
@@ -205,6 +205,39 @@ class PortalDbAdminTests(TestCase):
 
 
 class PortalDbRuntimeTests(TestCase):
+    @patch("apps.analysis_app.portal_db_runtime.decrypt_password", return_value="new-pass")
+    def test_apply_portal_db_settings_updates_initialized_portal_wrapper_settings(self, _):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.TEST
+        settings_obj.host = "portal_db_test"
+        settings_obj.port = 15432
+        settings_obj.db_name = "portal_test"
+        settings_obj.user = "portal_user"
+        settings_obj.password_encrypted = "token"
+        settings_obj.save()
+
+        wrapper = connections["portal"]
+        wrapper.settings_dict.update(
+            {
+                "HOST": "localhost",
+                "PORT": "5432",
+                "NAME": "portal_old",
+                "USER": "portal_old_user",
+                "PASSWORD": "old-pass",
+            }
+        )
+
+        apply_portal_db_settings()
+
+        self.assertEqual(connections.databases["portal"]["HOST"], "portal_db_test")
+        self.assertEqual(connections.databases["portal"]["NAME"], "portal_test")
+        self.assertEqual(wrapper.settings_dict["HOST"], "portal_db_test")
+        self.assertEqual(wrapper.settings_dict["NAME"], "portal_test")
+
+    def test_reset_django_connection_is_noop_for_missing_alias(self):
+        _reset_django_connection("portal-missing", {"HOST": "updated-host", "NAME": "updated-name"})
+        self.assertIn("portal", connections.databases)
+
     def test_apply_portal_db_settings_sets_readonly_options_for_prod(self):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
         settings_obj.profile = PortalDbConnectionSettings.Profile.PROD

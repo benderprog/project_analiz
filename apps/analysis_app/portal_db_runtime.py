@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+from django.conf import settings
 from django.db import connections
 
 from apps.analysis_app.models import PortalDbConnectionSettings
@@ -53,6 +54,15 @@ def _same_connection_settings(current: dict, desired: dict) -> bool:
     return (current.get("OPTIONS") or {}) == (desired.get("OPTIONS") or {})
 
 
+def _reset_django_connection(alias: str, cfg: dict) -> None:
+    for connection in connections.all(initialized_only=True):
+        if connection.alias != alias:
+            continue
+        connection.close()
+        connection.settings_dict.update(cfg)
+        return
+
+
 def apply_portal_db_settings() -> None:
     db_obj = get_portal_settings_singleton()
     if not db_obj:
@@ -71,6 +81,6 @@ def apply_portal_db_settings() -> None:
         return
 
     merged = {**current, **desired}
+    settings.DATABASES["portal"] = merged
     connections.databases["portal"] = merged
-    if "portal" in connections:
-        connections["portal"].close()
+    _reset_django_connection("portal", merged)
