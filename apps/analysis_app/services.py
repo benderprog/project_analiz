@@ -231,81 +231,148 @@ def _fact_to_datetime(fact) -> datetime | None:
     return None
 
 
-_DATETIME_REGEXES = [
-    re.compile(
-        r"(?:\bв\b\s*)?(?P<time>\d{1,2}[.:]\d{2})\s*(?P<date>\d{2}\.\d{2}\.\d{4})",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?P<date>\d{2}\.\d{2}\.\d{4})\s*(?:,|;|—|-)?\s*(?:\bв\b\s*)?"
-        r"(?P<time>\d{1,2}[.:]\d{2})",
-        re.IGNORECASE,
-    ),
-]
+_RU_MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+
+_DATE_NUMERIC_RE = re.compile(r"\b(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2,4})\b")
+_DATE_WORD_RE = re.compile(
+    r"\b(?P<day>\d{1,2})\s+(?P<month>января|февраля|марта|апреля|мая|июня|июля|августа|"
+    r"сентября|октября|ноября|декабря)\s+(?P<year>\d{2,4})(?:\s*(?:года|г\.?))?\b",
+    re.IGNORECASE,
+)
+
+_TIME_CONTEXT_RE = r"(?:\b(?:в|к|около|примерно|время)\b[\s,:;\-]*)"
+_TIME_HHMM_WITH_CONTEXT_RE = re.compile(
+    rf"{_TIME_CONTEXT_RE}(?P<hour>\d{{1,2}})\s*[.:]\s*(?P<minute>\d{{2}})\b",
+    re.IGNORECASE,
+)
+_TIME_CH_WITH_CONTEXT_RE = re.compile(
+    rf"{_TIME_CONTEXT_RE}(?P<hour>\d{{1,2}})\s*(?:ч|час(?:а|ов)?)\.?\s*"
+    r"(?:(?P<minute>\d{1,2})\s*(?:м|мин(?:ут(?:а|ы)?)?)\.?)?",
+    re.IGNORECASE,
+)
+_TIME_HHMM_FALLBACK_RE = re.compile(r"\b(?P<hour>\d{1,2})\s*[.:]\s*(?P<minute>\d{2})\b", re.IGNORECASE)
+_LEGAL_NEGATIVE_CONTEXT_RE = re.compile(r"(?:\bст\.?|\bстат(?:ья|ьи|ье|ью)|\bч\.?)\s*$", re.IGNORECASE)
 
 
-def _find_datetime_regex_match(text: str) -> re.Match[str] | None:
-    for regex in _DATETIME_REGEXES:
-        match = regex.search(text)
-        if match:
-            return match
-    return None
+def _normalize_datetime_text(text: str) -> str:
+    return (
+        text.replace("ё", "е")
+        .replace("Ё", "Е")
+        .replace("\xa0", " ")
+        .replace("\u202f", " ")
+    )
 
 
-def _parse_time_value(time_str: str) -> tuple[int, int] | None:
-    normalized = time_str.replace(".", ":")
-    parts = normalized.split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
+def _to_four_digit_year(raw_year: int) -> int:
+    if raw_year < 100:
+        return 2000 + raw_year
+    return raw_year
+
+
+def _extract_ru_date(text: str) -> tuple[date | None, tuple[int, int] | None]:
+    normalized = _normalize_datetime_text(text)
+    for match in _DATE_NUMERIC_RE.finditer(normalized):
+        day = int(match.group("day"))
+        month = int(match.group("month"))
+        year = _to_four_digit_year(int(match.group("year")))
+        try:
+            return date(year, month, day), match.span()
+        except ValueError:
+            continue
+
+    for match in _DATE_WORD_RE.finditer(normalized):
+        day = int(match.group("day"))
+        month_name = match.group("month").lower()
+        month = _RU_MONTHS.get(month_name)
+        year = _to_four_digit_year(int(match.group("year")))
+        if month is None:
+            continue
+        try:
+            return date(year, month, day), match.span()
+        except ValueError:
+            continue
+
+    return None, None
+
+
+def _extract_time_parts(match: re.Match[str]) -> tuple[int, int] | None:
+    hour = int(match.group("hour"))
+    minute_raw = match.groupdict().get("minute")
+    minute = int(minute_raw) if minute_raw is not None else 0
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
     return hour, minute
 
 
-def _extract_datetime_regex(text: str) -> tuple[datetime | None, bool]:
-    match = _find_datetime_regex_match(text)
-    if not match:
-        return None, False
+def _has_legal_negative_context(text: str, start: int) -> bool:
+    left_window = text[max(0, start - 16):start]
+    return bool(_LEGAL_NEGATIVE_CONTEXT_RE.search(left_window))
 
-    date_str = match.group("date")
-    time_str = match.group("time")
-    parsed_time = _parse_time_value(time_str)
-    if not parsed_time:
-        return None, False
 
-    try:
-        date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
-    except ValueError:
-        return None, False
+def _extract_ru_time(text: str) -> tuple[int | None, int | None, tuple[int, int] | None]:
+    normalized = _normalize_datetime_text(text)
 
-    hour, minute = parsed_time
-    return datetime.combine(date_obj, time(hour, minute)), True
+    for regex in (_TIME_HHMM_WITH_CONTEXT_RE, _TIME_CH_WITH_CONTEXT_RE):
+        match = regex.search(normalized)
+        if not match:
+            continue
+        parts = _extract_time_parts(match)
+        if parts is None:
+            continue
+        hour, minute = parts
+        return hour, minute, match.span()
+
+    for match in _TIME_HHMM_FALLBACK_RE.finditer(normalized):
+        if _has_legal_negative_context(normalized, match.start()):
+            continue
+        parts = _extract_time_parts(match)
+        if parts is None:
+            continue
+        hour, minute = parts
+        return hour, minute, match.span()
+
+    return None, None, None
 
 
 def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
-    """Extract date/time using regex first, then Natasha; return timezone-aware datetime."""
+    """Extract date/time via Natasha first, then regex fallback; return timezone-aware datetime."""
     from natasha import DatesExtractor
-
-    dt, time_found = _extract_datetime_regex(text)
-    if dt is not None:
-        aware_dt = _to_utc(dt)
-        return aware_dt, time_found
 
     extractor = DatesExtractor(_get_morph())
     matches = list(extractor(text))
-    if not matches:
+    if matches:
+        dt = _fact_to_datetime(matches[0].fact)
+        if dt is not None:
+            time_found = dt.time() != time(0, 0)
+            if not time_found:
+                hour, minute, _ = _extract_ru_time(text)
+                if hour is not None and minute is not None:
+                    dt = datetime.combine(dt.date(), time(hour, minute))
+                    time_found = True
+            return _to_utc(dt), time_found
+
+    date_obj, _ = _extract_ru_date(text)
+    if date_obj is None:
         return None, False
-    dt = _fact_to_datetime(matches[0].fact)
-    if dt is None:
-        return None, False
-    time_found = dt.time() != time(0, 0)
-    aware_dt = _to_utc(dt)
-    return aware_dt, time_found
+
+    hour, minute, _ = _extract_ru_time(text)
+    if hour is not None and minute is not None:
+        return _to_utc(datetime.combine(date_obj, time(hour, minute))), True
+
+    return _to_utc(datetime.combine(date_obj, time(0, 0))), False
 
 
 def _match_end_index(match) -> int | None:
