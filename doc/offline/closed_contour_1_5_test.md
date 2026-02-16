@@ -61,18 +61,28 @@ Copy the whole `dist/offline_bundle_1_5_test/` directory (or the `.tar.gz` archi
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh import
 ```
 
-## 5) Offline host: start stack (restore + migrate + web)
+## 5) Offline host: start stack (idempotent restore + migrate + web)
 
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh up
 ```
 
-`up` starts DB containers, restores bundled dumps, runs Django migrations, then starts `web`.
+`up` starts DB containers and restores bundled dumps only when DB volumes are empty, then runs Django migrations and starts `web`.
 
-If needed, run only restore phase explicitly:
+On repeated starts, restore is skipped and existing data is preserved.
+
+If needed, run explicit forced restore from dumps:
 
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh restore
+# or force via env on up
+OFFLINE_RESTORE=1 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh up
+```
+
+Factory reset (drop volumes + restore + migrate + web):
+
+```bash
+OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh reset-db
 ```
 
 ## 6) Verify app
@@ -89,3 +99,5 @@ OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh logs
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh down
 ```
+
+> `down` no longer removes volumes, so DB data survives stop/start and down/up cycles.

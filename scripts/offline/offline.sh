@@ -15,6 +15,7 @@ Usage:
   ./scripts/offline/offline.sh bundle --version 1.5_test --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db_test.dump [--with-model] [--archive]
   ./scripts/offline/offline.sh import
   ./scripts/offline/offline.sh restore
+  ./scripts/offline/offline.sh reset-db
   ./scripts/offline/offline.sh up
   ./scripts/offline/offline.sh logs
   ./scripts/offline/offline.sh ps
@@ -311,22 +312,74 @@ run_pg_restore_in_postgres15() {
     sh -lc "pg_restore --version && pg_restore -h ${db_host} -p 5432 -U ${db_user} -d ${db_name} --clean --if-exists --no-owner --no-privileges /db_dumps/${dump_file}"
 }
 
+db_has_user_tables() {
+  local service="$1"
+  local db_host="$2"
+  local db_user="$3"
+  local db_name="$4"
+  local db_password="$5"
+  local network_name query result
+
+  network_name="$(service_network_name "${service}")"
+  query="SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_type = 'BASE TABLE'
+  );"
+
+  result="$(docker run --rm \
+    --network "${network_name}" \
+    -e "PGPASSWORD=${db_password}" \
+    postgres:15 \
+    sh -lc "psql -h ${db_host} -p 5432 -U ${db_user} -d ${db_name} -tAc \"${query}\"" | tr -d '[:space:]')"
+
+  [[ "${result}" == "t" ]]
+}
+
+restore_if_needed() {
+  local service="$1"
+  local db_host="$2"
+  local db_user="$3"
+  local db_name="$4"
+  local db_password="$5"
+  local dump_file="$6"
+  local force_restore="${7:-0}"
+
+  if [[ "${force_restore}" == "1" ]]; then
+    run_pg_restore_in_postgres15 "${service}" "${db_host}" "${db_user}" "${db_name}" "${db_password}" "${dump_file}"
+    return
+  fi
+
+  if db_has_user_tables "${service}" "${db_host}" "${db_user}" "${db_name}" "${db_password}"; then
+    log "restore skipped, DB already initialized: ${db_name}"
+    return
+  fi
+
+  run_pg_restore_in_postgres15 "${service}" "${db_host}" "${db_user}" "${db_name}" "${db_password}" "${dump_file}"
+}
+
 restore_cmd() {
   load_compose_env
+  local force_restore="${1:-0}"
+
+  if [[ "${OFFLINE_RESTORE:-0}" == "1" ]]; then
+    force_restore="1"
+  fi
 
   local portal_mode="${PORTAL_MODE:-local}"
   if [[ "${portal_mode}" == "remote" ]]; then
     compose_cmd up -d --remove-orphans --no-build db_app
     wait_for_service_healthy "db_app"
-    run_pg_restore_in_postgres15 "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump"
+    restore_if_needed "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump" "${force_restore}"
     return
   fi
 
   compose_cmd up -d --remove-orphans --no-build db_app portal_db_test
   wait_for_service_healthy "db_app"
   wait_for_service_healthy "portal_db_test"
-  run_pg_restore_in_postgres15 "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump"
-  run_pg_restore_in_postgres15 "portal_db_test" "portal_db_test" "portal" "portal_db_test" "${PORTAL_DB_PASSWORD}" "portal_db_test.dump"
+  restore_if_needed "db_app" "db_app" "app" "app_db" "${APP_DB_PASSWORD}" "app_db.dump" "${force_restore}"
+  restore_if_needed "portal_db_test" "portal_db_test" "portal" "portal_db_test" "${PORTAL_DB_PASSWORD}" "portal_db_test.dump" "${force_restore}"
 }
 
 import_cmd() {
@@ -361,7 +414,7 @@ import_cmd() {
 
 up_cmd() {
   load_compose_env
-  restore_cmd
+  restore_cmd "0"
 
   local portal_mode="${PORTAL_MODE:-local}"
   if [[ "${portal_mode}" == "remote" ]]; then
@@ -372,6 +425,20 @@ up_cmd() {
 
   compose_cmd run --rm migrate_app
   compose_cmd run --rm migrate_portal
+  compose_cmd up -d --remove-orphans --no-build web
+}
+
+reset_db_cmd() {
+  load_compose_env
+  log "Factory reset: dropping DB volumes and restoring dumps"
+  compose_cmd down -v --remove-orphans
+  restore_cmd "1"
+
+  local portal_mode="${PORTAL_MODE:-local}"
+  compose_cmd run --rm migrate_app
+  if [[ "${portal_mode}" != "remote" ]]; then
+    compose_cmd run --rm migrate_portal
+  fi
   compose_cmd up -d --remove-orphans --no-build web
 }
 
@@ -399,7 +466,10 @@ main() {
       up_cmd
       ;;
     restore)
-      restore_cmd
+      restore_cmd "1"
+      ;;
+    reset-db)
+      reset_db_cmd
       ;;
     logs)
       logs_cmd
@@ -408,7 +478,7 @@ main() {
       compose_cmd ps -a
       ;;
     down)
-      compose_cmd down -v --remove-orphans
+      compose_cmd down --remove-orphans
       ;;
     -h|--help|help|"")
       usage
