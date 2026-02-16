@@ -568,6 +568,48 @@ def _match_start_index(match) -> int | None:
     return None
 
 
+def _find_datetime_regex_match(text: str) -> re.Match[str] | None:
+    if not isinstance(text, str) or not text:
+        return None
+
+    normalized = _normalize_datetime_text(text)
+
+    for match in _DATE_NUMERIC_RE.finditer(normalized):
+        try:
+            day = int(match.group("day"))
+            month = int(match.group("month"))
+            year = _to_four_digit_year(int(match.group("year")))
+            date(year, month, day)
+            return match
+        except (TypeError, ValueError):
+            continue
+
+    for match in _DATE_WORD_RE.finditer(normalized):
+        month = _RU_MONTHS.get((match.group("month") or "").lower())
+        if month is None:
+            continue
+        try:
+            day = int(match.group("day"))
+            year = _to_four_digit_year(int(match.group("year")))
+            date(year, month, day)
+            return match
+        except (TypeError, ValueError):
+            continue
+
+    for regex in (_TIME_HHMM_WITH_CONTEXT_RE, _TIME_CH_WITH_CONTEXT_RE):
+        match = regex.search(normalized)
+        if match and _extract_time_parts(match) is not None:
+            return match
+
+    for match in _TIME_HHMM_FALLBACK_RE.finditer(normalized):
+        if _has_legal_negative_context(normalized, match.start()):
+            continue
+        if _extract_time_parts(match) is not None:
+            return match
+
+    return None
+
+
 def _find_datetime_span(text: str) -> tuple[int, int] | None:
     regex_match = _find_datetime_regex_match(text)
     if regex_match:
