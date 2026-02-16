@@ -1,6 +1,6 @@
 # Remote portal DB (read-only) mode
 
-Use this mode to connect application to a real portal database in read-only mode.
+Use this mode when app DB stays local in offline bundle, but portal DB points to an external read-only host.
 
 ## Steps
 
@@ -8,11 +8,20 @@ Use this mode to connect application to a real portal database in read-only mode
 
    ```env
    PORTAL_MODE=remote
-   PORTAL_DB_HOST=<battle-db-host>
+
+   # app DB remains local container
+   APP_DB_HOST=db_app
+   APP_DB_PORT=5432
+   APP_DB_NAME=app_db
+   APP_DB_USER=app
+   APP_DB_PASSWORD=app
+
+   # portal DB points to remote read-only source
+   PORTAL_DB_HOST=<portal-db-host>
    PORTAL_DB_PORT=5432
+   PORTAL_DB_NAME=<portal_db_or_portal_db_test>
    PORTAL_DB_USER=<ro_user>
    PORTAL_DB_PASSWORD=<ro_password>
-   PORTAL_DB_NAME=<battle_db_name>
    ```
 
 2. Keep `PORTAL_CONFIG_PATH=/app/configs/portal.yml`.
@@ -31,4 +40,4 @@ Use this mode to connect application to a real portal database in read-only mode
 - `restore_portal` is **not executed**.
 - `migrate_portal` is **not executed**.
 
-This protects battle portal DB from accidental restore/migration writes.
+This protects remote portal DB from accidental restore/migration writes.
