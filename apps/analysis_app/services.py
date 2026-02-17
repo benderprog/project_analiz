@@ -2040,7 +2040,6 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         )
         return {
             "matched": False,
-            "score_percent": 0,
             "time_delta_minutes": None,
             "offenders_score_percent": 0,
             "offenders_counts": {
@@ -2217,7 +2216,6 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
     return {
         "matched": True,
         "matched_event_id": str(best_event.event.event_id),
-        "score_percent": round(offenders_score * 100, 2),
         "extracted_timestamp_display": format_dt_dmy_hm(attributes.date_time),
         "portal_timestamp_display": format_dt_dmy_hm(best_event.event.date_detection),
         "time_delta_minutes": best_delta,

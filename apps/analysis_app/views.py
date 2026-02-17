@@ -577,7 +577,6 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         },
         "match": {
             "matched": bool(match_result.get("matched")),
-            "score_percent": match_result.get("score_percent"),
             "time_delta_minutes": match_result.get("time_delta_minutes"),
             "offenders_score_percent": match_result.get("offenders_score_percent"),
             "offenders_counts": match_result.get("offenders_counts") or {},
