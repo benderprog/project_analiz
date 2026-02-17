@@ -778,7 +778,6 @@ class TemplateRenderingTests(TestCase):
             "status": {"timestamp": "red", "subdivision": "red", "offenders": "green"},
             "match": {
                 "matched": True,
-                "score_percent": 0,
                 "time_delta_minutes": None,
                 "subdivision_match_percent": None,
                 "offenders_summary": "Совпало нарушителей: 0 из 0",
@@ -805,6 +804,7 @@ class TemplateRenderingTests(TestCase):
         )
 
         self.assertNotIn("{{ selected_event.match.offenders_counts", html)
+        self.assertNotIn("Совпадение", html)
 
 
     def test_detail_template_renders_exactly_two_event_type_badges(self):
@@ -839,7 +839,6 @@ class TemplateRenderingTests(TestCase):
             },
             "match": {
                 "matched": True,
-                "score_percent": 100,
                 "time_delta_minutes": 0,
                 "subdivision_match_percent": 100,
                 "offenders_summary": "Совпало нарушителей: 0 из 0",
