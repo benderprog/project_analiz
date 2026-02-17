@@ -97,7 +97,15 @@ Open in browser:
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh ps
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh logs
+OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh stop
+OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh start
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh down
 ```
 
 > `down` no longer removes volumes, so DB data survives stop/start and down/up cycles.
+
+Operational guidance:
+
+- First deployment: `import -> up`
+- Routine operational restart: `stop -> start`
+- `start` does not run restore or migrations; it only starts runtime services.

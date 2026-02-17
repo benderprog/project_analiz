@@ -17,6 +17,8 @@ Usage:
   ./scripts/offline/offline.sh restore
   ./scripts/offline/offline.sh reset-db
   ./scripts/offline/offline.sh up
+  ./scripts/offline/offline.sh stop
+  ./scripts/offline/offline.sh start
   ./scripts/offline/offline.sh logs
   ./scripts/offline/offline.sh ps
   ./scripts/offline/offline.sh status
@@ -452,6 +454,113 @@ logs_cmd() {
   compose_cmd logs -f --tail=200 web db_app portal_db_test
 }
 
+runtime_services() {
+  load_compose_env
+
+  local portal_mode="${PORTAL_MODE:-local}"
+  local service
+  local services=()
+
+  while IFS= read -r service; do
+    [[ -n "${service}" ]] || continue
+    case "${service}" in
+      restore_*|migrate_*)
+        continue
+        ;;
+      portal_db_test)
+        if [[ "${portal_mode}" == "remote" ]]; then
+          log "PORTAL_MODE=remote detected: skipping portal_db_test"
+          continue
+        fi
+        ;;
+    esac
+    services+=("${service}")
+  done < <(compose_cmd config --services)
+
+  if [[ "${#services[@]}" -eq 0 ]]; then
+    die "No runtime services detected in compose"
+  fi
+
+  printf '%s\n' "${services[@]}"
+}
+
+service_running() {
+  local service="$1"
+  local container_id
+
+  container_id="$(compose_cmd ps -q "${service}")"
+  [[ -n "${container_id}" ]] || return 1
+
+  [[ "$(docker inspect -f '{{.State.Running}}' "${container_id}" 2>/dev/null || true)" == "true" ]]
+}
+
+service_exists() {
+  local service="$1"
+  [[ -n "$(compose_cmd ps -a -q "${service}")" ]]
+}
+
+stop_cmd() {
+  local services=()
+  mapfile -t services < <(runtime_services)
+
+  local running_count=0
+  local service
+  for service in "${services[@]}"; do
+    if service_running "${service}"; then
+      running_count=$((running_count + 1))
+    fi
+  done
+
+  if [[ "${running_count}" -eq 0 ]]; then
+    log "Stopping services: ${services[*]}"
+    log "already stopped"
+    log "Done"
+    return
+  fi
+
+  log "Stopping services: ${services[*]}"
+  compose_cmd stop "${services[@]}"
+  log "stop completed"
+  log "Done"
+}
+
+start_cmd() {
+  local services=()
+  mapfile -t services < <(runtime_services)
+
+  local all_running=1
+  local all_exist=1
+  local service
+
+  for service in "${services[@]}"; do
+    if ! service_exists "${service}"; then
+      all_exist=0
+      all_running=0
+      continue
+    fi
+    if ! service_running "${service}"; then
+      all_running=0
+    fi
+  done
+
+  log "Starting services: ${services[*]}"
+
+  if [[ "${all_running}" -eq 1 ]]; then
+    log "already running"
+    log "Done"
+    return
+  fi
+
+  if [[ "${all_exist}" -eq 1 ]]; then
+    compose_cmd start "${services[@]}"
+  else
+    compose_cmd up -d --no-build "${services[@]}"
+  fi
+
+  log "start completed"
+  log "Done"
+}
+
 main() {
   local cmd="${1:-}"
   case "${cmd}" in
@@ -464,6 +573,12 @@ main() {
       ;;
     up)
       up_cmd
+      ;;
+    stop)
+      stop_cmd
+      ;;
+    start)
+      start_cmd
       ;;
     restore)
       restore_cmd "1"
