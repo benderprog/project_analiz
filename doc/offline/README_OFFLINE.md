@@ -80,6 +80,8 @@ Runtime helper commands:
 ```bash
 bash scripts/offline/offline.sh ps
 bash scripts/offline/offline.sh logs
+bash scripts/offline/offline.sh stop
+bash scripts/offline/offline.sh start
 bash scripts/offline/offline.sh down
 # optional: force dump restore on next up
 OFFLINE_RESTORE=1 bash scripts/offline/offline.sh up
@@ -87,11 +89,18 @@ OFFLINE_RESTORE=1 bash scripts/offline/offline.sh up
 bash scripts/offline/offline.sh reset-db
 ```
 
+Operational lifecycle:
+
+- First deployment in closed contour: `import -> up`
+- Routine restart without teardown: `stop -> start`
+- `start` is operational only: it does **not** run DB restore and does **not** run migrations.
+
 ## 3a) DB persistence and restore policy
 
 - `db_app` and `portal_db_test` store Postgres data in named Docker volumes mounted to `/var/lib/postgresql/data`.
 - First `up` on empty volumes performs restore from bundled dumps.
 - Later `up`/`down`/`up` cycles do **not** overwrite DB data.
+- `stop`/`start` preserves containers, networks, and volumes by design.
 - `restore` command now means explicit re-restore from dumps (force mode).
 - For full factory reset use `reset-db` (removes volumes and recreates DBs from dumps).
 
