@@ -1,3 +1,4 @@
+import logging
 from django.contrib import messages
 from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
@@ -23,8 +24,10 @@ from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_na
 from apps.analysis_app.utils.json_safe import offender_to_json
 from apps.analysis_app.utils.offender_format import offender_display
 
-
 TIME_ERROR_MINUTES = int(getattr(settings, "TIME_ERROR_MINUTES", 30))
+
+
+logger = logging.getLogger(__name__)
 
 
 def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
@@ -231,9 +234,22 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         if is_strong:
             strong_spans.append((start, end))
 
-    date_span = _find_datetime_span(text)
-    if date_span:
-        _add_span(date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}")
+    timestamp_css = f"hl-{_status_for_timestamp(match_result)}"
+    date_span = extracted.get("date_span")
+    time_span = extracted.get("time_span")
+    if isinstance(date_span, (list, tuple)) and len(date_span) == 2:
+        _add_span(int(date_span[0]), int(date_span[1]), timestamp_css)
+    else:
+        fallback_date_span = _find_datetime_span(text)
+        if fallback_date_span:
+            _add_span(int(fallback_date_span[0]), int(fallback_date_span[1]), timestamp_css)
+    if isinstance(time_span, (list, tuple)) and len(time_span) == 2:
+        time_span_tuple = (int(time_span[0]), int(time_span[1]))
+        _add_span(time_span_tuple[0], time_span_tuple[1], timestamp_css)
+        logger.debug("time highlight applied span=%s", time_span_tuple)
+    else:
+        logger.debug("time highlight skipped (no time span)")
+
 
     subdivision_span = extracted.get("subdivision_span")
     if subdivision_span:
@@ -461,6 +477,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         or "article_classifier_ok" not in match_result
         or "article_status" not in match_result
         or "article_spans" not in extracted
+        or "date_span" not in extracted
+        or "time_span" not in extracted
         or (
             match_result.get("matched") is True
             and (
@@ -479,6 +497,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             extracted = {
                 "date_time": format_local_naive(extracted_attrs.date_time),
                 "time_found": extracted_attrs.time_found,
+                "date_span": list(extracted_attrs.date_span) if extracted_attrs.date_span else None,
+                "time_span": list(extracted_attrs.time_span) if extracted_attrs.time_span else None,
                 "subdivision_id": extracted_attrs.subdivision_id,
                 "subdivision_name": extracted_attrs.subdivision_name,
                 "subdivision_candidates": extracted_attrs.subdivision_candidates,
@@ -646,6 +666,8 @@ class UploadView(View):
                     extracted_attributes={
                         "date_time": format_local_naive(attributes.date_time),
                         "time_found": attributes.time_found,
+                        "date_span": list(attributes.date_span) if attributes.date_span else None,
+                        "time_span": list(attributes.time_span) if attributes.time_span else None,
                         "subdivision_id": attributes.subdivision_id,
                         "subdivision_name": attributes.subdivision_name,
                         "subdivision_candidates": attributes.subdivision_candidates,

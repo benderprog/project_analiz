@@ -1226,6 +1226,33 @@ class Stage4OffenderFallbackTests(TestCase):
 
 
 class HighlightedHtmlOffenderStatusTests(TestCase):
+
+    def test_build_highlighted_html_highlights_date_and_time_word_form(self):
+        text = "24 марта 2022 года в 6:00 произошло событие"
+        extracted = {
+            "date_span": [0, 18],
+            "time_span": [19, 25],
+            "offenders": [],
+        }
+
+        html = _build_highlighted_html(text, extracted, {"matched": True, "time_delta_minutes": 0})
+
+        self.assertIn('<span class="hl hl-green">24 марта 2022 года</span>', html)
+        self.assertIn('<span class="hl hl-green">в 6:00</span>', html)
+
+    def test_build_highlighted_html_highlights_date_and_time_numeric_form(self):
+        text = "24.03.2022 06.00 произошло событие"
+        extracted = {
+            "date_span": [0, 10],
+            "time_span": [11, 16],
+            "offenders": [],
+        }
+
+        html = _build_highlighted_html(text, extracted, {"matched": True, "time_delta_minutes": 0})
+
+        self.assertIn('<span class="hl hl-green">24.03.2022</span>', html)
+        self.assertIn('<span class="hl hl-green">06.00</span>', html)
+
     def test_build_highlighted_html_uses_span_status_for_name_and_dob(self):
         text = "Иванов Иван Иванович 1980 г.р.; Петров Петр Петрович 01.01.1990"
         extracted = {
