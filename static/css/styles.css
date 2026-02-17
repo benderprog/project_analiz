@@ -209,6 +209,22 @@ body {
   background: #c62828;
 }
 
+.badge-neutral {
+  background: #757575;
+}
+
+.detail-block h4 .badge {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.event-article-label {
+  margin: 0 8px;
+  font-size: 0.95em;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
 .hl {
   padding: 0 2px;
   border-radius: 4px;

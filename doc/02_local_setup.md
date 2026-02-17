@@ -1,36 +1,66 @@
 # Локальный запуск
 
-## Зависимости
+## 1) Зависимости
+
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-`requirements.txt` включает WhiteNoise, необходимый для работы middleware статических файлов при локальном запуске.
 
-## Переменные окружения
-Скопируйте `.env.example` в `.env` и настройте параметры БД.
+`requirements.txt` включает `whitenoise` для корректной обработки static-файлов.
 
-Обратите внимание на настройки семантической модели:
-- `SEMANTIC_MODEL_NAME` — имя модели (по умолчанию `paraphrase-multilingual-MiniLM-L12-v2`).
-- `SEMANTIC_MODEL_PATH` — путь к локальной копии модели (если задан, загрузка идет только с диска).
+## 2) Переменные окружения
 
-## Миграции
+```bash
+cp .env.example .env
+```
+
+Ключевые группы переменных:
+
+- App DB: `APP_DB_*`
+- Portal DB (основной профиль): `PORTAL_DB_*`
+- Portal DB test-профиль для админ-кнопки «Тестовая БД»: `PORTAL_DB_TEST_*`
+- Семантическая модель: `SEMANTIC_MODEL_NAME`, `SEMANTIC_MODEL_PATH`
+
+Для закрытого контура выставьте offline-флаги:
+
+```bash
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+```
+
+Подробная карта переменных и runtime-поведения: [24_runtime_env_and_portal_db.md](./24_runtime_env_and_portal_db.md).
+
+## 3) Миграции
+
 ```bash
 python manage.py migrate
 python manage.py migrate --database=portal
 ```
 
-## Запуск тестов
-Unit-тесты по умолчанию используют SQLite и не требуют Postgres.
-Подробности — в [документации по тестированию](06_testing.md).
+## 4) Запуск приложения
 
-## Запуск
 ```bash
-python manage.py runserver
+python manage.py runserver 0.0.0.0:8000
 ```
 
 Доступные страницы:
+
 - `/upload/`
 - `/analysis/<uuid>/`
-- `/admin/` (логин/пароль `admin/admin` создается автоматически)
+- `/admin/`
+
+## 5) Запуск тестов
+
+Unit-тесты по умолчанию используют SQLite и не требуют Postgres.
+
+```bash
+python manage.py test
+# или
+./scripts/test.sh
+# или
+make test
+```
+
+Подробности: [06_testing.md](./06_testing.md).

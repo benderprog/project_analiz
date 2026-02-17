@@ -8,6 +8,7 @@ from django.template.loader import render_to_string
 from django.test import TestCase
 from django.utils import timezone
 
+from apps.classifier.models import EventType, EventTypePattern
 from apps.analysis_app.services import (
     DEFAULT_DOB,
     ExtractedAttributes,
@@ -108,6 +109,137 @@ class MatchingTests(TestCase):
         self.assertEqual(result["offenders_counts"]["matched"], 1)
         self.assertEqual(result["offenders_counts"]["svodka_total"], 2)
         self.assertEqual(result["offenders_counts"]["portal_total"], 1)
+
+    def test_match_event_sets_event_type_and_article_flags_separately(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="Отдел ET", parent_pu=pu
+        )
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="12.1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+        )
+
+        with patch("apps.analysis_app.services._classify_event_type", return_value=("Тип", "12.1", None)):
+            result_ok = match_event(attributes, "Тестовый текст")
+        self.assertTrue(result_ok["event_type_ok"])
+        self.assertTrue(result_ok["article_ok"])
+
+        with patch("apps.analysis_app.services._classify_event_type", return_value=("Тип", "99.9", None)):
+            result_article_bad = match_event(attributes, "Тестовый текст")
+        self.assertTrue(result_article_bad["event_type_ok"])
+        self.assertFalse(result_article_bad["article_ok"])
+        self.assertNotIn("event_type", result_article_bad["diffs"])
+        self.assertIn("article_of_law", result_article_bad["diffs"])
+
+        with patch("apps.analysis_app.services._classify_event_type", return_value=("Другой тип", "12.1", None)):
+            result_type_bad = match_event(attributes, "Тестовый текст")
+        self.assertFalse(result_type_bad["event_type_ok"])
+
+
+    def test_match_event_type_matches_when_portal_article_is_null(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="Отдел NULL", parent_pu=pu
+        )
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Курил в неустановленном месте",
+            article_of_law="NULL",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+        )
+
+        with patch(
+            "apps.analysis_app.services._classify_event_type",
+            return_value=("Курил в неустановленном месте", "18.4 ч.2", None),
+        ):
+            result = match_event(attributes, "Тестовый текст")
+
+        self.assertTrue(result["event_type_ok"])
+        self.assertFalse(result["article_ok"])
+
+    def test_match_event_normalizes_article_when_comparing(self):
+        pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
+        subdivision = Subdivision.objects.using("portal").create(
+            name="Отдел ART", parent_pu=pu
+        )
+        event_time = timezone.now()
+        event = Event.objects.using("portal").create(
+            date_detection=event_time,
+            find_subdivision_unit=subdivision,
+            event_type="Тип",
+            article_of_law="18.1ч1",
+        )
+        Offender.objects.using("portal").create(
+            first_name="Иван",
+            second_name="Иванов",
+            patronymic_name="Иванович",
+            date_of_birth=timezone.datetime(1990, 1, 1).date(),
+            event=event,
+        )
+
+        attributes = ExtractedAttributes(
+            date_time=event_time,
+            time_found=True,
+            subdivision_id=str(subdivision.subdivision_id),
+            offenders=[
+                {
+                    "full_name": "Иванов Иван Иванович",
+                    "birth_year": 1990,
+                }
+            ],
+            subdivision_name=subdivision.name,
+        )
+
+        with patch("apps.analysis_app.services._classify_event_type", return_value=("Тип", "18.1 ч. 1", None)):
+            result = match_event(attributes, "Тестовый текст")
+
+        self.assertTrue(result["event_type_ok"])
+        self.assertTrue(result["article_ok"])
 
     def test_match_event_local_naive_time_delta(self):
         pu = Pu.objects.using("portal").create(full_name="PU", short_name="PU")
@@ -675,6 +807,69 @@ class TemplateRenderingTests(TestCase):
         self.assertNotIn("{{ selected_event.match.offenders_counts", html)
 
 
+    def test_detail_template_renders_exactly_two_event_type_badges(self):
+        event = {
+            "idx": 1,
+            "preview": "preview",
+            "highlighted_html": "text",
+            "extracted_timestamp_display": "—",
+            "portal_timestamp_display": "—",
+            "extracted": {
+                "subdivision_name": None,
+                "subdivision_candidates": [],
+                "offenders": [],
+                "staff": [],
+            },
+            "portal": {
+                "subdivision_name": None,
+                "offenders": [],
+                "event_type": "Курил в неустановленном месте",
+                "article_of_law": "NULL",
+            },
+            "predicted": {
+                "event_type": "Курил в неустановленном месте",
+                "article_of_law": "18.4 ч.2",
+            },
+            "status": {
+                "timestamp": "green",
+                "subdivision": "green",
+                "offenders": "green",
+                "event_type": "green",
+                "article": "red",
+            },
+            "match": {
+                "matched": True,
+                "score_percent": 100,
+                "time_delta_minutes": 0,
+                "subdivision_match_percent": 100,
+                "offenders_summary": "Совпало нарушителей: 0 из 0",
+                "offenders_details": [],
+                "offenders_counts": {
+                    "matched": 0,
+                    "portal_total": 0,
+                    "svodka_total": 0,
+                    "dob_mismatch": 0,
+                    "missing_in_portal": 0,
+                    "missing_in_svodka": 0,
+                },
+            },
+            "comments": ["Статья закона отличается от классификации."],
+        }
+        run = SimpleNamespace(run_id="run-1", status="done")
+        html = render_to_string(
+            "analysis_app/detail.html",
+            {
+                "run": run,
+                "events": [event],
+                "selected_event": event,
+            },
+        )
+
+        self.assertEqual(html.count('data-badge="event-type"'), 1)
+        self.assertEqual(html.count('data-badge="article"'), 1)
+
+
+
 class OffenderReportDeduplicationTests(TestCase):
     def test_missing_in_svodka_report_is_deduplicated(self):
         match_result = {
@@ -1062,3 +1257,211 @@ class HighlightedHtmlOffenderStatusTests(TestCase):
         self.assertIn('<span class="hl hl-yellow">1980 г.р.;</span>', html)
         self.assertIn('<span class="hl hl-red">Петров Петр Петрович</span>', html)
         self.assertIn('<span class="hl hl-red">01.01.1990</span>', html)
+
+    def test_build_highlighted_html_highlights_staff_rank_and_name_in_green(self):
+        text = "(пр-к Кылосова О.Д.), гражданин РФ Иванов Иван Иванович"
+        staff_text = "пр-к Кылосова О.Д."
+        staff_start = text.index(staff_text)
+        extracted = {
+            "staff": [
+                {
+                    "display": staff_text,
+                    "span": [staff_start, staff_start + len(staff_text)],
+                }
+            ],
+            "offenders": [],
+        }
+
+        html = _build_highlighted_html(text, extracted, {})
+
+        self.assertIn('<span class="hl hl-green hl-staff">пр-к Кылосова О.Д.</span>', html)
+
+    def test_build_highlighted_html_highlights_event_pattern_matches(self):
+        text = "Нарушитель: Иванов Иван Иванович. Составлен протокол. Составлен протокол повторно."
+        offender_text = "Иванов Иван Иванович"
+        offender_start = text.index(offender_text)
+        extracted = {
+            "offenders": [
+                {
+                    "full_name": offender_text,
+                    "span": [offender_start, offender_start + len(offender_text)],
+                }
+            ]
+        }
+        first_phrase_start = text.index("Составлен протокол")
+        second_phrase_start = text.rindex("Составлен протокол")
+        match_result = {
+            "predicted": {
+                "event_pattern": {
+                    "spans": [
+                        [offender_start, offender_start + 9],
+                        [first_phrase_start, first_phrase_start + len("Составлен протокол")],
+                        [second_phrase_start, second_phrase_start + len("Составлен протокол")],
+                    ]
+                }
+            }
+        }
+
+        html = _build_highlighted_html(text, extracted, match_result)
+
+        self.assertEqual(html.count("hl-eventpattern"), 2)
+        self.assertIn('<span class="hl hl-green hl-eventpattern">Составлен протокол</span>', html)
+        self.assertIn('<span class="hl hl-yellow">Иванов Иван Иванович</span>', html)
+    def test_build_highlighted_html_handles_none_predicted(self):
+        html = _build_highlighted_html("текст", {}, {"predicted": None})
+
+        self.assertIsInstance(html, str)
+
+    def test_build_highlighted_html_handles_none_event_pattern(self):
+        html = _build_highlighted_html("текст", {}, {"predicted": {"event_pattern": None}})
+
+        self.assertIsInstance(html, str)
+
+    def test_build_highlighted_html_handles_none_event_pattern_spans(self):
+        html = _build_highlighted_html("текст", {}, {"predicted": {"event_pattern": {"spans": None}}})
+
+        self.assertIsInstance(html, str)
+
+
+
+class EventPatternClassificationTests(TestCase):
+    def test_match_event_exposes_pattern_spans_for_predicted_event(self):
+        event_type = EventType.objects.create(event_type="Составление протокола")
+        EventTypePattern.objects.create(
+            event_type=event_type,
+            pattern=r"составлен\s+протокол",
+            article_of_law="12.1",
+        )
+        text = "В ходе рейда составлен протокол и затем составлен протокол повторно."
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})):
+            result = match_event(attributes, text)
+
+        predicted = result["predicted"]
+        self.assertEqual(predicted["event_type"], "Составление протокола")
+        self.assertEqual(predicted["article_of_law"], "12.1")
+        self.assertIsNotNone(predicted["event_pattern"])
+        self.assertEqual(len(predicted["event_pattern"]["spans"]), 2)
+        self.assertEqual(
+            predicted["event_pattern"]["matched_texts"],
+            ["составлен протокол", "составлен протокол"],
+        )
+
+    def test_semantic_fallback_matches_pattern_with_typo_and_spans(self):
+        event_type = EventType.objects.create(event_type="Финансирование ВСУ")
+        EventTypePattern.objects.create(
+            event_type=event_type,
+            pattern="признаки финансирования ВСУ",
+            article_of_law="20.3.3",
+        )
+        text = "В сообщении установлены признаки финансрования ВСУ через третьих лиц."
+
+        class StubSemanticModel:
+            def encode(self, texts):
+                vectors = []
+                for item in texts:
+                    lowered = item.lower()
+                    vectors.append([
+                        1.0 if "признаки" in lowered else 0.0,
+                        1.0 if ("финансирован" in lowered or "финансрован" in lowered) else 0.0,
+                        1.0 if "всу" in lowered else 0.0,
+                    ])
+                return vectors
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_sentence_model", return_value=StubSemanticModel()), \
+             patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})), \
+             self.settings(SKIP_SEMANTIC_MODEL=False):
+            from apps.analysis_app import services as services_module
+            services_module._get_event_pattern_embedding_cache.cache_clear()
+            result = match_event(attributes, text)
+
+        predicted = result["predicted"]
+        self.assertEqual(predicted["event_type"], "Финансирование ВСУ")
+        self.assertEqual(predicted["article_of_law"], "20.3.3")
+        self.assertEqual(predicted["event_pattern"]["method"], "semantic")
+        highlighted = [text[start:end].lower() for start, end in predicted["event_pattern"]["spans"]]
+        self.assertTrue(any("признаки" in piece for piece in highlighted))
+        self.assertTrue(any("всу" in piece for piece in highlighted))
+
+    def test_semantic_fallback_does_not_match_random_text_below_threshold(self):
+        event_type = EventType.objects.create(event_type="Контрабанда")
+        EventTypePattern.objects.create(
+            event_type=event_type,
+            pattern="незаконное перемещение товаров через границу",
+            article_of_law="201",
+        )
+
+        class StubSemanticModel:
+            def encode(self, texts):
+                return [[0.0, 0.0, 0.0] for _ in texts]
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_sentence_model", return_value=StubSemanticModel()), \
+             patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})), \
+             self.settings(EVENT_PATTERN_SEMANTIC_THRESHOLD=0.2, SKIP_SEMANTIC_MODEL=False):
+            from apps.analysis_app import services as services_module
+            services_module._get_event_pattern_embedding_cache.cache_clear()
+            result = match_event(attributes, "абсолютно случайный текст без тематических совпадений")
+
+        self.assertIsNone(result["predicted"]["event_pattern"])
+        self.assertIsNone(result["predicted"]["event_type"])
+
+    def test_exact_match_has_priority_over_semantic_fallback(self):
+        event_type_exact = EventType.objects.create(event_type="Точный тип")
+        event_type_semantic = EventType.objects.create(event_type="Семантический тип")
+        EventTypePattern.objects.create(
+            event_type=event_type_exact,
+            pattern="составлен протокол",
+            article_of_law="12.1",
+        )
+        EventTypePattern.objects.create(
+            event_type=event_type_semantic,
+            pattern="совершенно другой шаблон",
+            article_of_law="99.9",
+        )
+
+        class StubSemanticModel:
+            def encode(self, texts):
+                return [[1.0, 1.0, 1.0] for _ in texts]
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+        )
+
+        with patch("apps.analysis_app.services.get_sentence_model", return_value=StubSemanticModel()), \
+             patch("apps.analysis_app.services.get_event_candidates", return_value=([], {})), \
+             self.settings(SKIP_SEMANTIC_MODEL=False):
+            from apps.analysis_app import services as services_module
+            services_module._get_event_pattern_embedding_cache.cache_clear()
+            result = match_event(attributes, "По делу составлен протокол в отношении нарушителя.")
+
+        self.assertEqual(result["predicted"]["event_type"], "Точный тип")
+        self.assertEqual(result["predicted"]["article_of_law"], "12.1")
+        self.assertEqual(result["predicted"]["event_pattern"]["method"], "exact")

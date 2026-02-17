@@ -222,30 +222,48 @@ def _build_offender_report(match_result: dict) -> dict:
 
 def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> str:
     spans: list[tuple[int, int, str]] = []
+    strong_spans: list[tuple[int, int]] = []
+
+    def _add_span(start: int, end: int, css_class: str, *, is_strong: bool = True) -> None:
+        if end <= start:
+            return
+        spans.append((start, end, css_class))
+        if is_strong:
+            strong_spans.append((start, end))
+
     date_span = _find_datetime_span(text)
     if date_span:
-        spans.append((date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}"))
+        _add_span(date_span[0], date_span[1], f"hl-{_status_for_timestamp(match_result)}")
 
     subdivision_span = extracted.get("subdivision_span")
     if subdivision_span:
-        spans.append(
-            (
-                subdivision_span[0],
-                subdivision_span[1],
-                f"hl-{_status_for_subdivision(match_result)}",
-            )
+        _add_span(
+            subdivision_span[0],
+            subdivision_span[1],
+            f"hl-{_status_for_subdivision(match_result)}",
         )
     else:
         subdivision = extracted.get("subdivision_name")
         subdivision_span = _find_case_insensitive_span(text, subdivision) if subdivision else None
         if subdivision_span:
-            spans.append(
-                (
-                    subdivision_span[0],
-                    subdivision_span[1],
-                    f"hl-{_status_for_subdivision(match_result)}",
-                )
+            _add_span(
+                subdivision_span[0],
+                subdivision_span[1],
+                f"hl-{_status_for_subdivision(match_result)}",
             )
+
+    safe_match_result = match_result or {}
+    article_status = safe_match_result.get("article_status") or _status_from_flag(safe_match_result.get("article_ok"))
+    article_css = {
+        "green": "hl-green",
+        "yellow": "hl-yellow",
+        "red": "hl-red",
+    }.get(article_status)
+    article_spans = extracted.get("article_spans") or []
+    if article_css:
+        for span in article_spans:
+            if isinstance(span, (list, tuple)) and len(span) == 2:
+                _add_span(int(span[0]), int(span[1]), article_css)
 
     offenders = extracted.get("offenders") or []
     status_map = (match_result.get("offender_matches") or {}).get("svodka_status_by_span") or {}
@@ -254,6 +272,7 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         "warn": "hl-yellow",
         "err": "hl-red",
     }
+    offender_spans: list[tuple[int, int]] = []
     for offender in offenders:
         offender_status = status_to_css.get(status_map.get(_status_key_for_offender(offender), "warn"), "hl-yellow")
         full_name = offender.get("full_name")
@@ -263,10 +282,40 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         else:
             offender_span = _find_case_insensitive_span(text, full_name) if full_name else None
         if offender_span:
-            spans.append((offender_span[0], offender_span[1], offender_status))
+            offender_spans.append(offender_span)
+            _add_span(offender_span[0], offender_span[1], offender_status)
         dob_span = offender.get("dob_span")
         if dob_span and len(dob_span) == 2:
-            spans.append((int(dob_span[0]), int(dob_span[1]), offender_status))
+            _add_span(int(dob_span[0]), int(dob_span[1]), offender_status)
+
+    for staff_item in extracted.get("staff") or []:
+        staff_span = staff_item.get("span") if isinstance(staff_item, dict) else None
+        if not (staff_span and len(staff_span) == 2):
+            continue
+        staff_span = (int(staff_span[0]), int(staff_span[1]))
+        overlaps_offender = any(
+            min(staff_span[1], offender_span[1]) - max(staff_span[0], offender_span[0]) > 0
+            for offender_span in offender_spans
+        )
+        if overlaps_offender:
+            continue
+        _add_span(staff_span[0], staff_span[1], "hl-green hl-staff")
+
+    predicted = (match_result or {}).get("predicted")
+    if not isinstance(predicted, dict):
+        predicted = {}
+    event_match = predicted.get("event_type_match") or predicted.get("event_pattern")
+    if not isinstance(event_match, dict):
+        event_match = {}
+    span = event_match.get("span")
+    if isinstance(span, (list, tuple)) and len(span) == 2:
+        event_span = (int(span[0]), int(span[1]))
+        overlaps_strong = any(
+            min(event_span[1], strong_span[1]) - max(event_span[0], strong_span[0]) > 0
+            for strong_span in strong_spans
+        )
+        if not overlaps_strong:
+            _add_span(event_span[0], event_span[1], "hl-green hl-eventpattern", is_strong=False)
 
     return highlight_text(text, spans)
 
@@ -338,10 +387,26 @@ def _build_comments(match_result: dict) -> list[str]:
         comments.append(_locality_mismatch_comment(match_result))
     if "offenders" in diffs:
         comments.append("Нарушители отличаются от данных БД.")
-    if "event_type" in diffs:
+    if match_result.get("event_type_ok") is False:
         comments.append("Тип события отличается от классификации.")
-    if "article_of_law" in diffs:
+    article_status = match_result.get("article_status")
+    article_ok = match_result.get("article_ok")
+    article_classifier_ok = match_result.get("article_classifier_ok")
+    if article_ok is False:
+        comments.append("Статья закона отличается от данных БД.")
+    elif article_ok is True and article_classifier_ok is False:
         comments.append("Статья закона отличается от классификации.")
+
+    classifier_article_raw = (
+        match_result.get("classifier_article_of_law")
+        or (match_result.get("predicted") or {}).get("classifier_article_of_law")
+    )
+    if article_classifier_ok is False:
+        classifier_article = _display_article(classifier_article_raw)
+        if classifier_article:
+            comments.append(f"По классификатору ожидается: {classifier_article}.")
+    if match_result.get("svodka_article_of_law") is None and article_status in {"red", "yellow"}:
+        comments.append("Статья закона не определена в тексте сводки.")
     if match_result.get("time_mismatch"):
         date_diff = (diffs.get("date_time") or {})
         if date_diff.get("message"):
@@ -366,14 +431,75 @@ def _build_comments(match_result: dict) -> list[str]:
     return comments
 
 
+def _status_from_flag(flag: bool | None) -> str:
+    if flag is True:
+        return "green"
+    if flag is False:
+        return "red"
+    return "neutral"
+
+
+def _display_article(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "null" or text in {"-", "—"}:
+        return None
+    return text
+
+
 def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     result = paragraph.result
     extracted = result.extracted_attributes or {}
     match_result = result.match_result or {}
     text = paragraph.text
+
+    needs_backfill = (
+        not match_result
+        or "event_type_ok" not in match_result
+        or "article_ok" not in match_result
+        or "article_classifier_ok" not in match_result
+        or "article_status" not in match_result
+        or "article_spans" not in extracted
+        or (
+            match_result.get("matched") is True
+            and (
+                not isinstance(match_result.get("predicted"), dict)
+                or match_result.get("predicted", {}).get("event_type") is None
+                or match_result.get("predicted", {}).get("classifier_article_of_law") is None
+            )
+        )
+    )
+    if needs_backfill:
+        try:
+            paragraph_run = getattr(paragraph, "run", None)
+            selected_pu_id = getattr(paragraph_run, "selected_pu_id", None)
+            extracted_attrs = extract_attributes(text, selected_pu_id=selected_pu_id)
+            new_match_result = match_event(extracted_attrs, text)
+            extracted = {
+                "date_time": format_local_naive(extracted_attrs.date_time),
+                "time_found": extracted_attrs.time_found,
+                "subdivision_id": extracted_attrs.subdivision_id,
+                "subdivision_name": extracted_attrs.subdivision_name,
+                "subdivision_candidates": extracted_attrs.subdivision_candidates,
+                "subdivision_span": extracted_attrs.subdivision_span,
+                "article_spans": [list(span) for span in extracted_attrs.article_spans],
+                "offenders": [offender_to_json(offender) for offender in extracted_attrs.offenders],
+                "staff": extracted_attrs.staff,
+            }
+            match_result = new_match_result
+            result.extracted_attributes = extracted
+            result.match_result = new_match_result
+            result.save(update_fields=["extracted_attributes", "match_result"])
+        except Exception:  # noqa: BLE001 - page should remain renderable
+            match_result = result.match_result or match_result
     preview = text[:80] + ("…" if len(text) > 80 else "")
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}
+    classifier_article = (
+        match_result.get("classifier_article_of_law")
+        or predicted.get("classifier_article_of_law")
+    )
     extracted_dt = parse_datetime(extracted.get("date_time") or "")
     portal_dt = parse_datetime(portal.get("timestamp") or "")
     extracted_timestamp_display = match_result.get(
@@ -444,16 +570,19 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "subdivision_name": portal.get("subdivision_name"),
             "offenders": _format_offenders(portal.get("offenders") or [], source="portal"),
             "event_type": portal.get("event_type"),
-            "article_of_law": portal.get("article_of_law"),
+            "article_of_law": _display_article(portal.get("article_of_law")),
         },
         "predicted": {
             "event_type": predicted.get("event_type"),
-            "article_of_law": predicted.get("article_of_law"),
+            "article_of_law": _display_article(predicted.get("article_of_law")),
+            "classifier_article_of_law": _display_article(classifier_article),
         },
         "status": {
             "timestamp": _status_for_timestamp(match_result),
             "subdivision": _status_for_subdivision(match_result),
             "offenders": _status_for_offenders(match_result),
+            "event_type": _status_from_flag(match_result.get("event_type_ok")),
+            "article": (match_result.get("article_status") or _status_from_flag(match_result.get("article_ok"))),
         },
         "comments": _build_comments(match_result),
     }
@@ -521,6 +650,7 @@ class UploadView(View):
                         "subdivision_name": attributes.subdivision_name,
                         "subdivision_candidates": attributes.subdivision_candidates,
                         "subdivision_span": attributes.subdivision_span,
+                        "article_spans": [list(span) for span in attributes.article_spans],
                         "offenders": [
                             offender_to_json(offender) for offender in attributes.offenders
                         ],

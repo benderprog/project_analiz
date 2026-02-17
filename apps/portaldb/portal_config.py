@@ -62,6 +62,19 @@ def expand_env_vars(obj):
     return obj
 
 
+def _resolve_password(db_config, settings_module):
+    password = db_config.get("password")
+    if password:
+        return password
+
+    current_password = (
+        (settings_module.get("DATABASES", {}) or {})
+        .get("portal", {})
+        .get("PASSWORD")
+    )
+    return current_password or os.getenv("PORTAL_DB_PASSWORD", "")
+
+
 def get_active_profile(cfg):
     profile_name = os.getenv("PORTAL_PROFILE")
     if not profile_name:
@@ -85,17 +98,22 @@ def apply_portal_database_settings(settings_module, cfg):
     db_config = profile.get("database")
     if not isinstance(db_config, dict):
         raise ValueError("Active profile must define a 'database' mapping.")
+
+    password = _resolve_password(db_config, settings_module)
     engine = db_config.get("engine", "django.db.backends.postgresql")
-    required = ["name", "user", "password", "host", "port"]
+    required = ["name", "user", "host", "port"]
     missing = [key for key in required if not db_config.get(key)]
     if missing:
         missing_list = ", ".join(sorted(missing))
         raise ValueError(f"Portal database config missing values: {missing_list}.")
+    if not password:
+        raise ValueError("Portal database config missing values: password.")
+
     return {
         "ENGINE": engine,
         "NAME": db_config["name"],
         "USER": db_config["user"],
-        "PASSWORD": db_config["password"],
+        "PASSWORD": password,
         "HOST": db_config["host"],
         "PORT": str(db_config["port"]),
     }

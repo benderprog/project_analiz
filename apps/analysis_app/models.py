@@ -167,3 +167,28 @@ class CachedSubdivisionAlias(models.Model):
 
     def __str__(self) -> str:
         return self.alias_text
+
+
+class PortalDbConnectionSettings(models.Model):
+    class Profile(models.TextChoices):
+        TEST = "TEST", "Тестовая"
+        PROD = "PROD", "Боевая"
+
+    profile = models.CharField(max_length=10, choices=Profile.choices, default=Profile.TEST)
+    host = models.CharField(max_length=255, blank=True, default="")
+    port = models.PositiveIntegerField(default=5432)
+    db_name = models.CharField(max_length=255, blank=True, default="")
+    user = models.CharField(max_length=255, blank=True, default="")
+    password_encrypted = models.TextField(blank=True, default="")
+    last_check_ok = models.BooleanField(null=True, default=None)
+    last_check_error = models.TextField(blank=True, default="")
+    last_check_at = models.DateTimeField(null=True, default=None)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Настройка подключения к базе данных"
+        verbose_name_plural = "Настройка подключения к базе данных"
+
+    def __str__(self) -> str:
+        return f"{self.get_profile_display()}: {self.host}:{self.port}/{self.db_name}"

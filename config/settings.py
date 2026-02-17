@@ -26,6 +26,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "apps.analysis_app.middleware.PortalDbRuntimeSettingsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -66,7 +67,7 @@ DATABASES = {
     },
     "portal": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("PORTAL_DB_NAME", "portal_db"),
+        "NAME": os.getenv("PORTAL_DB_NAME", "portal_db_test"),
         "USER": os.getenv("PORTAL_DB_USER", "portal"),
         "PASSWORD": os.getenv("PORTAL_DB_PASSWORD", "portal"),
         "HOST": os.getenv("PORTAL_DB_HOST", "localhost"),
@@ -148,5 +149,8 @@ SUBDIVISION_ACCEPT_THRESHOLD = float(
 )
 SUBDIVISION_LOW_LEXICAL_FACTOR = float(
     os.getenv("SUBDIVISION_LOW_LEXICAL_FACTOR", "0.1")
+)
+EVENT_PATTERN_SEMANTIC_THRESHOLD = float(
+    os.getenv("EVENT_PATTERN_SEMANTIC_THRESHOLD", "0.20")
 )
 PU_SEMANTIC_THRESHOLD = float(os.getenv("PU_SEMANTIC_THRESHOLD", "0.6"))

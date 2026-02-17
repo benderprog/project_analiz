@@ -1,6 +1,9 @@
 {% extends "analysis_app/base.html" %}
 
 {% block content %}
+<style>
+  .badge + .badge { margin-left: .35rem; }
+</style>
 <section class="card">
   <h2>Результаты анализа</h2>
   <p>Run ID: {{ run.run_id }}</p>
@@ -198,20 +201,30 @@
       </div>
 
       <div class="detail-block">
-        <h4>Тип события</h4>
+        <h4>
+          Тип события
+          <span class="badge badge-{{ selected_event.status.event_type }}" data-badge="event-type" title="Тип события">
+            {% if selected_event.status.event_type == "green" %}✓{% elif selected_event.status.event_type == "yellow" %}!{% elif selected_event.status.event_type == "red" %}✕{% else %}—{% endif %}
+          </span>
+          <span class="event-article-label">Статья</span>
+          <span class="badge badge-{{ selected_event.status.article }}" data-badge="article" title="Статья">
+            {% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "yellow" %}!{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}
+          </span>
+        </h4>
         <p id="predicted-type">
           Определено:
-          {{ selected_event.predicted.event_type|default:"не удалось" }}
-          {% if selected_event.predicted.article_of_law %}
-            ({{ selected_event.predicted.article_of_law }})
-          {% endif %}
+          <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
+          (<span data-field="pred-article">{{ selected_event.predicted.article_of_law|default:"—" }}</span>)
         </p>
         <p id="portal-type">
           В БД:
-          {{ selected_event.portal.event_type|default:"не задан" }}
-          {% if selected_event.portal.article_of_law %}
-            ({{ selected_event.portal.article_of_law }})
-          {% endif %}
+          <span data-field="portal-event-type">{{ selected_event.portal.event_type|default:"не задан" }}</span>
+          (<span data-field="portal-article">{{ selected_event.portal.article_of_law|default:"—" }}</span>)
+        </p>
+        <p id="classifier-type">
+          По классификатору:
+          <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
+          (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
       </div>
 
@@ -231,7 +244,7 @@
   {{ events|json_script:"events-data" }}
   <script>
     const events = JSON.parse(document.getElementById("events-data").textContent);
-    const badgeIcons = { green: "✓", yellow: "!", red: "✕" };
+    const badgeIcons = { green: "✓", yellow: "!", red: "✕", neutral: "—" };
     const listItems = document.querySelectorAll(".event-item");
 
     const dom = {
@@ -251,13 +264,21 @@
       metricSubdivision: document.getElementById("metric-subdivision"),
       metricOffenders: document.getElementById("metric-offenders"),
       offendersDetails: document.getElementById("offenders-details"),
-      predictedType: document.getElementById("predicted-type"),
-      portalType: document.getElementById("portal-type"),
       commentsList: document.getElementById("comments-list"),
+      fields: {
+        predEventType: document.querySelector('[data-field="pred-event-type"]'),
+        predArticle: document.querySelector('[data-field="pred-article"]'),
+        portalEventType: document.querySelector('[data-field="portal-event-type"]'),
+        portalArticle: document.querySelector('[data-field="portal-article"]'),
+        clsEventType: document.querySelector('[data-field="cls-event-type"]'),
+        clsArticle: document.querySelector('[data-field="cls-article"]'),
+      },
       badges: {
         timestamp: document.querySelector('[data-badge="timestamp"]'),
         subdivision: document.querySelector('[data-badge="subdivision"]'),
         offenders: document.querySelector('[data-badge="offenders"]'),
+        eventType: document.querySelector('[data-badge="event-type"]'),
+        article: document.querySelector('[data-badge="article"]'),
       },
     };
 
@@ -343,12 +364,23 @@
         badge.textContent = badgeIcons[status] || "✕";
       });
 
-      dom.predictedType.textContent = `Определено: ${
-        event.predicted.event_type || "не удалось"
-      }${event.predicted.article_of_law ? ` (${event.predicted.article_of_law})` : ""}`;
-      dom.portalType.textContent = `В БД: ${
-        event.portal.event_type || "не задан"
-      }${event.portal.article_of_law ? ` (${event.portal.article_of_law})` : ""}`;
+      if (dom.badges.eventType) {
+        const eventTypeStatus = event.status.event_type || "neutral";
+        dom.badges.eventType.className = `badge badge-${eventTypeStatus}`;
+        dom.badges.eventType.textContent = badgeIcons[eventTypeStatus] || "—";
+      }
+      if (dom.badges.article) {
+        const articleStatus = event.status.article || "neutral";
+        dom.badges.article.className = `badge badge-${articleStatus}`;
+        dom.badges.article.textContent = badgeIcons[articleStatus] || "—";
+      }
+
+      if (dom.fields.predEventType) dom.fields.predEventType.textContent = event.predicted?.event_type || "не удалось";
+      if (dom.fields.predArticle) dom.fields.predArticle.textContent = event.predicted?.article_of_law || "—";
+      if (dom.fields.portalEventType) dom.fields.portalEventType.textContent = event.portal?.event_type || "не задан";
+      if (dom.fields.portalArticle) dom.fields.portalArticle.textContent = event.portal?.article_of_law || "—";
+      if (dom.fields.clsEventType) dom.fields.clsEventType.textContent = event.predicted?.event_type || "не удалось";
+      if (dom.fields.clsArticle) dom.fields.clsArticle.textContent = event.predicted?.classifier_article_of_law || "—";
 
       dom.commentsList.innerHTML = renderListItems(event.comments);
     };

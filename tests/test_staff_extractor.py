@@ -7,6 +7,40 @@ from apps.analysis_app.staff_extractor import extract_staff_mentions
 
 
 class StaffExtractorTests(SimpleTestCase):
+    def test_extract_fused_rank_praporshchik(self):
+        text = "... (ст.пр-к Антонов Д.В.), ..."
+
+        staff = extract_staff_mentions(text)
+
+        self.assertEqual(len(staff), 1)
+        self.assertEqual(staff[0].surname, "Антонов")
+        self.assertEqual(staff[0].initials, "Д.В.")
+        self.assertEqual(staff[0].display, "ст.пр-к Антонов Д.В.")
+
+    def test_extract_spaced_rank_praporshchik_normalized_to_fused(self):
+        text = "... (ст. пр-к Антонов Д.В.), ..."
+
+        staff = extract_staff_mentions(text)
+
+        self.assertEqual(len(staff), 1)
+        self.assertEqual(staff[0].display, "ст.пр-к Антонов Д.В.")
+
+    def test_extract_praporshchik_without_st(self):
+        text = "... (пр-к Антонов Д.В.), ..."
+
+        staff = extract_staff_mentions(text)
+
+        self.assertEqual(len(staff), 1)
+        self.assertEqual(staff[0].display, "пр-к Антонов Д.В.")
+
+    def test_extract_fused_rank_with_spaced_initials(self):
+        text = "... (ст.пр-к Антонов Д. В.), ..."
+
+        staff = extract_staff_mentions(text)
+
+        self.assertEqual(len(staff), 1)
+        self.assertEqual(staff[0].display, "ст.пр-к Антонов Д.В.")
+
     def test_extract_parenthetical_rank_and_initials(self):
         text = "пн (ст. л-т Васильев А.А.)"
 

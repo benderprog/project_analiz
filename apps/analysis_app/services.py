@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import uuid
 from collections import defaultdict
@@ -10,6 +11,8 @@ from functools import lru_cache
 from uuid import UUID
 
 from django.conf import settings
+from django.db.models.signals import post_delete, post_save
+from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
@@ -54,6 +57,23 @@ _DOB_YEAR_IN_PARENS_RE = re.compile(
     r"\(\s*(\d{4})\s*(?:г\s*\.?\s*р\.?)?\s*\)",
     re.IGNORECASE,
 )
+
+_EVENT_PATTERN_STOPWORDS = {
+    "что", "этот", "быть", "при", "или", "для", "как", "также", "было", "были", "когда",
+    "года", "год", "так", "того", "под", "над", "между", "без", "лишь", "после", "перед",
+    "если", "весь", "всех", "того", "про", "это", "эти", "этом", "текст", "сводка", "данные",
+    "был", "она", "они", "его", "ему", "нее", "них", "the", "this", "that", "with", "from",
+}
+_EVENT_PATTERN_TOKEN_RE = re.compile(r"[а-яёa-z0-9]+", re.IGNORECASE)
+_EVENT_PATTERN_ACRONYM_RE = re.compile(r"\b[A-ZА-ЯЁ]{2,6}\b")
+_EVENT_PATTERN_LEGAL_GENERIC_TOKENS = {
+    "право", "правонарушение", "правонарушения", "признаки", "признак", "статья",
+    "закона", "кодекса", "материал", "материалы", "дело", "состав", "административн",
+    "уголовн", "российск", "федерации", "нарушение", "лицо", "факт", "установлено",
+}
+_EVENT_PATTERN_WINDOW_MIN = 4
+_EVENT_PATTERN_WINDOW_MAX = 10
+_EVENT_PATTERN_MAX_WINDOWS = 90
 
 
 
@@ -139,6 +159,8 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
+    article_of_law: str | None = None
+    article_spans: list[tuple[int, int]] = field(default_factory=list)
     staff: list[dict] = field(default_factory=list)
     subdivision_candidates: list[dict] = field(default_factory=list)
     subdivision_span: list[int] | None = None
@@ -209,81 +231,148 @@ def _fact_to_datetime(fact) -> datetime | None:
     return None
 
 
-_DATETIME_REGEXES = [
-    re.compile(
-        r"(?:\bв\b\s*)?(?P<time>\d{1,2}[.:]\d{2})\s*(?P<date>\d{2}\.\d{2}\.\d{4})",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?P<date>\d{2}\.\d{2}\.\d{4})\s*(?:,|;|—|-)?\s*(?:\bв\b\s*)?"
-        r"(?P<time>\d{1,2}[.:]\d{2})",
-        re.IGNORECASE,
-    ),
-]
+_RU_MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+
+_DATE_NUMERIC_RE = re.compile(r"\b(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2,4})\b")
+_DATE_WORD_RE = re.compile(
+    r"\b(?P<day>\d{1,2})\s+(?P<month>января|февраля|марта|апреля|мая|июня|июля|августа|"
+    r"сентября|октября|ноября|декабря)\s+(?P<year>\d{2,4})(?:\s*(?:года|г\.?))?\b",
+    re.IGNORECASE,
+)
+
+_TIME_CONTEXT_RE = r"(?:\b(?:в|к|около|примерно|время)\b[\s,:;\-]*)"
+_TIME_HHMM_WITH_CONTEXT_RE = re.compile(
+    rf"{_TIME_CONTEXT_RE}(?P<hour>\d{{1,2}})\s*[.:]\s*(?P<minute>\d{{2}})\b",
+    re.IGNORECASE,
+)
+_TIME_CH_WITH_CONTEXT_RE = re.compile(
+    rf"{_TIME_CONTEXT_RE}(?P<hour>\d{{1,2}})\s*(?:ч|час(?:а|ов)?)\.?\s*"
+    r"(?:(?P<minute>\d{1,2})\s*(?:м|мин(?:ут(?:а|ы)?)?)\.?)?",
+    re.IGNORECASE,
+)
+_TIME_HHMM_FALLBACK_RE = re.compile(r"\b(?P<hour>\d{1,2})\s*[.:]\s*(?P<minute>\d{2})\b", re.IGNORECASE)
+_LEGAL_NEGATIVE_CONTEXT_RE = re.compile(r"(?:\bст\.?|\bстат(?:ья|ьи|ье|ью)|\bч\.?)\s*$", re.IGNORECASE)
 
 
-def _find_datetime_regex_match(text: str) -> re.Match[str] | None:
-    for regex in _DATETIME_REGEXES:
-        match = regex.search(text)
-        if match:
-            return match
-    return None
+def _normalize_datetime_text(text: str) -> str:
+    return (
+        text.replace("ё", "е")
+        .replace("Ё", "Е")
+        .replace("\xa0", " ")
+        .replace("\u202f", " ")
+    )
 
 
-def _parse_time_value(time_str: str) -> tuple[int, int] | None:
-    normalized = time_str.replace(".", ":")
-    parts = normalized.split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
+def _to_four_digit_year(raw_year: int) -> int:
+    if raw_year < 100:
+        return 2000 + raw_year
+    return raw_year
+
+
+def _extract_ru_date(text: str) -> tuple[date | None, tuple[int, int] | None]:
+    normalized = _normalize_datetime_text(text)
+    for match in _DATE_NUMERIC_RE.finditer(normalized):
+        day = int(match.group("day"))
+        month = int(match.group("month"))
+        year = _to_four_digit_year(int(match.group("year")))
+        try:
+            return date(year, month, day), match.span()
+        except ValueError:
+            continue
+
+    for match in _DATE_WORD_RE.finditer(normalized):
+        day = int(match.group("day"))
+        month_name = match.group("month").lower()
+        month = _RU_MONTHS.get(month_name)
+        year = _to_four_digit_year(int(match.group("year")))
+        if month is None:
+            continue
+        try:
+            return date(year, month, day), match.span()
+        except ValueError:
+            continue
+
+    return None, None
+
+
+def _extract_time_parts(match: re.Match[str]) -> tuple[int, int] | None:
+    hour = int(match.group("hour"))
+    minute_raw = match.groupdict().get("minute")
+    minute = int(minute_raw) if minute_raw is not None else 0
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
     return hour, minute
 
 
-def _extract_datetime_regex(text: str) -> tuple[datetime | None, bool]:
-    match = _find_datetime_regex_match(text)
-    if not match:
-        return None, False
+def _has_legal_negative_context(text: str, start: int) -> bool:
+    left_window = text[max(0, start - 16):start]
+    return bool(_LEGAL_NEGATIVE_CONTEXT_RE.search(left_window))
 
-    date_str = match.group("date")
-    time_str = match.group("time")
-    parsed_time = _parse_time_value(time_str)
-    if not parsed_time:
-        return None, False
 
-    try:
-        date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
-    except ValueError:
-        return None, False
+def _extract_ru_time(text: str) -> tuple[int | None, int | None, tuple[int, int] | None]:
+    normalized = _normalize_datetime_text(text)
 
-    hour, minute = parsed_time
-    return datetime.combine(date_obj, time(hour, minute)), True
+    for regex in (_TIME_HHMM_WITH_CONTEXT_RE, _TIME_CH_WITH_CONTEXT_RE):
+        match = regex.search(normalized)
+        if not match:
+            continue
+        parts = _extract_time_parts(match)
+        if parts is None:
+            continue
+        hour, minute = parts
+        return hour, minute, match.span()
+
+    for match in _TIME_HHMM_FALLBACK_RE.finditer(normalized):
+        if _has_legal_negative_context(normalized, match.start()):
+            continue
+        parts = _extract_time_parts(match)
+        if parts is None:
+            continue
+        hour, minute = parts
+        return hour, minute, match.span()
+
+    return None, None, None
 
 
 def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
-    """Extract date/time using regex first, then Natasha; return timezone-aware datetime."""
+    """Extract date/time via Natasha first, then regex fallback; return timezone-aware datetime."""
     from natasha import DatesExtractor
-
-    dt, time_found = _extract_datetime_regex(text)
-    if dt is not None:
-        aware_dt = _to_utc(dt)
-        return aware_dt, time_found
 
     extractor = DatesExtractor(_get_morph())
     matches = list(extractor(text))
-    if not matches:
+    if matches:
+        dt = _fact_to_datetime(matches[0].fact)
+        if dt is not None:
+            time_found = dt.time() != time(0, 0)
+            if not time_found:
+                hour, minute, _ = _extract_ru_time(text)
+                if hour is not None and minute is not None:
+                    dt = datetime.combine(dt.date(), time(hour, minute))
+                    time_found = True
+            return _to_utc(dt), time_found
+
+    date_obj, _ = _extract_ru_date(text)
+    if date_obj is None:
         return None, False
-    dt = _fact_to_datetime(matches[0].fact)
-    if dt is None:
-        return None, False
-    time_found = dt.time() != time(0, 0)
-    aware_dt = _to_utc(dt)
-    return aware_dt, time_found
+
+    hour, minute, _ = _extract_ru_time(text)
+    if hour is not None and minute is not None:
+        return _to_utc(datetime.combine(date_obj, time(hour, minute))), True
+
+    return _to_utc(datetime.combine(date_obj, time(0, 0))), False
 
 
 def _match_end_index(match) -> int | None:
@@ -305,6 +394,163 @@ def _match_end_index(match) -> int | None:
     return None
 
 
+def normalize_article(value: object) -> tuple[str, str | None] | None:
+    if value is None:
+        return None
+    normalized = (
+        str(value)
+        .replace("\xa0", " ")
+        .replace("\u202f", " ")
+        .replace("\u200b", "")
+        .strip()
+        .lower()
+        .replace("ё", "е")
+    )
+    if not normalized or normalized in {"null", "none", "-", "—"}:
+        return None
+
+    part_match = re.search(r"(?:\bч\.?|\bчаст(?:ь|и|е|ью))\s*(\d+)", normalized, re.IGNORECASE)
+    part = part_match.group(1) if part_match else None
+
+    article_match = re.search(
+        r"(?:\bст\.?|\bстатья|\bстатьи|\bстатье|\bстатью)\s*(\d+(?:\.\d+)*)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if article_match:
+        article = article_match.group(1)
+        return article, part
+
+    scrubbed = re.sub(
+        r"(?:\bч\.?|\bчаст(?:ь|и|е|ью))\s*\d+",
+        " ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    fallback_match = re.search(r"\b(\d+(?:\.\d+)*)\b", scrubbed)
+    if not fallback_match:
+        return None
+    return fallback_match.group(1), part
+
+
+def _normalize_portal_article(value: object) -> str | None:
+    normalized = normalize_article(value)
+    if normalized is None:
+        return None
+    article, part = normalized
+    return f"{article}|{part or ''}"
+
+
+_ARTICLE_MARKER_RE = r"(?:ст\.?|статья|статьи|статье|статью)"
+_PART_MARKER_RE = r"(?:ч\.?|част(?:ь|и|е|ью))"
+
+_ARTICLE_WITH_PART_THEN_ARTICLE_RE = re.compile(
+    rf"(?:\bпо\b\s*)?\b{_PART_MARKER_RE}\s*(?P<part>\d+)\s*\b{_ARTICLE_MARKER_RE}\s*(?P<article>\d+(?:\.\d+)*)",
+    re.IGNORECASE,
+)
+_ARTICLE_WITH_ARTICLE_THEN_PART_RE = re.compile(
+    rf"(?:\bпо\b\s*)?\b{_ARTICLE_MARKER_RE}\s*(?P<article>\d+(?:\.\d+)*)\s*\b{_PART_MARKER_RE}\s*(?P<part>\d+)",
+    re.IGNORECASE,
+)
+_PART_OF_ARTICLE_RE = re.compile(
+    rf"\b{_PART_MARKER_RE}\s*(?P<part>\d+)\s*\b{_ARTICLE_MARKER_RE}(?:\s+\d+)?\s*(?P<article>\d+(?:\.\d+)*)",
+    re.IGNORECASE,
+)
+_ARTICLE_ONLY_RE = re.compile(
+    rf"(?:\bпо\b\s*)?\b{_ARTICLE_MARKER_RE}\s*(?P<article>\d+(?:\.\d+)*)",
+    re.IGNORECASE,
+)
+
+
+def _canonical_article(article: str, part: str | None = None) -> str:
+    if part:
+        return f"{article} ч. {part}"
+    return article
+
+
+def extract_article_mentions(text: str) -> tuple[str | None, list[tuple[int, int]]]:
+    if not text:
+        return None, []
+
+    matches: list[tuple[str, tuple[int, int]]] = []
+    for regex in (
+        _ARTICLE_WITH_PART_THEN_ARTICLE_RE,
+        _ARTICLE_WITH_ARTICLE_THEN_PART_RE,
+        _PART_OF_ARTICLE_RE,
+    ):
+        for match in regex.finditer(text):
+            matches.append(
+                (
+                    _canonical_article(match.group("article"), match.group("part")),
+                    (match.start(), match.end()),
+                )
+            )
+
+    if not matches:
+        for match in _ARTICLE_ONLY_RE.finditer(text):
+            matches.append((_canonical_article(match.group("article")), (match.start(), match.end())))
+
+    if not matches:
+        return None, []
+
+    primary = matches[0][0]
+    spans = [span for _, span in matches]
+    return primary, spans
+
+
+def extract_article_of_law(text: str) -> str | None:
+    article, _spans = extract_article_mentions(text)
+    return article
+
+
+def _calc_article_status(
+    extracted_article: str | None,
+    classifier_article: str | None,
+    portal_article: object,
+) -> dict:
+    ex_norm = _normalize_portal_article(extracted_article)
+    cls_norm = _normalize_portal_article(classifier_article)
+    db_norm = _normalize_portal_article(portal_article)
+
+    article_match_db = ex_norm is not None and db_norm is not None and ex_norm == db_norm
+    article_match_classifier = ex_norm is not None and cls_norm is not None and ex_norm == cls_norm
+    if article_match_db and article_match_classifier:
+        article_status = "green"
+    elif article_match_db:
+        article_status = "yellow"
+    else:
+        article_status = "red"
+
+    return {
+        "article_status": article_status,
+        "article_match_db": article_match_db,
+        "article_match_classifier": article_match_classifier,
+    }
+
+
+def _normalize_optional_compare_value(value: object) -> str | None:
+    normalized = normalize_text(value)
+    if not normalized or normalized in {"null", "none", "-", "—"}:
+        return None
+    return normalized
+
+
+def normalize_text(value: object) -> str:
+    if value is None:
+        return ""
+    normalized = (
+        str(value)
+        .replace("\xa0", " ")
+        .replace("\u202f", " ")
+        .replace("\u2007", " ")
+        .replace("\u200b", "")
+        .lower()
+        .replace("ё", "е")
+    )
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
 def _match_start_index(match) -> int | None:
     span_attr = getattr(match, "span", None)
     if span_attr is not None:
@@ -319,6 +565,48 @@ def _match_start_index(match) -> int | None:
         return int(match.start)
     if hasattr(match, "begin"):
         return int(match.begin)
+    return None
+
+
+def _find_datetime_regex_match(text: str) -> re.Match[str] | None:
+    if not isinstance(text, str) or not text:
+        return None
+
+    normalized = _normalize_datetime_text(text)
+
+    for match in _DATE_NUMERIC_RE.finditer(normalized):
+        try:
+            day = int(match.group("day"))
+            month = int(match.group("month"))
+            year = _to_four_digit_year(int(match.group("year")))
+            date(year, month, day)
+            return match
+        except (TypeError, ValueError):
+            continue
+
+    for match in _DATE_WORD_RE.finditer(normalized):
+        month = _RU_MONTHS.get((match.group("month") or "").lower())
+        if month is None:
+            continue
+        try:
+            day = int(match.group("day"))
+            year = _to_four_digit_year(int(match.group("year")))
+            date(year, month, day)
+            return match
+        except (TypeError, ValueError):
+            continue
+
+    for regex in (_TIME_HHMM_WITH_CONTEXT_RE, _TIME_CH_WITH_CONTEXT_RE):
+        match = regex.search(normalized)
+        if match and _extract_time_parts(match) is not None:
+            return match
+
+    for match in _TIME_HHMM_FALLBACK_RE.finditer(normalized):
+        if _has_legal_negative_context(normalized, match.start()):
+            continue
+        if _extract_time_parts(match) is not None:
+            return match
+
     return None
 
 
@@ -386,6 +674,7 @@ def extract_attributes(
 ) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
     date_time, time_found = _extract_datetime(text)
+    article_of_law, article_spans = extract_article_mentions(text)
     offenders_all = extract_offenders(text)
     for offender in offenders_all:
         second_name = offender.get("second_name") or ""
@@ -429,10 +718,34 @@ def extract_attributes(
 
     extracted_staff = extract_staff_mentions(text)
     excluded_staff = build_staff_from_excluded_mentions(excluded_mentions, text)
-    staff_map = {item.display: item.to_dict() for item in extracted_staff}
-    for item in excluded_staff:
-        staff_map.setdefault(item.display, item.to_dict())
-    staff = list(staff_map.values())
+    staff: list[dict] = []
+    seen_staff_keys: set[tuple[str, str, str]] = set()
+    seen_staff_spans: list[tuple[int, int]] = []
+    for item in [*extracted_staff, *excluded_staff]:
+        item_dict = item.to_dict()
+        span = item_dict.get("span")
+        span_tuple = None
+        if isinstance(span, tuple) and len(span) == 2:
+            span_tuple = (int(span[0]), int(span[1]))
+        elif isinstance(span, list) and len(span) == 2:
+            span_tuple = (int(span[0]), int(span[1]))
+
+        if span_tuple:
+            overlaps = any(min(span_tuple[1], s[1]) - max(span_tuple[0], s[0]) > 0 for s in seen_staff_spans)
+            if overlaps:
+                continue
+
+        key = (
+            str(item_dict.get("surname") or "").lower().replace("ё", "е"),
+            str(item_dict.get("initials") or "").lower().replace("ё", "е"),
+            str(item_dict.get("rank_norm") or "").lower().replace("ё", "е"),
+        )
+        if key in seen_staff_keys:
+            continue
+        seen_staff_keys.add(key)
+        if span_tuple:
+            seen_staff_spans.append(span_tuple)
+        staff.append(item_dict)
     subdivision_candidates, candidate_meta = match_subdivision(
         text,
         top_k=5,
@@ -469,6 +782,8 @@ def extract_attributes(
         offenders=offenders,
         staff=staff,
         subdivision_name=subdivision_name,
+        article_of_law=article_of_law,
+        article_spans=article_spans,
         subdivision_candidates=subdivision_candidates,
         subdivision_span=subdivision_span,
         selected_pu_id=selected_pu_id,
@@ -831,7 +1146,296 @@ def _looks_like_regex(pattern: str) -> bool:
     return any(char in pattern for char in ".^$*+?{}[]\\|()")
 
 
-def _classify_event_type(text: str) -> tuple[str | None, str | None]:
+def _collect_pattern_spans(
+    text: str,
+    pattern: str,
+    *,
+    is_regex: bool,
+    max_matches: int = 5,
+) -> list[tuple[int, int]]:
+    if not text or not pattern:
+        return []
+
+    lookup_pattern = pattern if is_regex else re.escape(pattern)
+    try:
+        matches = re.finditer(lookup_pattern, text, re.IGNORECASE)
+    except re.error:
+        logger.warning("Invalid regex pattern skipped: %s", pattern)
+        return []
+
+    spans: list[tuple[int, int]] = []
+    for match in matches:
+        start, end = match.start(), match.end()
+        if end <= start:
+            continue
+        spans.append((start, end))
+        if len(spans) >= max_matches:
+            break
+    return spans
+
+
+def _cosine_similarity(vec_a, vec_b) -> float:
+    numerator = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for a, b in zip(vec_a, vec_b):
+        numerator += float(a) * float(b)
+        norm_a += float(a) * float(a)
+        norm_b += float(b) * float(b)
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return numerator / (math.sqrt(norm_a) * math.sqrt(norm_b))
+
+
+def _extract_key_tokens(value: str, *, min_len: int = 4) -> list[str]:
+    if not value:
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in _EVENT_PATTERN_TOKEN_RE.findall(value.lower().replace("ё", "е")):
+        if len(token) < min_len or token in _EVENT_PATTERN_STOPWORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        result.append(token)
+    return result
+
+
+def _has_token_overlap(pattern: str, text: str) -> bool:
+    pattern_tokens = set(_extract_key_tokens(pattern))
+    if not pattern_tokens:
+        return False
+    text_tokens = set(_extract_key_tokens(text))
+    return bool(pattern_tokens & text_tokens)
+
+
+def _is_edit_distance_le_one(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) < len(right):
+        left, right = right, left
+
+    i = j = edits = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) == len(right):
+            i += 1
+            j += 1
+        else:
+            i += 1
+    if i < len(left) or j < len(right):
+        edits += 1
+    return edits <= 1
+
+
+def _normalize_text_with_mapping(text: str) -> tuple[str, list[int]]:
+    if not text:
+        return "", []
+    chars: list[str] = []
+    mapping: list[int] = []
+    for idx, char in enumerate(text):
+        lowered = char.lower().replace("ё", "е")
+        chars.append(lowered)
+        mapping.append(idx)
+    return "".join(chars), mapping
+
+
+def _build_event_pattern_windows(normalized_text: str) -> list[dict]:
+    matches = list(_EVENT_PATTERN_TOKEN_RE.finditer(normalized_text))
+    if not matches:
+        return []
+
+    windows: list[dict] = []
+    for size in range(_EVENT_PATTERN_WINDOW_MIN, _EVENT_PATTERN_WINDOW_MAX + 1):
+        if size > len(matches):
+            break
+        for start_idx in range(0, len(matches) - size + 1):
+            end_idx = start_idx + size - 1
+            start = matches[start_idx].start()
+            end = matches[end_idx].end()
+            chunk = normalized_text[start:end].strip()
+            if not chunk:
+                continue
+            windows.append({
+                "text": chunk,
+                "span": (start, end),
+                "tokens": [m.group(0) for m in matches[start_idx:end_idx + 1]],
+            })
+            if len(windows) >= _EVENT_PATTERN_MAX_WINDOWS:
+                return windows
+    return windows
+
+
+def _extract_pattern_acronyms(pattern: str) -> set[str]:
+    return {
+        token.lower().replace("ё", "е")
+        for token in _EVENT_PATTERN_ACRONYM_RE.findall(pattern or "")
+    }
+
+
+def _extract_rare_tokens(value: str) -> list[str]:
+    rare_tokens: list[str] = []
+    seen: set[str] = set()
+    for token in _EVENT_PATTERN_TOKEN_RE.findall((value or "").lower().replace("ё", "е")):
+        if len(token) < 5:
+            continue
+        if token in _EVENT_PATTERN_STOPWORDS:
+            continue
+        if token in _EVENT_PATTERN_LEGAL_GENERIC_TOKENS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        rare_tokens.append(token)
+    return rare_tokens
+
+
+def _window_is_generic(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    generic_count = 0
+    for token in tokens:
+        token_norm = token.lower().replace("ё", "е")
+        if token_norm in _EVENT_PATTERN_STOPWORDS:
+            generic_count += 1
+            continue
+        if token_norm in _EVENT_PATTERN_LEGAL_GENERIC_TOKENS:
+            generic_count += 1
+            continue
+        if any(token_norm.startswith(prefix) for prefix in _EVENT_PATTERN_LEGAL_GENERIC_TOKENS if prefix.endswith("н")):
+            generic_count += 1
+    return (generic_count / len(tokens)) >= 0.7
+
+
+def _event_span_to_original(span: tuple[int, int], mapping: list[int]) -> list[int] | None:
+    if not mapping:
+        return None
+    start, end = span
+    if start < 0 or end <= start or end > len(mapping):
+        return None
+    start_idx = mapping[start]
+    end_idx = mapping[end - 1] + 1
+    if end_idx <= start_idx:
+        return None
+    return [int(start_idx), int(end_idx)]
+
+
+@lru_cache(maxsize=1)
+def _get_event_pattern_embedding_cache() -> tuple[dict, ...]:
+    rows = list(EventTypePattern.objects.select_related("event_type"))
+    active_rows = [row for row in rows if (row.pattern or "").strip()]
+    if not active_rows or settings.SKIP_SEMANTIC_MODEL:
+        return ()
+
+    try:
+        model = get_sentence_model()
+    except Exception as exc:  # pragma: no cover - defensive path for unavailable model
+        logger.info("Semantic model unavailable, skipping event semantic match: %s", exc)
+        return ()
+
+    pattern_texts = [row.pattern.strip() for row in active_rows]
+    embeddings = model.encode(pattern_texts)
+    cached: list[dict] = []
+    for row, embedding, pattern_text in zip(active_rows, embeddings, pattern_texts):
+        normalized_pattern = pattern_text.lower().replace("ё", "е")
+        cached.append(
+            {
+                "pattern_id": str(row.event_type_pattern_id),
+                "pattern": pattern_text,
+                "event_type_id": str(row.event_type.event_type_id),
+                "event_type": row.event_type.event_type,
+                "article_of_law": row.article_of_law,
+                "embedding": embedding,
+                "normalized_pattern": normalized_pattern,
+                "acronyms": _extract_pattern_acronyms(pattern_text),
+                "rare_tokens": _extract_rare_tokens(pattern_text),
+            }
+        )
+    return tuple(cached)
+
+
+@receiver(post_save, sender=EventTypePattern)
+@receiver(post_delete, sender=EventTypePattern)
+def _invalidate_event_pattern_embedding_cache(**kwargs) -> None:
+    _get_event_pattern_embedding_cache.cache_clear()
+
+
+def _find_semantic_event_pattern(text: str):
+    cached_patterns = _get_event_pattern_embedding_cache()
+    if not cached_patterns:
+        return None
+
+    try:
+        model = get_sentence_model()
+    except Exception as exc:  # pragma: no cover - defensive path for unavailable model
+        logger.info("Semantic model unavailable, skipping event semantic match: %s", exc)
+        return None
+
+    normalized_text, mapping = _normalize_text_with_mapping(text)
+    windows = _build_event_pattern_windows(normalized_text)
+    if not windows:
+        return None
+
+    window_vectors = model.encode([item["text"] for item in windows])
+    threshold = float(getattr(settings, "EVENT_PATTERN_SEMANTIC_THRESHOLD", 0.20))
+
+    best_match: dict | None = None
+    for pattern in cached_patterns:
+        best_score = -1.0
+        best_window_idx = -1
+        for idx, window_vector in enumerate(window_vectors):
+            score = _cosine_similarity(window_vector, pattern["embedding"])
+            if score > best_score:
+                best_score = score
+                best_window_idx = idx
+        if best_window_idx < 0:
+            continue
+
+        best_window = windows[best_window_idx]
+        final_score = best_score
+
+        acronym_boost = 0.0
+        for acronym in pattern.get("acronyms") or set():
+            if re.search(rf"\b{re.escape(acronym)}\b", normalized_text, re.IGNORECASE):
+                acronym_boost = 0.35
+                break
+
+        rare_token_boost = 0.0
+        for token in pattern.get("rare_tokens") or []:
+            if token in normalized_text:
+                rare_token_boost = 0.15
+                break
+
+        generic_penalty = -0.15 if _window_is_generic(best_window.get("tokens") or []) else 0.0
+        final_score = best_score + acronym_boost + rare_token_boost + generic_penalty
+
+        if final_score < threshold:
+            continue
+
+        candidate = {
+            **pattern,
+            "score": round(float(final_score), 6),
+            "raw_score": round(float(best_score), 6),
+            "span": _event_span_to_original(best_window["span"], mapping),
+            "evidence_text": text[best_window["span"][0]:best_window["span"][1]],
+            "method": "semantic_window",
+        }
+        if best_match is None or candidate["score"] > best_match["score"]:
+            best_match = candidate
+
+    return best_match
+
+
+def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None]:
     lowered = text.lower()
     best_match = None
     best_length = -1
@@ -842,8 +1446,9 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
         if not pattern:
             continue
 
+        is_regex = _looks_like_regex(pattern)
         matched = False
-        if _looks_like_regex(pattern):
+        if is_regex:
             try:
                 matched = re.search(pattern, lowered, re.IGNORECASE) is not None
             except re.error:
@@ -858,10 +1463,43 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None]:
                 best_match = row
                 best_length = match_length
 
-    if not best_match:
-        return None, None
+    if best_match:
+        best_pattern = best_match.pattern.strip()
+        pattern_spans = _collect_pattern_spans(
+            text,
+            best_pattern,
+            is_regex=_looks_like_regex(best_pattern),
+            max_matches=1,
+        )
+        span = list(pattern_spans[0]) if pattern_spans else None
+        evidence_text = text[span[0]:span[1]] if span else None
+        event_pattern = {
+            "event_type_id": str(best_match.event_type.event_type_id),
+            "event_type_label": best_match.event_type.event_type,
+            "pattern_id": str(best_match.event_type_pattern_id),
+            "pattern_text": best_pattern,
+            "score": 1.0,
+            "method": "exact",
+            "span": span,
+            "evidence_text": evidence_text,
+        }
+        return best_match.event_type.event_type, best_match.article_of_law, event_pattern
 
-    return best_match.event_type.event_type, best_match.article_of_law
+    semantic_match = _find_semantic_event_pattern(text)
+    if not semantic_match:
+        return None, None, None
+
+    event_pattern = {
+        "event_type_id": semantic_match["event_type_id"],
+        "event_type_label": semantic_match["event_type"],
+        "pattern_id": semantic_match["pattern_id"],
+        "pattern_text": semantic_match["pattern"],
+        "score": semantic_match["score"],
+        "method": semantic_match["method"],
+        "span": semantic_match["span"],
+        "evidence_text": semantic_match["evidence_text"],
+    }
+    return semantic_match["event_type"], semantic_match["article_of_law"], event_pattern
 
 
 def _select_event_by_subdivision_time(
@@ -1268,7 +1906,8 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
-    predicted_type, predicted_article = _classify_event_type(text)
+    predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
+    svodka_article = attributes.article_of_law
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
 
@@ -1372,11 +2011,23 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "portal": None,
             "predicted": {
                 "event_type": predicted_type,
-                "article_of_law": predicted_article,
+                "article_of_law": svodka_article,
+                "classifier_article_of_law": predicted_article,
+                "event_pattern": predicted_event_pattern,
+                "event_type_match": predicted_event_pattern,
             },
             "match_method": None,
             "time_mismatch": False,
             "subdivision_mismatch": False,
+            "event_type_ok": None,
+            "article_ok": False,
+            "article_classifier_ok": False,
+            "article_status": "red",
+            "article_match_db": False,
+            "article_match_classifier": False,
+            "classifier_article_of_law": predicted_article,
+            "svodka_article_of_law": svodka_article,
+            "portal_article_of_law": None,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
             "debug": debug_meta,
         }
@@ -1400,8 +2051,44 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         and offenders_counts.get("missing_in_portal", 0) == 0
         and offenders_counts.get("missing_in_svodka", 0) == 0
     )
-    type_ok = predicted_type and predicted_type == best_event.event.event_type
-    article_ok = predicted_article and predicted_article == best_event.event.article_of_law
+    def _event_type_name(value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        fields = ("name", "event_type", "event_type_name", "label", "title", "display_name")
+        if isinstance(value, dict):
+            for field in fields:
+                field_value = value.get(field)
+                if isinstance(field_value, str) and field_value.strip():
+                    return field_value.strip()
+            return ""
+        for field in fields:
+            field_value = getattr(value, field, None)
+            if isinstance(field_value, str) and field_value.strip():
+                return field_value.strip()
+        return str(value).strip()
+
+    predicted_type_name = _event_type_name(
+        (predicted_event_pattern or {}).get("event_type_label") or predicted_type
+    )
+    portal_type_name = _event_type_name(best_event.event.event_type)
+    predicted_type_normalized = _normalize_optional_compare_value(predicted_type_name)
+    portal_type_normalized = _normalize_optional_compare_value(portal_type_name)
+    if predicted_type_normalized is None and portal_type_normalized is None:
+        event_type_ok = None
+    elif predicted_type_normalized is None or portal_type_normalized is None:
+        event_type_ok = False
+    else:
+        event_type_ok = predicted_type_normalized == portal_type_normalized
+
+    article_meta = _calc_article_status(
+        extracted_article=svodka_article,
+        classifier_article=predicted_article,
+        portal_article=best_event.event.article_of_law,
+    )
+    article_ok = article_meta["article_match_db"]
+    article_classifier_ok = article_meta["article_match_classifier"]
     if not best_flags:
         best_flags = {
             "date_ok": True,
@@ -1410,22 +2097,29 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         }
     best_flags = {
         **best_flags,
-        "type_match": type_ok,
-        "article_match": article_ok,
+        "event_type_ok": event_type_ok,
+        "article_ok": article_ok,
+        "article_classifier_ok": article_classifier_ok,
+        "article_status": article_meta.get("article_status"),
+        "article_match_db": article_meta.get("article_match_db"),
+        "article_match_classifier": article_meta.get("article_match_classifier"),
+        "classifier_article_of_law": predicted_article,
+        "svodka_article_of_law": svodka_article,
         "predicted_type": predicted_type,
-        "predicted_article": predicted_article,
+        "predicted_article": svodka_article,
+        "classifier_article": predicted_article,
         "offenders_score": round(offenders_score * 100, 2),
         "offenders_counts": offenders_counts,
     }
     diffs = {}
-    if not best_flags.get("type_match"):
+    if best_flags.get("event_type_ok") is False:
         diffs["event_type"] = {
-            "expected": best_flags.get("predicted_type"),
-            "actual": best_event.event.event_type,
+            "expected": predicted_type_name,
+            "actual": portal_type_name,
         }
-    if not best_flags.get("article_match"):
+    if article_meta.get("article_status") == "red":
         diffs["article_of_law"] = {
-            "expected": best_flags.get("predicted_article"),
+            "expected": svodka_article,
             "actual": best_event.event.article_of_law,
         }
     if not best_flags.get("subdivision_ok"):
@@ -1498,17 +2192,29 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "timestamp": format_dt_dmy_hm(best_event.event.date_detection),
             "subdivision_name": portal_subdivision_name,
             "offenders": portal_offenders_payload,
-            "event_type": best_event.event.event_type,
+            "event_type": portal_type_name,
             "article_of_law": best_event.event.article_of_law,
         },
         "predicted": {
             "event_type": best_flags.get("predicted_type"),
             "article_of_law": best_flags.get("predicted_article"),
+            "classifier_article_of_law": predicted_article,
+            "event_pattern": predicted_event_pattern,
+            "event_type_match": predicted_event_pattern,
         },
         "offender_matches": offender_matches,
         "match_method": match_method,
         "time_mismatch": time_mismatch,
         "subdivision_mismatch": subdivision_mismatch,
+        "event_type_ok": event_type_ok,
+        "article_ok": article_ok,
+        "article_classifier_ok": article_classifier_ok,
+        "article_status": article_meta.get("article_status"),
+        "article_match_db": article_meta.get("article_match_db"),
+        "article_match_classifier": article_meta.get("article_match_classifier"),
+        "classifier_article_of_law": predicted_article,
+        "svodka_article_of_law": svodka_article,
+        "portal_article_of_law": best_event.event.article_of_law,
         "diffs": diffs,
         "debug": debug_meta,
     }

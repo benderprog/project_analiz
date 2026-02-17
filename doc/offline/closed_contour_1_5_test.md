@@ -34,7 +34,7 @@ bash scripts/prefetch_model.sh --model "paraphrase-multilingual-MiniLM-L12-v2" -
 ./scripts/offline/offline.sh bundle \
   --version 1.5_test \
   --db-app-dump /ABS/PATH/app_db.dump \
-  --db-portal-dump /ABS/PATH/portal_db.dump \
+  --db-portal-dump /ABS/PATH/portal_db_test.dump \
   --with-model \
   --archive
 ```
@@ -42,8 +42,8 @@ bash scripts/prefetch_model.sh --model "paraphrase-multilingual-MiniLM-L12-v2" -
 Bundle output:
 
 - `dist/offline_bundle_1_5_test/artifacts` (docker image archives)
-- `dist/offline_bundle_1_5_test/compose` (`compose.yml`, `.env`, `portal.yml`, optional `models/`, `db_dumps/`)
-- `dist/offline_bundle_1_5_test/db_dumps` (`app_db.dump`, `portal_db.dump`)
+- `dist/offline_bundle_1_5_test/compose` (`compose.yml`, `.env`, `models/`, `db_dumps/`)
+- `dist/offline_bundle_1_5_test/db_dumps` (`app_db.dump`, `portal_db_test.dump`)
 - `dist/offline_bundle_1_5_test/models` (optional copy of local models)
 - `dist/offline_bundle_1_5_test/doc` (runbooks)
 - `dist/offline_bundle_1_5_test/manifest.json` (sha256 list)
@@ -61,18 +61,28 @@ Copy the whole `dist/offline_bundle_1_5_test/` directory (or the `.tar.gz` archi
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh import
 ```
 
-## 5) Offline host: start stack (restore + migrate + web)
+## 5) Offline host: start stack (idempotent restore + migrate + web)
 
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh up
 ```
 
-`up` starts DB containers, restores both bundled dumps, runs Django migrations, then starts `web`.
+`up` starts DB containers and restores bundled dumps only when DB volumes are empty, then runs Django migrations and starts `web`.
 
-If needed, run only restore phase explicitly:
+On repeated starts, restore is skipped and existing data is preserved.
+
+If needed, run explicit forced restore from dumps:
 
 ```bash
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh restore
+# or force via env on up
+OFFLINE_RESTORE=1 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh up
+```
+
+Factory reset (drop volumes + restore + migrate + web):
+
+```bash
+OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh reset-db
 ```
 
 ## 6) Verify app
@@ -89,3 +99,5 @@ OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh logs
 OFFLINE_BUNDLE_DIR=/path/to/offline_bundle_1_5_test ./scripts/offline/offline.sh down
 ```
+
+> `down` no longer removes volumes, so DB data survives stop/start and down/up cycles.
