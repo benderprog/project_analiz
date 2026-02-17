@@ -50,3 +50,21 @@ class DateTimeExtractionTest(SimpleTestCase):
 
         self.assertEqual(dt, datetime(2022, 3, 24, 0, 0, tzinfo=timezone.utc))
         self.assertFalse(time_found)
+
+    def test_numeric_date_does_not_provide_false_time_from_date_prefix(self):
+        dt, time_found = _extract_datetime("13.04.2025 11:30, ПОГК «Очаково»")
+
+        self.assertEqual(dt, datetime(2025, 4, 13, 11, 30, tzinfo=timezone.utc))
+        self.assertTrue(time_found)
+
+    def test_numeric_date_with_dot_time_uses_actual_time(self):
+        dt, time_found = _extract_datetime("13.04.2025 11.30, ПОГК «Очаково»")
+
+        self.assertEqual(dt, datetime(2025, 4, 13, 11, 30, tzinfo=timezone.utc))
+        self.assertTrue(time_found)
+
+    def test_numeric_date_without_time_does_not_hallucinate_time(self):
+        dt, time_found = _extract_datetime("13.04.2025, ПОГК «Очаково»")
+
+        self.assertEqual(dt, datetime(2025, 4, 13, 0, 0, tzinfo=timezone.utc))
+        self.assertFalse(time_found)
