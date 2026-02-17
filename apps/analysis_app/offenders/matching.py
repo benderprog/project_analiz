@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import date
 from difflib import SequenceMatcher
 
+from apps.analysis_app.offenders.constants import PATRONYMIC_SUFFIXES
 from apps.analysis_app.utils.json_safe import offender_to_json
 from apps.analysis_app.utils.offender_format import format_offender_dob
 from .types import (
@@ -215,6 +216,12 @@ def _nominative_variants(value: str, *, part: str) -> set[str]:
             variants.add(value[:-1])
 
     if part == "middle":
+        tokens = [token for token in value.split() if token]
+        while tokens and tokens[-1] in PATRONYMIC_SUFFIXES:
+            tokens = tokens[:-1]
+            stripped = "".join(tokens)
+            if stripped:
+                variants.add(stripped)
         if value.endswith("ича") and len(value) > 4:
             variants.add(value[:-1])
         if value.endswith("ича") and len(value) > 4:

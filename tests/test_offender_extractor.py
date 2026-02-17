@@ -35,6 +35,19 @@ class BirthInfoParserTests(SimpleTestCase):
 
 
 class OffenderExtractorTests(SimpleTestCase):
+    def test_extracts_complex_patronymic_suffix(self):
+        text = "... был задержан Парамонов Инфантил Гильяминович оглы 2000 г.р. ..."
+
+        offenders = extract_offenders(text)
+
+        self.assertEqual(len(offenders), 1)
+        offender = offenders[0]
+        self.assertEqual(offender["second_name"], "Парамонов")
+        self.assertEqual(offender["first_name"], "Инфантил")
+        self.assertEqual(offender["patronymic_name"], "Гильяминович оглы")
+        self.assertIn("оглы", offender["full_name"])
+        self.assertEqual(offender["birth_year"], 2000)
+
     def test_extract_offenders_from_paragraph(self):
         text = (
             "… Смирнова Мария Сергеевна (1996 г.р.) и … "
@@ -46,6 +59,12 @@ class OffenderExtractorTests(SimpleTestCase):
         names = sorted(offender["full_name"] for offender in offenders)
         self.assertEqual(len(names), 2)
         self.assertEqual(names, ["Климов Андрей Олегович", "Смирнова Мария Сергеевна"])
+
+        offenders_by_name = {item["full_name"]: item for item in offenders}
+        smirnova = offenders_by_name["Смирнова Мария Сергеевна"]
+        self.assertEqual(smirnova["second_name"], "Смирнова")
+        self.assertEqual(smirnova["first_name"], "Мария")
+        self.assertEqual(smirnova["patronymic_name"], "Сергеевна")
 
     def test_extracts_surname_initials_without_dots(self):
         text = "Холматов Т З 1984 г.р."

@@ -186,7 +186,7 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
         self.assertEqual(len(result.missing_in_summary), 0)
         self.assertNotIn("с учётом падежа", result.matched_pairs[0].discrepancy or "")
 
-    def test_extract_attributes_normalizes_fio_to_nominative(self):
+    def test_extract_attributes_preserves_surface_fio(self):
         from apps.analysis_app.services import extract_attributes
 
         text = "... у гражданина РФ Орлова Дмитрия Игоревича, 1992 г.р. ..."
@@ -194,8 +194,29 @@ class RussianInflectionOffenderMatchingTests(SimpleTestCase):
             attrs = extract_attributes(text)
 
         self.assertEqual(len(attrs.offenders), 1)
-        self.assertEqual(attrs.offenders[0]["full_name"], "Орлов Дмитрий Игоревич")
+        self.assertEqual(attrs.offenders[0]["full_name"], "Орлова Дмитрия Игоревича")
         self.assertEqual(attrs.offenders[0]["birth_year"], 1992)
+
+    def test_patronymic_suffix_variant_matches_without_suffix(self):
+        mention = _mention(
+            "Парамонов Инфантил Гильяминович оглы",
+            "Парамонов",
+            "Инфантил",
+            "Гильяминович оглы",
+            birth=date(2000, 1, 1),
+        )
+        portal = PortalOffender(
+            "Парамонов Инфантил Гильяминович",
+            "Парамонов",
+            "Инфантил",
+            "Гильяминович",
+            date(2000, 5, 5),
+        )
+
+        result = match_offenders_with_details([mention], [], [portal])
+
+        self.assertEqual(len(result.matched_pairs), 1)
+        self.assertIn(result.matched_pairs[0].match_type, {"exact", "fuzzy"})
 
 
 
