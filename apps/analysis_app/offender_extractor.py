@@ -4,6 +4,7 @@ import re
 from datetime import date, datetime
 from functools import lru_cache
 
+from apps.analysis_app.offenders.constants import PATRONYMIC_SUFFIXES
 from apps.analysis_app.offender_validation import is_valid_person_candidate
 
 STOPWORDS = {
@@ -47,6 +48,13 @@ _CONTEXT_REGEX = re.compile(
     r"(?P<first>[А-ЯЁ][а-яё]+)"
     r"(?:\s+(?P<middle>[А-ЯЁ][а-яё]+))?",
     re.IGNORECASE,
+)
+
+_PATRONYMIC_SUFFIX_PATTERN = "|".join(sorted(PATRONYMIC_SUFFIXES))
+_COMPLEX_FIO_REGEX = re.compile(
+    r"\b(?P<main>[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)?"
+    r"(?:\s+[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)?){1,3})"
+    rf"(?P<suffix>\s+(?:{_PATRONYMIC_SUFFIX_PATTERN}))?\b"
 )
 
 
@@ -256,6 +264,45 @@ def _extract_context(text: str) -> list[dict]:
     return offenders
 
 
+def _extract_complex_regex(text: str) -> list[dict]:
+    offenders = []
+    for match in _COMPLEX_FIO_REGEX.finditer(text):
+        main_tokens = match.group("main").split()
+        suffix = (match.group("suffix") or "").strip()
+        tokens = [*main_tokens, *([suffix] if suffix else [])]
+
+        if len(tokens) < 2:
+            continue
+        if len(tokens) >= 3:
+            last, first = tokens[0], tokens[1]
+            middle = " ".join(tokens[2:])
+        else:
+            last, first = tokens[0], tokens[1]
+            middle = ""
+
+        full_name = " ".join(part for part in (last, first, middle) if part)
+        if not _looks_like_person(last, first, full_name):
+            continue
+        if not is_valid_person_candidate(full_name):
+            continue
+        span = _match_span(match)
+        birth_date, birth_year = parse_birth_info(text, span[1] if span else None)
+        offenders.append(
+            {
+                "full_name": full_name,
+                "second_name": last,
+                "first_name": first,
+                "patronymic_name": middle,
+                "birth_date": birth_date,
+                "birth_year": birth_year,
+                "span": span,
+                "surface_text": text[span[0] : span[1]] if span else full_name,
+                "source": "regex_complex",
+            }
+        )
+    return offenders
+
+
 def _overlaps(span_a: tuple[int, int] | None, span_b: tuple[int, int] | None) -> bool:
     if not span_a or not span_b:
         return False
@@ -266,7 +313,15 @@ def _merge_candidates(primary: list[dict], secondary: list[dict]) -> list[dict]:
     merged = list(primary)
     for candidate in secondary:
         span = candidate.get("span")
-        if any(_overlaps(span, existing.get("span")) for existing in merged):
+        overlap_idx = next((i for i, item in enumerate(merged) if _overlaps(span, item.get("span"))), None)
+        if overlap_idx is not None:
+            existing = merged[overlap_idx]
+            existing_span = existing.get("span")
+            existing_len = (existing_span[1] - existing_span[0]) if existing_span else 0
+            candidate_len = (span[1] - span[0]) if span else 0
+            if candidate_len <= existing_len:
+                continue
+            merged[overlap_idx] = candidate
             continue
         merged.append(candidate)
     return merged
@@ -294,8 +349,10 @@ def _deduplicate(offenders: list[dict]) -> list[dict]:
 
 def extract_offenders(text: str) -> list[dict]:
     natasha = _extract_natasha(text)
+    complex_regex = _extract_complex_regex(text)
     initials = _extract_initials(text)
     context = _extract_context(text)
-    merged = _merge_candidates(natasha, initials)
+    merged = _merge_candidates(natasha, complex_regex)
+    merged = _merge_candidates(merged, initials)
     merged = _merge_candidates(merged, context)
     return _deduplicate(merged)
