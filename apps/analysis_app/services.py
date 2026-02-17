@@ -265,7 +265,7 @@ _TIME_CH_WITH_CONTEXT_RE = re.compile(
     r"(?:(?P<minute>\d{1,2})\s*(?:м|мин(?:ут(?:а|ы)?)?)\.?)?",
     re.IGNORECASE,
 )
-_TIME_HHMM_FALLBACK_RE = re.compile(r"\b(?P<hour>\d{1,2})\s*[.:]\s*(?P<minute>\d{2})\b", re.IGNORECASE)
+_TIME_HHMM_FALLBACK_RE = re.compile(r"\b(?P<hour>\d{1,2})\s*(?P<sep>[.:])\s*(?P<minute>\d{2})\b", re.IGNORECASE)
 _LEGAL_NEGATIVE_CONTEXT_RE = re.compile(r"(?:\bст\.?|\bстат(?:ья|ьи|ье|ью)|\bч\.?)\s*$", re.IGNORECASE)
 
 
@@ -324,7 +324,14 @@ def _has_legal_negative_context(text: str, start: int) -> bool:
     return bool(_LEGAL_NEGATIVE_CONTEXT_RE.search(left_window))
 
 
-def _extract_ru_time(text: str) -> tuple[int | None, int | None, tuple[int, int] | None]:
+def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def _extract_ru_time(
+    text: str,
+    date_span: tuple[int, int] | None = None,
+) -> tuple[int | None, int | None, tuple[int, int] | None]:
     normalized = _normalize_datetime_text(text)
 
     for regex in (_TIME_HHMM_WITH_CONTEXT_RE, _TIME_CH_WITH_CONTEXT_RE):
@@ -337,14 +344,41 @@ def _extract_ru_time(text: str) -> tuple[int | None, int | None, tuple[int, int]
         hour, minute = parts
         return hour, minute, match.span()
 
+    candidates: list[tuple[int, int, tuple[int, int], re.Match[str]]] = []
     for match in _TIME_HHMM_FALLBACK_RE.finditer(normalized):
+        span = match.span()
+        if date_span is not None and _spans_overlap(span, date_span):
+            logger.debug(
+                "skipping time candidate because overlaps date span: text=%r span=%s date_span=%s",
+                match.group(0),
+                span,
+                date_span,
+            )
+            continue
         if _has_legal_negative_context(normalized, match.start()):
             continue
         parts = _extract_time_parts(match)
         if parts is None:
             continue
         hour, minute = parts
-        return hour, minute, match.span()
+        separator = match.groupdict().get("sep")
+        separator_priority = 0 if separator == ":" else 1
+        if date_span is None:
+            distance = match.start()
+        elif match.start() >= date_span[1]:
+            distance = match.start() - date_span[1]
+        else:
+            distance = date_span[0] - match.end()
+        candidates.append((separator_priority, distance, span, match))
+
+    if candidates:
+        separator_priority, distance, span, match = min(candidates, key=lambda item: (item[0], item[1], item[2][0]))
+        del separator_priority, distance
+        parts = _extract_time_parts(match)
+        if parts is not None:
+            hour, minute = parts
+            logger.debug("selected time candidate: text=%r span=%s", match.group(0), span)
+            return hour, minute, span
 
     return None, None, None
 
@@ -369,22 +403,22 @@ def _extract_datetime_details(
             time_found = dt.time() != time(0, 0)
             time_span = None
             if not time_found:
-                hour, minute, time_span = _extract_ru_time(text)
+                hour, minute, time_span = _extract_ru_time(text, natasha_date_span)
                 if hour is not None and minute is not None:
                     dt = datetime.combine(dt.date(), time(hour, minute))
                     time_found = True
             elif time_found:
-                _hour, _minute, time_span = _extract_ru_time(text)
+                _hour, _minute, time_span = _extract_ru_time(text, natasha_date_span)
             return _to_utc(dt), time_found, natasha_date_span, time_span
 
     date_obj, date_span = _extract_ru_date(text)
     if date_obj is None:
-        hour, minute, time_span = _extract_ru_time(text)
+        hour, minute, time_span = _extract_ru_time(text, None)
         if hour is not None and minute is not None:
             return None, False, None, time_span
         return None, False, None, None
 
-    hour, minute, time_span = _extract_ru_time(text)
+    hour, minute, time_span = _extract_ru_time(text, date_span)
     if hour is not None and minute is not None:
         return _to_utc(datetime.combine(date_obj, time(hour, minute))), True, date_span, time_span
 
