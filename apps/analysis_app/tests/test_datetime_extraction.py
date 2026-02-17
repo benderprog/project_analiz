@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from django.test import SimpleTestCase
 
-from apps.analysis_app.services import _extract_datetime, _find_datetime_span
+from apps.analysis_app.services import _extract_datetime, _extract_datetime_details, _find_datetime_span
 
 
 class DateTimeExtractionTest(SimpleTestCase):
@@ -15,6 +15,17 @@ class DateTimeExtractionTest(SimpleTestCase):
         if span is None:
             self.fail("Expected datetime span for valid RU date/time text")
         self.assertEqual("24 марта 2022 года", "24 марта 2022 года в 6:00 произошло событие"[span[0]:span[1]])
+
+
+    def test_extract_datetime_details_returns_date_and_time_spans(self):
+        text = "24 марта 2022 года в 6:00 произошло событие"
+
+        dt, time_found, date_span, time_span = _extract_datetime_details(text)
+
+        self.assertEqual(dt, datetime(2022, 3, 24, 6, 0, tzinfo=timezone.utc))
+        self.assertTrue(time_found)
+        self.assertEqual(text[date_span[0]:date_span[1]], "24 марта 2022 года")
+        self.assertEqual(text[time_span[0]:time_span[1]], "в 6:00")
 
     def test_extracts_word_date_and_hhmm_time(self):
         dt, time_found = _extract_datetime("24 марта 2022 года в 6:00 произошло событие")

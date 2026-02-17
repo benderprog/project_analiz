@@ -159,6 +159,8 @@ class ExtractedAttributes:
     subdivision_id: str | None
     offenders: list[dict]
     subdivision_name: str | None
+    date_span: tuple[int, int] | None = None
+    time_span: tuple[int, int] | None = None
     article_of_law: str | None = None
     article_spans: list[tuple[int, int]] = field(default_factory=list)
     staff: list[dict] = field(default_factory=list)
@@ -347,32 +349,51 @@ def _extract_ru_time(text: str) -> tuple[int | None, int | None, tuple[int, int]
     return None, None, None
 
 
-def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
-    """Extract date/time via Natasha first, then regex fallback; return timezone-aware datetime."""
+def _extract_datetime_details(
+    text: str,
+) -> tuple[datetime | None, bool, tuple[int, int] | None, tuple[int, int] | None]:
+    """Extract date/time via Natasha first, then regex fallback; return timezone-aware datetime + spans."""
     from natasha import DatesExtractor
 
     extractor = DatesExtractor(_get_morph())
     matches = list(extractor(text))
     if matches:
+        match = matches[0]
+        natasha_date_span = None
+        start = _match_start_index(match)
+        end = _match_end_index(match)
+        if start is not None and end is not None:
+            natasha_date_span = (start, end)
         dt = _fact_to_datetime(matches[0].fact)
         if dt is not None:
             time_found = dt.time() != time(0, 0)
+            time_span = None
             if not time_found:
-                hour, minute, _ = _extract_ru_time(text)
+                hour, minute, time_span = _extract_ru_time(text)
                 if hour is not None and minute is not None:
                     dt = datetime.combine(dt.date(), time(hour, minute))
                     time_found = True
-            return _to_utc(dt), time_found
+            elif time_found:
+                _hour, _minute, time_span = _extract_ru_time(text)
+            return _to_utc(dt), time_found, natasha_date_span, time_span
 
-    date_obj, _ = _extract_ru_date(text)
+    date_obj, date_span = _extract_ru_date(text)
     if date_obj is None:
-        return None, False
+        hour, minute, time_span = _extract_ru_time(text)
+        if hour is not None and minute is not None:
+            return None, False, None, time_span
+        return None, False, None, None
 
-    hour, minute, _ = _extract_ru_time(text)
+    hour, minute, time_span = _extract_ru_time(text)
     if hour is not None and minute is not None:
-        return _to_utc(datetime.combine(date_obj, time(hour, minute))), True
+        return _to_utc(datetime.combine(date_obj, time(hour, minute))), True, date_span, time_span
 
-    return _to_utc(datetime.combine(date_obj, time(0, 0))), False
+    return _to_utc(datetime.combine(date_obj, time(0, 0))), False, date_span, None
+
+
+def _extract_datetime(text: str) -> tuple[datetime | None, bool]:
+    dt, time_found, _date_span, _time_span = _extract_datetime_details(text)
+    return dt, time_found
 
 
 def _match_end_index(match) -> int | None:
@@ -673,7 +694,7 @@ def extract_attributes(
     text: str, selected_pu_id: uuid.UUID | None = None
 ) -> ExtractedAttributes:
     """Extract event attributes from a paragraph."""
-    date_time, time_found = _extract_datetime(text)
+    date_time, time_found, date_span, time_span = _extract_datetime_details(text)
     article_of_law, article_spans = extract_article_mentions(text)
     offenders_all = extract_offenders(text)
     for offender in offenders_all:
@@ -778,6 +799,8 @@ def extract_attributes(
     return ExtractedAttributes(
         date_time=date_time,
         time_found=time_found,
+        date_span=date_span,
+        time_span=time_span,
         subdivision_id=subdivision_id,
         offenders=offenders,
         staff=staff,
