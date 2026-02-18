@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.utils import timezone
 
 from apps.analysis_app.models import AnalysisRun
@@ -7,6 +8,17 @@ from apps.analysis_app.services import run_analysis_pipeline
 from config.celery import app
 
 logger = logging.getLogger(__name__)
+
+
+def cleanup_run_upload(run: AnalysisRun) -> None:
+    if not getattr(settings, "ANALYSIS_DELETE_UPLOADS", True):
+        return
+    if not run.file:
+        return
+    try:
+        run.file.delete(save=False)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to cleanup uploaded file for run %s", run.run_id, exc_info=True)
 
 
 @app.task(bind=True)
@@ -33,4 +45,6 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         run.error_message = str(exc)
         run.finished_at = timezone.now()
         run.save(update_fields=["status", "error_message", "finished_at"])
+        cleanup_run_upload(run)
         raise
+    cleanup_run_upload(run)

@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import PurePath
 from datetime import timedelta
 
@@ -631,6 +632,7 @@ class UploadView(View):
             run = AnalysisRun.objects.create(
                 uploaded_by=request.user if request.user.is_authenticated else None,
                 file=upload_form.cleaned_data["file"],
+                original_filename=os.path.basename(upload_form.cleaned_data["file"].name or ""),
                 status=AnalysisRun.Status.CREATED,
             )
             from docx import Document
@@ -669,6 +671,7 @@ class UploadView(View):
 
         if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
             from apps.analysis_app.services import run_analysis_pipeline
+            from apps.analysis_app.tasks import cleanup_run_upload
 
             run.status = AnalysisRun.Status.RUNNING
             run.started_at = timezone.now()
@@ -683,6 +686,7 @@ class UploadView(View):
                 run.error_message = str(exc)
                 run.finished_at = timezone.now()
                 run.save(update_fields=["status", "error_message", "finished_at"])
+            cleanup_run_upload(run)
             return render(
                 request,
                 self.template_name,
@@ -691,7 +695,7 @@ class UploadView(View):
                     "analysis_run_id": str(run.run_id),
                     "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
                     "result_url": redirect("analysis-detail", run_id=run.run_id).url,
-                    "uploaded_filename": _display_filename(run.file.name),
+                    "uploaded_filename": run.original_filename or _display_filename(run.file.name),
                 },
             )
 
@@ -709,7 +713,7 @@ class UploadView(View):
                 "analysis_run_id": str(run.run_id),
                 "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
                 "result_url": redirect("analysis-detail", run_id=run.run_id).url,
-                "uploaded_filename": _display_filename(run.file.name),
+                "uploaded_filename": run.original_filename or _display_filename(run.file.name),
             },
         )
 
@@ -739,6 +743,7 @@ class AnalysisStatusView(View):
             "elapsed_seconds": max(elapsed_seconds, 0),
             "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
             "worker_ok": worker_ok,
+            "uploaded_filename": run.original_filename or _display_filename(run.file.name),
         }
         if run.status == AnalysisRun.Status.DONE:
             payload["result_url"] = redirect("analysis-detail", run_id=run.run_id).url
