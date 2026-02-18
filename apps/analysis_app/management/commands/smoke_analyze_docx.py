@@ -22,7 +22,7 @@ class Command(BaseCommand):
         try:
             paragraphs = parse_docx(str(docx_path))
             if not paragraphs:
-                self.stdout.write("No non-empty paragraphs found.")
+                self.stdout.write("No event paragraphs found after filtering.")
                 return
 
             for idx, text in enumerate(paragraphs, start=1):
