@@ -154,3 +154,18 @@ Model resolution order:
 3. Otherwise fallback to `SEMANTIC_MODEL_NAME` (online/development only).
 
 If offline mode is enabled (`HF_HUB_OFFLINE=1` or `TRANSFORMERS_OFFLINE=1`) and local model is missing, app fails fast with a clear error and no network calls.
+
+
+## 6) Администрирование PROD portal_db (RO) и SQL override
+
+Для эксплуатации в режиме удалённой production БД портала (только чтение), а также для безопасного переопределения SQL и полного каталога возможностей запросов, используйте отдельный runbook:
+
+- [ADMIN_PORTAL_RO_RUNBOOK.md](./ADMIN_PORTAL_RO_RUNBOOK.md)
+
+Документ покрывает:
+
+- `PORTAL_MODE=remote` и необходимые env-переменные в `compose/.env`;
+- какие сервисы/шаги не должны выполняться в remote-режиме;
+- стратегию override SQL через профили и правила контракта параметров/alias;
+- troubleshooting (`candidates=0`, диагностика без интернета) и smoke-check.
+
