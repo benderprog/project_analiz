@@ -5,10 +5,12 @@
 <section class="card" id="analysis-progress"
          data-status-url="{{ status_poll_url }}"
          data-result-url="{{ result_url }}">
-  <h2>Идет анализ</h2>
+  <h2>Идет анализ: <span id="analysis-filename">{{ uploaded_filename|default:"" }}</span></h2>
   <p>Статус: <strong id="analysis-status-label">queued</strong></p>
   <p>Прошло времени: <strong id="analysis-elapsed">0:00</strong></p>
   <p>Воркер: <strong id="analysis-worker">проверка...</strong></p>
+  <p id="analysis-done" style="display:none; color:#166534;">Анализ завершен</p>
+  <p><a id="analysis-result-link" class="primary" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">Смотреть результаты</a></p>
   <p id="analysis-error" style="display:none; color:#b91c1c;"></p>
   <p><a href="{% url 'analysis-upload' %}" id="analysis-back-link" style="display:none;">Вернуться к загрузке</a></p>
 </section>
@@ -20,6 +22,8 @@
   const statusLabel = document.getElementById('analysis-status-label');
   const elapsedLabel = document.getElementById('analysis-elapsed');
   const workerLabel = document.getElementById('analysis-worker');
+  const doneLabel = document.getElementById('analysis-done');
+  const resultLink = document.getElementById('analysis-result-link');
   const errorLabel = document.getElementById('analysis-error');
   const backLink = document.getElementById('analysis-back-link');
 
@@ -27,6 +31,8 @@
   const fallbackResultUrl = root.dataset.resultUrl;
   let serverElapsed = 0;
   let lastSyncAtMs = Date.now();
+  let pollTimer = null;
+  let tickTimer = null;
 
   function formatSeconds(total) {
     const safe = Math.max(0, Math.floor(total || 0));
@@ -53,7 +59,16 @@
       updateElapsedTick();
 
       if (data.status === 'done') {
-        window.location.assign(data.result_url || fallbackResultUrl);
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+        if (tickTimer) clearInterval(tickTimer);
+        tickTimer = null;
+        const resolvedResultUrl = data.result_url || fallbackResultUrl;
+        if (resolvedResultUrl) {
+          resultLink.href = resolvedResultUrl;
+          resultLink.style.display = 'inline-block';
+        }
+        doneLabel.style.display = 'block';
         return;
       }
       if (data.status === 'failed') {
@@ -68,8 +83,8 @@
 
   updateElapsedTick();
   pollStatus();
-  setInterval(updateElapsedTick, 1000);
-  setInterval(pollStatus, 2500);
+  tickTimer = setInterval(updateElapsedTick, 1000);
+  pollTimer = setInterval(pollStatus, 2500);
 })();
 </script>
 {% else %}

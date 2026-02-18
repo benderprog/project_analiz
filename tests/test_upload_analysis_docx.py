@@ -32,7 +32,9 @@ class UploadAnalysisDocxTests(TestCase):
                 )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Идет анализ")
+        self.assertContains(response, 'Идет анализ: <span id="analysis-filename">sample.docx</span>', html=True)
+        self.assertContains(response, "Смотреть результаты")
+        self.assertContains(response, 'target="_blank"')
         status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
         self.assertEqual(status_response.status_code, 200)
         payload = status_response.json()
