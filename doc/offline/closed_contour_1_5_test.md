@@ -109,3 +109,17 @@ Operational guidance:
 - First deployment: `import -> up`
 - Routine operational restart: `stop -> start`
 - `start` does not run restore or migrations; it only starts runtime services.
+
+
+## 8) PROD portal_db (RO), SQL override и каталог запросов
+
+Для настройки удалённого production-портала в режиме read-only (`PORTAL_MODE=remote`) и безопасной адаптации SQL используйте:
+
+- [ADMIN_PORTAL_RO_RUNBOOK.md](./ADMIN_PORTAL_RO_RUNBOOK.md)
+
+В этом документе отдельно собраны:
+
+- пошаговая настройка `compose/.env` для remote RO;
+- правила замены SQL (через профиль или in-place);
+- полный каталог query key → SQL файл → параметры → возвращаемые колонки.
+
