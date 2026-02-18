@@ -11,8 +11,10 @@ from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
 
 class AnalysisRun(models.Model):
     class Status(models.TextChoices):
-        PENDING = "pending", "Pending"
-        COMPLETED = "completed", "Completed"
+        CREATED = "created", "Created"
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        DONE = "done", "Done"
         FAILED = "failed", "Failed"
 
     run_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -22,7 +24,12 @@ class AnalysisRun(models.Model):
     file = models.FileField(upload_to="uploads/")
     selected_pu_id = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.CREATED)
+    celery_task_id = models.CharField(max_length=255, null=True, blank=True)
+    queued_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Run {self.run_id}"

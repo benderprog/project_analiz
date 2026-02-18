@@ -1,7 +1,10 @@
 import logging
-from django.contrib import messages
+from datetime import timedelta
+
 from django.conf import settings
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views import View
 
@@ -14,14 +17,12 @@ from apps.analysis_app.services import (
     extract_attributes,
     highlight_text,
     match_event,
-    parse_docx,
 )
 from apps.analysis_app.subdivision_matcher import (
     SUBDIVISION_GREEN_THRESHOLD,
     SUBDIVISION_YELLOW_THRESHOLD,
 )
-from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_naive
-from apps.analysis_app.utils.json_safe import offender_to_json
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
 
 TIME_ERROR_MINUTES = int(getattr(settings, "TIME_ERROR_MINUTES", 30))
@@ -622,6 +623,7 @@ class UploadView(View):
             run = AnalysisRun.objects.create(
                 uploaded_by=request.user if request.user.is_authenticated else None,
                 file=upload_form.cleaned_data["file"],
+                status=AnalysisRun.Status.CREATED,
             )
             from docx import Document
 
@@ -652,42 +654,85 @@ class UploadView(View):
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
         selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
         run.selected_pu_id = selected_pu_id
-        run.save(update_fields=["selected_pu_id"])
+        run.status = AnalysisRun.Status.QUEUED
+        run.queued_at = timezone.now()
+        run.error_message = ""
+        run.save(update_fields=["selected_pu_id", "status", "queued_at", "error_message"])
 
-        try:
-            paragraphs = parse_docx(run.file.path)
-            for idx, text in enumerate(paragraphs, start=1):
-                paragraph = AnalysisParagraph.objects.create(run=run, idx=idx, text=text)
-                attributes = extract_attributes(text, selected_pu_id=selected_pu_id)
-                match_result = match_event(attributes, text)
-                AnalysisResult.objects.create(
-                    paragraph=paragraph,
-                    extracted_attributes={
-                        "date_time": format_local_naive(attributes.date_time),
-                        "time_found": attributes.time_found,
-                        "date_span": list(attributes.date_span) if attributes.date_span else None,
-                        "time_span": list(attributes.time_span) if attributes.time_span else None,
-                        "subdivision_id": attributes.subdivision_id,
-                        "subdivision_name": attributes.subdivision_name,
-                        "subdivision_candidates": attributes.subdivision_candidates,
-                        "subdivision_span": attributes.subdivision_span,
-                        "article_spans": [list(span) for span in attributes.article_spans],
-                        "offenders": [
-                            offender_to_json(offender) for offender in attributes.offenders
-                        ],
-                        "staff": attributes.staff,
-                    },
-                    match_result=match_result,
-                )
-            run.status = AnalysisRun.Status.COMPLETED
-            run.save(update_fields=["status"])
-        except Exception as exc:  # noqa: BLE001 - capture for status update
-            run.status = AnalysisRun.Status.FAILED
-            run.save(update_fields=["status"])
-            messages.error(request, f"Ошибка анализа: {exc}")
-            return redirect("analysis-upload")
+        if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
+            from apps.analysis_app.services import run_analysis_pipeline
 
-        return redirect("analysis-detail", run_id=run.run_id)
+            run.status = AnalysisRun.Status.RUNNING
+            run.started_at = timezone.now()
+            run.save(update_fields=["status", "started_at"])
+            try:
+                run_analysis_pipeline(run, selected_pu_id=selected_pu_id)
+                run.status = AnalysisRun.Status.DONE
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "finished_at"])
+            except Exception as exc:  # noqa: BLE001
+                run.status = AnalysisRun.Status.FAILED
+                run.error_message = str(exc)
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+            return render(
+                request,
+                self.template_name,
+                {
+                    "analysis_started": True,
+                    "analysis_run_id": str(run.run_id),
+                    "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
+                    "result_url": redirect("analysis-detail", run_id=run.run_id).url,
+                },
+            )
+
+        from apps.analysis_app.tasks import run_docx_analysis
+
+        task = run_docx_analysis.delay(str(run.run_id), str(selected_pu_id) if selected_pu_id else None)
+        run.celery_task_id = task.id
+        run.save(update_fields=["celery_task_id"])
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "analysis_started": True,
+                "analysis_run_id": str(run.run_id),
+                "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
+                "result_url": redirect("analysis-detail", run_id=run.run_id).url,
+            },
+        )
+
+
+class AnalysisStatusView(View):
+    def get(self, request, run_id):
+        run = get_object_or_404(AnalysisRun, run_id=run_id)
+
+        now = timezone.now()
+        elapsed_base = run.started_at or run.queued_at or run.created_at
+        elapsed_end = run.finished_at or now
+        elapsed_seconds = int((elapsed_end - elapsed_base).total_seconds()) if elapsed_base else 0
+
+        if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
+            worker_ok = True
+        else:
+            from project_analiz.celery import app as celery_app
+
+            worker_response = celery_app.control.inspect(timeout=1).ping() or {}
+            worker_ok = bool(worker_response)
+
+        payload = {
+            "status": run.status,
+            "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "elapsed_seconds": max(elapsed_seconds, 0),
+            "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
+            "worker_ok": worker_ok,
+        }
+        if run.status == AnalysisRun.Status.DONE:
+            payload["result_url"] = redirect("analysis-detail", run_id=run.run_id).url
+        return JsonResponse(payload)
 
 
 class AnalysisDetailView(View):
