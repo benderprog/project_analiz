@@ -209,16 +209,35 @@ class HydratedEvent:
     offenders: list[OffenderDTO]
 
 
+def normalize_event_paragraph_text(text: str | None) -> str:
+    normalized = re.sub(r"\s+", " ", (text or "")).strip()
+    return normalized
+
+
 def parse_docx(file_path: str) -> list[str]:
-    """Split docx content into non-empty paragraphs."""
+    """Split DOCX content into event paragraphs with minimum normalized length."""
     from docx import Document
 
     document = Document(file_path)
-    paragraphs = []
+    min_chars = max(int(getattr(settings, "MIN_EVENT_PARAGRAPH_CHARS", 100) or 0), 0)
+    paragraphs: list[str] = []
+    total = 0
+    skipped_short = 0
     for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if text:
-            paragraphs.append(text)
+        total += 1
+        text = normalize_event_paragraph_text(getattr(paragraph, "text", None))
+        if len(text) < min_chars:
+            skipped_short += 1
+            continue
+        paragraphs.append(text)
+
+    logger.info(
+        "docx split: total=%s, kept=%s, skipped_short=%s, min_chars=%s",
+        total,
+        len(paragraphs),
+        skipped_short,
+        min_chars,
+    )
     return paragraphs
 
 
