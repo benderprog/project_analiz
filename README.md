@@ -15,14 +15,25 @@
 
 ## Локальный async-анализ (Redis + Celery)
 
-Для локальной разработки асинхронного анализа DOCX:
+Для локальной разработки используйте команды Makefile (они запускают Python из `.venv`):
 
-1. Запустите Redis локально:
-   - `redis-server`
-   - или `docker run -p 6379:6379 redis:7`
-2. Запустите Celery worker:
-   - `celery -A project_analiz worker -l info`
-3. Запустите Django:
-   - `python manage.py runserver`
+1. Поднимите Redis:
+   - хостовый: `redis-server`
+   - или в Docker: `make redis-docker`
+2. Выполните миграции:
+   - `make migrate`
+3. Запустите Django + Celery одной командой:
+   - `make dev`
+
+Альтернативно можно запускать по отдельности:
+
+- `make web` — только Django (`HOST`/`PORT`)
+- `make worker` — только Celery (`CONCURRENCY`)
+
+Параметры можно переопределять при запуске, например:
+
+- `make dev PORT=8001 CONCURRENCY=2`
+
+`make dev` запускает Celery worker в фоне и корректно останавливает его при остановке Django (`Ctrl+C`).
 
 После загрузки DOCX и выбора ПУ анализ выполняется в фоне; страница загрузки покажет текущий статус и таймер до завершения.
