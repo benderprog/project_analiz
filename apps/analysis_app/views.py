@@ -1,4 +1,5 @@
 import logging
+from pathlib import PurePath
 from datetime import timedelta
 
 from django.conf import settings
@@ -29,6 +30,13 @@ TIME_ERROR_MINUTES = int(getattr(settings, "TIME_ERROR_MINUTES", 30))
 
 
 logger = logging.getLogger(__name__)
+
+
+def _display_filename(file_name: str | None) -> str:
+    if not file_name:
+        return ""
+    normalized = str(file_name).replace("\\", "/")
+    return PurePath(normalized).name
 
 
 def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
@@ -683,6 +691,7 @@ class UploadView(View):
                     "analysis_run_id": str(run.run_id),
                     "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
                     "result_url": redirect("analysis-detail", run_id=run.run_id).url,
+                    "uploaded_filename": _display_filename(run.file.name),
                 },
             )
 
@@ -700,6 +709,7 @@ class UploadView(View):
                 "analysis_run_id": str(run.run_id),
                 "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
                 "result_url": redirect("analysis-detail", run_id=run.run_id).url,
+                "uploaded_filename": _display_filename(run.file.name),
             },
         )
 
