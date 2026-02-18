@@ -40,6 +40,16 @@ def _display_filename(file_name: str | None) -> str:
     return PurePath(normalized).name
 
 
+def _resolve_selected_pu_name(selection_form: PuSelectionForm, selected_pu_id: str) -> str:
+    if not selected_pu_id:
+        return ""
+    selected_value = str(selected_pu_id)
+    for value, label in selection_form.fields["selected_pu_id"].choices:
+        if str(value) == selected_value:
+            return str(label or "")
+    return ""
+
+
 def _format_offenders(offenders: list[dict], *, source: str) -> list[str]:
     return [offender_display(offender, source=source) for offender in offenders or []]
 
@@ -663,11 +673,14 @@ class UploadView(View):
 
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
         selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
-        run.selected_pu_id = selected_pu_id
+        run.selected_pu_id = str(selected_pu_id) if selected_pu_id else ""
+        run.selected_pu_name = _resolve_selected_pu_name(selection_form, run.selected_pu_id)
         run.status = AnalysisRun.Status.QUEUED
         run.queued_at = timezone.now()
         run.error_message = ""
-        run.save(update_fields=["selected_pu_id", "status", "queued_at", "error_message"])
+        run.save(
+            update_fields=["selected_pu_id", "selected_pu_name", "status", "queued_at", "error_message"]
+        )
 
         if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
             from apps.analysis_app.services import run_analysis_pipeline
@@ -696,6 +709,7 @@ class UploadView(View):
                     "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
                     "result_url": redirect("analysis-detail", run_id=run.run_id).url,
                     "uploaded_filename": run.original_filename or _display_filename(run.file.name),
+                    "selected_pu_name": run.selected_pu_name,
                 },
             )
 
@@ -714,6 +728,7 @@ class UploadView(View):
                 "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
                 "result_url": redirect("analysis-detail", run_id=run.run_id).url,
                 "uploaded_filename": run.original_filename or _display_filename(run.file.name),
+                "selected_pu_name": run.selected_pu_name,
             },
         )
 
@@ -744,6 +759,8 @@ class AnalysisStatusView(View):
             "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
             "worker_ok": worker_ok,
             "uploaded_filename": run.original_filename or _display_filename(run.file.name),
+            "selected_pu_name": run.selected_pu_name,
+            "selected_pu_id": run.selected_pu_id,
         }
         if run.status == AnalysisRun.Status.DONE:
             payload["result_url"] = redirect("analysis-detail", run_id=run.run_id).url

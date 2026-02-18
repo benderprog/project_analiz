@@ -5,7 +5,11 @@
 <section class="card" id="analysis-progress"
          data-status-url="{{ status_poll_url }}"
          data-result-url="{{ result_url }}">
-  <h2>Идет анализ: <span id="analysis-filename">{{ uploaded_filename|default:"" }}</span></h2>
+  <h2>
+    Идет анализ:
+    <span id="analysis-filename">{{ uploaded_filename|default:"" }}</span>
+    <span id="analysis-pu-wrap" {% if not selected_pu_name %}style="display:none;"{% endif %}> — <span id="analysis-pu-name">{{ selected_pu_name|default:"" }}</span></span>
+  </h2>
   <p>Статус: <strong id="analysis-status-label">queued</strong></p>
   <p>Прошло времени: <strong id="analysis-elapsed">0:00</strong></p>
   <p>Воркер: <strong id="analysis-worker">проверка...</strong></p>
@@ -21,6 +25,8 @@
 
   const statusLabel = document.getElementById('analysis-status-label');
   const filenameLabel = document.getElementById('analysis-filename');
+  const puWrap = document.getElementById('analysis-pu-wrap');
+  const puLabel = document.getElementById('analysis-pu-name');
   const elapsedLabel = document.getElementById('analysis-elapsed');
   const workerLabel = document.getElementById('analysis-worker');
   const doneLabel = document.getElementById('analysis-done');
@@ -56,6 +62,15 @@
       statusLabel.textContent = data.status || 'unknown';
       if (filenameLabel && data.uploaded_filename) {
         filenameLabel.textContent = data.uploaded_filename;
+      }
+      if (puWrap && puLabel) {
+        if (data.selected_pu_name) {
+          puLabel.textContent = data.selected_pu_name;
+          puWrap.style.display = '';
+        } else {
+          puLabel.textContent = '';
+          puWrap.style.display = 'none';
+        }
       }
       workerLabel.textContent = data.worker_ok ? 'ok' : 'нет связи';
       serverElapsed = data.elapsed_seconds || 0;

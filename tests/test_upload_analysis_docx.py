@@ -8,7 +8,7 @@ from django.urls import reverse
 
 from docx import Document
 
-from apps.analysis_app.models import AnalysisRun
+from apps.analysis_app.models import AnalysisRun, CachedPU
 
 
 class UploadAnalysisDocxTests(TestCase):
@@ -33,7 +33,8 @@ class UploadAnalysisDocxTests(TestCase):
                 )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Идет анализ: <span id="analysis-filename">sample.docx</span>', html=True)
+        self.assertContains(response, '<span id="analysis-filename">sample.docx</span>', html=True)
+        self.assertContains(response, 'id="analysis-pu-wrap" style="display:none;"')
         self.assertContains(response, "Смотреть результаты")
         self.assertContains(response, 'target="_blank"')
         status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
@@ -42,6 +43,7 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertIn(payload["status"], {AnalysisRun.Status.DONE, AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED})
         self.assertIn("worker_ok", payload)
         self.assertEqual(payload["uploaded_filename"], "sample.docx")
+        self.assertEqual(payload["selected_pu_name"], "")
 
     def test_upload_stores_original_filename_basename(self):
         docx_bytes = self._make_docx_bytes()
@@ -91,6 +93,39 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertIn(response.status_code, {200, 302})
         run.refresh_from_db()
         self.assertEqual(run.status, AnalysisRun.Status.DONE)
+
+    def test_progress_includes_selected_pu_name(self):
+        from uuid import uuid4
+
+        pu = CachedPU.objects.create(
+            portal_pu_id=uuid4(),
+            short_name="ПУ Север",
+            full_name="Пограничное управление Север",
+        )
+        docx_bytes = self._make_docx_bytes()
+        upload = SimpleUploadedFile(
+            "sample.docx",
+            docx_bytes,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                self.client.post(reverse("analysis-upload"), {"file": upload})
+                run = AnalysisRun.objects.first()
+                response = self.client.post(
+                    reverse("analysis-upload"),
+                    {"upload_id": run.run_id, "selected_pu_id": str(pu.portal_pu_id)},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<span id="analysis-filename">sample.docx</span>', html=True)
+        self.assertContains(response, '<span id="analysis-pu-name">ПУ Север — Пограничное управление Север</span>', html=True)
+        run.refresh_from_db()
+        self.assertEqual(run.selected_pu_name, "ПУ Север — Пограничное управление Север")
+        status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
+        payload = status_response.json()
+        self.assertEqual(payload["selected_pu_name"], "ПУ Север — Пограничное управление Север")
 
     def test_uploaded_file_is_deleted_after_sync_analysis(self):
         docx_bytes = self._make_docx_bytes()
