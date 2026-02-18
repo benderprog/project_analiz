@@ -32,17 +32,42 @@ export TRANSFORMERS_OFFLINE=1
 
 Подробная карта переменных и runtime-поведения: [24_runtime_env_and_portal_db.md](./24_runtime_env_and_portal_db.md).
 
-## 3) Миграции
+## 3) Redis (для async-анализа)
+
+Запустите Redis локально одним из способов:
 
 ```bash
-python manage.py migrate
+redis-server
+# или
+make redis-docker
+```
+
+## 4) Миграции
+
+```bash
+make migrate
 python manage.py migrate --database=portal
 ```
 
-## 4) Запуск приложения
+## 5) Запуск приложения
+
+Основной вариант (Django + Celery в одном терминале):
 
 ```bash
-python manage.py runserver 0.0.0.0:8000
+make dev
+```
+
+Альтернативы:
+
+```bash
+make web
+make worker
+```
+
+Параметры запуска можно переопределять:
+
+```bash
+make dev PORT=8001 CONCURRENCY=2
 ```
 
 Доступные страницы:
@@ -51,7 +76,7 @@ python manage.py runserver 0.0.0.0:8000
 - `/analysis/<uuid>/`
 - `/admin/`
 
-## 5) Запуск тестов
+## 6) Запуск тестов
 
 Unit-тесты по умолчанию используют SQLite и не требуют Postgres.
 
