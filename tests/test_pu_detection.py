@@ -104,7 +104,8 @@ class UploadFlowPuSelectionTests(TestCase):
                 )
         self.assertIn(response.status_code, {200, 302})
         run.refresh_from_db()
-        self.assertEqual(run.selected_pu_id, pu.portal_pu_id)
+        self.assertEqual(run.selected_pu_id, str(pu.portal_pu_id))
+        self.assertEqual(run.selected_pu_name, "ПУ Восток — Пограничное управление Восток")
 
 
 class SubdivisionMatchPuFilterTests(TestCase):
