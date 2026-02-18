@@ -716,7 +716,7 @@ class AnalysisStatusView(View):
         if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
             worker_ok = True
         else:
-            from project_analiz.celery import app as celery_app
+            from config.celery import app as celery_app
 
             worker_response = celery_app.control.inspect(timeout=1).ping() or {}
             worker_ok = bool(worker_response)

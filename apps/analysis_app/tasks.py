@@ -1,15 +1,15 @@
 import logging
 
-from celery import shared_task
 from django.utils import timezone
 
 from apps.analysis_app.models import AnalysisRun
 from apps.analysis_app.services import run_analysis_pipeline
+from config.celery import app
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True)
+@app.task(bind=True)
 def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> None:
     run = AnalysisRun.objects.get(run_id=run_id)
     run.celery_task_id = self.request.id
