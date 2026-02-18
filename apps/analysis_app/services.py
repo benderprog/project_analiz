@@ -18,7 +18,7 @@ from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventTypePattern
-from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, to_local_naive
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_naive, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.analysis_app.utils.offender_format import portal_offender_fullname, svodka_offender_fullname
 from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
@@ -76,6 +76,34 @@ _EVENT_PATTERN_WINDOW_MAX = 10
 _EVENT_PATTERN_MAX_WINDOWS = 90
 
 
+
+
+
+def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
+    from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
+
+    paragraphs = parse_docx(run.file.path)
+    for idx, text in enumerate(paragraphs, start=1):
+        paragraph = AnalysisParagraph.objects.create(run=run, idx=idx, text=text)
+        attributes = extract_attributes(text, selected_pu_id=selected_pu_id)
+        match_result = match_event(attributes, text)
+        AnalysisResult.objects.create(
+            paragraph=paragraph,
+            extracted_attributes={
+                "date_time": format_local_naive(attributes.date_time),
+                "time_found": attributes.time_found,
+                "date_span": list(attributes.date_span) if attributes.date_span else None,
+                "time_span": list(attributes.time_span) if attributes.time_span else None,
+                "subdivision_id": attributes.subdivision_id,
+                "subdivision_name": attributes.subdivision_name,
+                "subdivision_candidates": attributes.subdivision_candidates,
+                "subdivision_span": attributes.subdivision_span,
+                "article_spans": [list(span) for span in attributes.article_spans],
+                "offenders": [offender_to_json(offender) for offender in attributes.offenders],
+                "staff": attributes.staff,
+            },
+            match_result=match_result,
+        )
 
 def _normalize_surname(value: str | None) -> str:
     if not value:

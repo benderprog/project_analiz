@@ -1,6 +1,78 @@
 {% extends "analysis_app/base.html" %}
 
 {% block content %}
+{% if analysis_started %}
+<section class="card" id="analysis-progress"
+         data-status-url="{{ status_poll_url }}"
+         data-result-url="{{ result_url }}">
+  <h2>Идет анализ</h2>
+  <p>Статус: <strong id="analysis-status-label">queued</strong></p>
+  <p>Прошло времени: <strong id="analysis-elapsed">0:00</strong></p>
+  <p>Воркер: <strong id="analysis-worker">проверка...</strong></p>
+  <p id="analysis-error" style="display:none; color:#b91c1c;"></p>
+  <p><a href="{% url 'analysis-upload' %}" id="analysis-back-link" style="display:none;">Вернуться к загрузке</a></p>
+</section>
+<script>
+(function () {
+  const root = document.getElementById('analysis-progress');
+  if (!root) return;
+
+  const statusLabel = document.getElementById('analysis-status-label');
+  const elapsedLabel = document.getElementById('analysis-elapsed');
+  const workerLabel = document.getElementById('analysis-worker');
+  const errorLabel = document.getElementById('analysis-error');
+  const backLink = document.getElementById('analysis-back-link');
+
+  const statusUrl = root.dataset.statusUrl;
+  const fallbackResultUrl = root.dataset.resultUrl;
+  let serverElapsed = 0;
+  let lastSyncAtMs = Date.now();
+
+  function formatSeconds(total) {
+    const safe = Math.max(0, Math.floor(total || 0));
+    const mm = Math.floor(safe / 60);
+    const ss = String(safe % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+  }
+
+  function updateElapsedTick() {
+    const delta = Math.floor((Date.now() - lastSyncAtMs) / 1000);
+    elapsedLabel.textContent = formatSeconds(serverElapsed + delta);
+  }
+
+  async function pollStatus() {
+    try {
+      const response = await fetch(statusUrl, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+
+      statusLabel.textContent = data.status || 'unknown';
+      workerLabel.textContent = data.worker_ok ? 'ok' : 'нет связи';
+      serverElapsed = data.elapsed_seconds || 0;
+      lastSyncAtMs = Date.now();
+      updateElapsedTick();
+
+      if (data.status === 'done') {
+        window.location.assign(data.result_url || fallbackResultUrl);
+        return;
+      }
+      if (data.status === 'failed') {
+        errorLabel.style.display = 'block';
+        errorLabel.textContent = data.error_message || 'Ошибка анализа';
+        backLink.style.display = 'inline';
+      }
+    } catch (error) {
+      workerLabel.textContent = 'нет связи';
+    }
+  }
+
+  updateElapsedTick();
+  pollStatus();
+  setInterval(updateElapsedTick, 1000);
+  setInterval(pollStatus, 2500);
+})();
+</script>
+{% else %}
 <section class="card">
   <h2>Загрузка DOCX</h2>
   <form method="post" enctype="multipart/form-data">
@@ -24,5 +96,6 @@
       <button type="submit" class="primary">Анализировать</button>
     </form>
   </section>
+{% endif %}
 {% endif %}
 {% endblock %}

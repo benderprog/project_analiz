@@ -13,6 +13,32 @@ from apps.analysis_app.models import AnalysisRun
 class UploadAnalysisDocxTests(TestCase):
     databases = {"default", "portal"}
 
+
+    def test_selection_renders_progress_mode(self):
+        docx_bytes = self._make_docx_bytes()
+        upload = SimpleUploadedFile(
+            "sample.docx",
+            docx_bytes,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                self.client.post(reverse("analysis-upload"), {"file": upload})
+                run = AnalysisRun.objects.first()
+                response = self.client.post(
+                    reverse("analysis-upload"),
+                    {"upload_id": run.run_id, "selected_pu_id": ""},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Идет анализ")
+        status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
+        self.assertEqual(status_response.status_code, 200)
+        payload = status_response.json()
+        self.assertIn(payload["status"], {AnalysisRun.Status.DONE, AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED})
+        self.assertIn("worker_ok", payload)
+
     def _make_docx_bytes(self) -> bytes:
         document = Document()
         document.add_paragraph("Время 08:40 02.02.2026 без имен.")
@@ -43,4 +69,4 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertIn(response.status_code, {200, 302})
         run.refresh_from_db()
-        self.assertEqual(run.status, AnalysisRun.Status.COMPLETED)
+        self.assertEqual(run.status, AnalysisRun.Status.DONE)
