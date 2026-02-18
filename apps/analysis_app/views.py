@@ -661,14 +661,33 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
 class UploadView(View):
     template_name = "analysis_app/upload.html"
 
+    @staticmethod
+    def _recent_runs(limit: int = 10):
+        return AnalysisRun.objects.order_by("-created_at")[:limit]
+
+    def _build_context(self, *, upload_form=None, selection_form=None, detection=None, selected_run_id=None):
+        return {
+            "upload_form": upload_form or UploadDocxForm(),
+            "selection_form": selection_form,
+            "detection": detection,
+            "queue_runs": self._recent_runs(),
+            "selected_run_id": str(selected_run_id) if selected_run_id else "",
+            "queue_status_url": redirect("analysis-queue-status").url,
+        }
+
     def get(self, request):
-        return render(request, self.template_name, {"upload_form": UploadDocxForm()})
+        selected_run_id = request.GET.get("run")
+        return render(
+            request,
+            self.template_name,
+            self._build_context(selected_run_id=selected_run_id),
+        )
 
     def post(self, request):
         if request.FILES.get("file"):
             upload_form = UploadDocxForm(request.POST, request.FILES)
             if not upload_form.is_valid():
-                return render(request, self.template_name, {"upload_form": upload_form})
+                return render(request, self.template_name, self._build_context(upload_form=upload_form))
 
             run = AnalysisRun.objects.create(
                 uploaded_by=request.user if request.user.is_authenticated else None,
@@ -687,11 +706,11 @@ class UploadView(View):
             return render(
                 request,
                 self.template_name,
-                {
-                    "upload_form": UploadDocxForm(),
-                    "selection_form": selection_form,
-                    "detection": detection,
-                },
+                self._build_context(
+                    selection_form=selection_form,
+                    detection=detection,
+                    selected_run_id=run.run_id,
+                ),
             )
 
         selection_form = PuSelectionForm(request.POST)
@@ -699,7 +718,7 @@ class UploadView(View):
             return render(
                 request,
                 self.template_name,
-                {"upload_form": UploadDocxForm(), "selection_form": selection_form},
+                self._build_context(selection_form=selection_form),
             )
 
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
@@ -731,37 +750,54 @@ class UploadView(View):
                 run.finished_at = timezone.now()
                 run.save(update_fields=["status", "error_message", "finished_at"])
             cleanup_run_upload(run)
-            return render(
-                request,
-                self.template_name,
-                {
-                    "analysis_started": True,
-                    "analysis_run_id": str(run.run_id),
-                    "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
-                    "result_url": redirect("analysis-detail", run_id=run.run_id).url,
-                    "uploaded_filename": run.original_filename or _display_filename(run.file.name),
-                    "selected_pu_name": run.selected_pu_name,
-                },
-            )
+            return redirect(f"{redirect('analysis-upload').url}?run={run.run_id}")
 
         from apps.analysis_app.tasks import run_docx_analysis
 
         task = run_docx_analysis.delay(str(run.run_id), str(selected_pu_id) if selected_pu_id else None)
         run.celery_task_id = task.id
         run.save(update_fields=["celery_task_id"])
+        return redirect(f"{redirect('analysis-upload').url}?run={run.run_id}")
 
-        return render(
-            request,
-            self.template_name,
-            {
-                "analysis_started": True,
-                "analysis_run_id": str(run.run_id),
-                "status_poll_url": redirect("analysis-status", run_id=run.run_id).url,
-                "result_url": redirect("analysis-detail", run_id=run.run_id).url,
-                "uploaded_filename": run.original_filename or _display_filename(run.file.name),
+
+class AnalysisQueueStatusView(View):
+    def get(self, request):
+        runs = list(AnalysisRun.objects.order_by("-created_at")[:10])
+        now = timezone.now()
+        payload_runs = []
+        for run in runs:
+            elapsed_base = run.started_at or run.queued_at or run.created_at
+            elapsed_end = run.finished_at or now
+            elapsed_seconds = int((elapsed_end - elapsed_base).total_seconds()) if elapsed_base else 0
+            payload = {
+                "run_id": str(run.run_id),
+                "original_filename": run.original_filename or _display_filename(run.file.name),
                 "selected_pu_name": run.selected_pu_name,
-            },
-        )
+                "status": run.status,
+                "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "elapsed_seconds": max(elapsed_seconds, 0) if run.status == AnalysisRun.Status.RUNNING else None,
+                "result_url": (
+                    redirect("analysis-detail", run_id=run.run_id).url
+                    if run.status == AnalysisRun.Status.DONE
+                    else None
+                ),
+                "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
+                "position": None,
+            }
+            if run.status == AnalysisRun.Status.RUNNING:
+                payload["position"] = 0
+            elif run.status == AnalysisRun.Status.QUEUED:
+                queue_base = run.queued_at or run.created_at
+                older_count = AnalysisRun.objects.filter(
+                    status__in=[AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED],
+                    queued_at__lt=queue_base,
+                ).count()
+                payload["position"] = older_count + 1
+            payload_runs.append(payload)
+
+        return JsonResponse({"runs": payload_runs})
 
 
 class AnalysisStatusView(View):

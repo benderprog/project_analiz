@@ -15,7 +15,7 @@ class UploadAnalysisDocxTests(TestCase):
     databases = {"default", "portal"}
 
 
-    def test_selection_renders_progress_mode(self):
+    def test_selection_redirects_and_queue_renders(self):
         docx_bytes = self._make_docx_bytes()
         upload = SimpleUploadedFile(
             "sample.docx",
@@ -32,11 +32,11 @@ class UploadAnalysisDocxTests(TestCase):
                     {"upload_id": run.run_id, "selected_pu_id": ""},
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<span id="analysis-filename">sample.docx</span>', html=True)
-        self.assertContains(response, 'id="analysis-pu-wrap" style="display:none;"')
-        self.assertContains(response, "Смотреть результаты")
-        self.assertContains(response, 'target="_blank"')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/upload/?run=", response["Location"])
+        follow = self.client.get(response["Location"])
+        self.assertEqual(follow.status_code, 200)
+        self.assertContains(follow, "Очередь анализов")
         status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
         self.assertEqual(status_response.status_code, 200)
         payload = status_response.json()
@@ -90,11 +90,11 @@ class UploadAnalysisDocxTests(TestCase):
                     {"upload_id": run.run_id, "selected_pu_id": ""},
                 )
 
-        self.assertIn(response.status_code, {200, 302})
+        self.assertEqual(response.status_code, 302)
         run.refresh_from_db()
         self.assertEqual(run.status, AnalysisRun.Status.DONE)
 
-    def test_progress_includes_selected_pu_name(self):
+    def test_selected_pu_name_saved_and_exposed_in_status(self):
         from uuid import uuid4
 
         pu = CachedPU.objects.create(
@@ -118,9 +118,7 @@ class UploadAnalysisDocxTests(TestCase):
                     {"upload_id": run.run_id, "selected_pu_id": str(pu.portal_pu_id)},
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<span id="analysis-filename">sample.docx</span>', html=True)
-        self.assertContains(response, '<span id="analysis-pu-name">Пограничное управление Север</span>', html=True)
+        self.assertEqual(response.status_code, 302)
         run.refresh_from_db()
         self.assertEqual(run.selected_pu_name, "Пограничное управление Север")
         status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
@@ -149,3 +147,29 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertEqual(run.status, AnalysisRun.Status.DONE)
         self.assertFalse(file_path.exists())
+
+
+    def test_queue_status_endpoint_returns_runs_with_positions(self):
+        run_running = AnalysisRun.objects.create(
+            original_filename="a.docx",
+            file="uploads/a.docx",
+            status=AnalysisRun.Status.RUNNING,
+            selected_pu_name="ПУ A",
+        )
+        run_queued = AnalysisRun.objects.create(
+            original_filename="b.docx",
+            file="uploads/b.docx",
+            status=AnalysisRun.Status.QUEUED,
+            selected_pu_name="ПУ B",
+        )
+
+        response = self.client.get(reverse("analysis-queue-status"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("runs", payload)
+        runs = {item["run_id"]: item for item in payload["runs"]}
+        self.assertEqual(runs[str(run_running.run_id)]["position"], 0)
+        self.assertEqual(runs[str(run_queued.run_id)]["position"], 1)
+        self.assertEqual(runs[str(run_running.run_id)]["status"], AnalysisRun.Status.RUNNING)
+        self.assertEqual(runs[str(run_queued.run_id)]["status"], AnalysisRun.Status.QUEUED)
