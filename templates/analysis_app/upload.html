@@ -1,112 +1,15 @@
 {% extends "analysis_app/base.html" %}
 
 {% block content %}
-{% if analysis_started %}
-<section class="card" id="analysis-progress"
-         data-status-url="{{ status_poll_url }}"
-         data-result-url="{{ result_url }}">
-  <h2>
-    Идет анализ:
-    <span id="analysis-filename">{{ uploaded_filename|default:"" }}</span>
-    <span id="analysis-pu-wrap" {% if not selected_pu_name %}style="display:none;"{% endif %}> — <span id="analysis-pu-name">{{ selected_pu_name|default:"" }}</span></span>
-  </h2>
-  <p>Статус: <strong id="analysis-status-label">queued</strong></p>
-  <p>Прошло времени: <strong id="analysis-elapsed">0:00</strong></p>
-  <p>Воркер: <strong id="analysis-worker">проверка...</strong></p>
-  <p id="analysis-done" style="display:none; color:#166534;">Анализ завершен</p>
-  <p><a id="analysis-result-link" class="primary" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">Смотреть результаты</a></p>
-  <p id="analysis-error" style="display:none; color:#b91c1c;"></p>
-  <p><a href="{% url 'analysis-upload' %}" id="analysis-back-link" style="display:none;">Вернуться к загрузке</a></p>
+<section class="card">
+  <h2>Очередь анализов</h2>
+  <div id="analysis-queue"
+       data-status-url="{{ queue_status_url }}"
+       data-selected-run-id="{{ selected_run_id|default:'' }}">
+    <p>Загрузка очереди...</p>
+  </div>
 </section>
-<script>
-(function () {
-  const root = document.getElementById('analysis-progress');
-  if (!root) return;
 
-  const statusLabel = document.getElementById('analysis-status-label');
-  const filenameLabel = document.getElementById('analysis-filename');
-  const puWrap = document.getElementById('analysis-pu-wrap');
-  const puLabel = document.getElementById('analysis-pu-name');
-  const elapsedLabel = document.getElementById('analysis-elapsed');
-  const workerLabel = document.getElementById('analysis-worker');
-  const doneLabel = document.getElementById('analysis-done');
-  const resultLink = document.getElementById('analysis-result-link');
-  const errorLabel = document.getElementById('analysis-error');
-  const backLink = document.getElementById('analysis-back-link');
-
-  const statusUrl = root.dataset.statusUrl;
-  const fallbackResultUrl = root.dataset.resultUrl;
-  let serverElapsed = 0;
-  let lastSyncAtMs = Date.now();
-  let pollTimer = null;
-  let tickTimer = null;
-
-  function formatSeconds(total) {
-    const safe = Math.max(0, Math.floor(total || 0));
-    const mm = Math.floor(safe / 60);
-    const ss = String(safe % 60).padStart(2, '0');
-    return `${mm}:${ss}`;
-  }
-
-  function updateElapsedTick() {
-    const delta = Math.floor((Date.now() - lastSyncAtMs) / 1000);
-    elapsedLabel.textContent = formatSeconds(serverElapsed + delta);
-  }
-
-  async function pollStatus() {
-    try {
-      const response = await fetch(statusUrl, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-
-      statusLabel.textContent = data.status || 'unknown';
-      if (filenameLabel && data.uploaded_filename) {
-        filenameLabel.textContent = data.uploaded_filename;
-      }
-      if (puWrap && puLabel) {
-        if (data.selected_pu_name) {
-          puLabel.textContent = data.selected_pu_name;
-          puWrap.style.display = '';
-        } else {
-          puLabel.textContent = '';
-          puWrap.style.display = 'none';
-        }
-      }
-      workerLabel.textContent = data.worker_ok ? 'ok' : 'нет связи';
-      serverElapsed = data.elapsed_seconds || 0;
-      lastSyncAtMs = Date.now();
-      updateElapsedTick();
-
-      if (data.status === 'done') {
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = null;
-        if (tickTimer) clearInterval(tickTimer);
-        tickTimer = null;
-        const resolvedResultUrl = data.result_url || fallbackResultUrl;
-        if (resolvedResultUrl) {
-          resultLink.href = resolvedResultUrl;
-          resultLink.style.display = 'inline-block';
-        }
-        doneLabel.style.display = 'block';
-        return;
-      }
-      if (data.status === 'failed') {
-        errorLabel.style.display = 'block';
-        errorLabel.textContent = data.error_message || 'Ошибка анализа';
-        backLink.style.display = 'inline';
-      }
-    } catch (error) {
-      workerLabel.textContent = 'нет связи';
-    }
-  }
-
-  updateElapsedTick();
-  pollStatus();
-  tickTimer = setInterval(updateElapsedTick, 1000);
-  pollTimer = setInterval(pollStatus, 2500);
-})();
-</script>
-{% else %}
 <section class="card">
   <h2>Загрузка DOCX</h2>
   <form method="post" enctype="multipart/form-data">
@@ -127,9 +30,119 @@
     <form method="post">
       {% csrf_token %}
       {{ selection_form.as_p }}
-      <button type="submit" class="primary">Анализировать</button>
+      <button type="submit" class="primary">Поставить в очередь</button>
     </form>
   </section>
 {% endif %}
-{% endif %}
+
+<script>
+(function () {
+  const root = document.getElementById('analysis-queue');
+  if (!root) return;
+
+  const statusUrl = root.dataset.statusUrl;
+  const selectedRunId = root.dataset.selectedRunId || '';
+  let pollTimer = null;
+  let tickTimer = null;
+  let cachedRuns = [];
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function formatSeconds(total) {
+    const safe = Math.max(0, Math.floor(total || 0));
+    const mm = Math.floor(safe / 60);
+    const ss = String(safe % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+  }
+
+  function rowClass(run) {
+    if (selectedRunId && selectedRunId === run.run_id) return ' style="background:#eff6ff;"';
+    return '';
+  }
+
+  function renderRuns() {
+    if (!cachedRuns.length) {
+      root.innerHTML = '<p>Запусков пока нет.</p>';
+      return;
+    }
+
+    const rows = cachedRuns.map((run) => {
+      const filename = escapeHtml(run.original_filename || '—');
+      const puName = escapeHtml(run.selected_pu_name || 'ПУ не выбран');
+
+      if (run.status === 'running') {
+        return `<tr${rowClass(run)}><td><strong>Идет анализ</strong></td><td>${filename}</td><td>${puName}</td><td>${formatSeconds(run.elapsed_seconds || 0)}</td><td>—</td></tr>`;
+      }
+      if (run.status === 'queued') {
+        const pos = run.position ? `№${run.position}` : '—';
+        return `<tr${rowClass(run)}><td>В очереди (${pos})</td><td>${filename}</td><td>${puName}</td><td>—</td><td>—</td></tr>`;
+      }
+      if (run.status === 'done') {
+        const result = run.result_url
+          ? `<a class="primary" href="${escapeHtml(run.result_url)}" target="_blank" rel="noopener noreferrer">Смотреть результаты</a>`
+          : '—';
+        return `<tr${rowClass(run)}><td>Готово</td><td>${filename}</td><td>${puName}</td><td>—</td><td>${result}</td></tr>`;
+      }
+      if (run.status === 'failed') {
+        return `<tr${rowClass(run)}><td style="color:#b91c1c;">Ошибка</td><td>${filename}</td><td>${puName}</td><td>—</td><td style="color:#b91c1c;">${escapeHtml(run.error_message || 'Ошибка анализа')}</td></tr>`;
+      }
+      return `<tr${rowClass(run)}><td>${escapeHtml(run.status)}</td><td>${filename}</td><td>${puName}</td><td>—</td><td>—</td></tr>`;
+    }).join('');
+
+    root.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Статус</th>
+            <th>Файл</th>
+            <th>ПУ</th>
+            <th>Таймер</th>
+            <th>Действие / Ошибка</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  async function pollStatus() {
+    try {
+      const response = await fetch(statusUrl, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      cachedRuns = data.runs || [];
+      renderRuns();
+    } catch (error) {
+      root.innerHTML = '<p style="color:#b91c1c;">Не удалось загрузить очередь анализов.</p>';
+    }
+  }
+
+  function tickRunning() {
+    cachedRuns = cachedRuns.map((run) => {
+      if (run.status !== 'running') return run;
+      return {
+        ...run,
+        elapsed_seconds: (run.elapsed_seconds || 0) + 1,
+      };
+    });
+    renderRuns();
+  }
+
+  pollStatus();
+  pollTimer = setInterval(pollStatus, 2500);
+  tickTimer = setInterval(tickRunning, 1000);
+
+  window.addEventListener('beforeunload', function () {
+    if (pollTimer) clearInterval(pollTimer);
+    if (tickTimer) clearInterval(tickTimer);
+  });
+})();
+</script>
 {% endblock %}

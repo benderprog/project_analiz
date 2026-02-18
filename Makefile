@@ -20,12 +20,12 @@ web:
 	$(MANAGE) runserver $(HOST):$(PORT)
 
 worker:
-	$(CELERY) -A config worker -l info --concurrency=$(CONCURRENCY)
+	$(CELERY) -A config worker -l info -Q analysis --concurrency=$(CONCURRENCY)
 
 dev:
 	@set -euo pipefail; \
 	echo "[dev] starting celery..."; \
-	$(CELERY) -A config worker -l info --concurrency=$(CONCURRENCY) & \
+	$(CELERY) -A config worker -l info -Q analysis --concurrency=$(CONCURRENCY) & \
 	CELERY_PID=$$!; \
 	cleanup() { \
 		echo ""; \
