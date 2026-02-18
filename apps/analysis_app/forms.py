@@ -8,6 +8,16 @@ from apps.analysis_app.models import CachedPU
 logger = logging.getLogger(__name__)
 
 
+GENERAL_SUMMARY_PU_LABEL = "Общая сводка"
+
+
+def is_general_summary_pu(selected_pu_id: str | uuid.UUID | None) -> bool:
+    if selected_pu_id is None:
+        return True
+    normalized = str(selected_pu_id).strip().lower()
+    return normalized in {"", "general"}
+
+
 class UploadDocxForm(forms.Form):
     file = forms.FileField(label="DOCX файл")
 
@@ -25,14 +35,13 @@ class PuSelectionForm(forms.Form):
         if pu_choices is None:
             pu_choices = []
             for pu in CachedPU.objects.order_by("short_name", "full_name"):
-                label_parts = [part for part in [pu.short_name, pu.full_name] if part]
-                label = " — ".join(label_parts)
+                label = str(pu.full_name or pu.short_name or "")
                 pu_choices.append((str(pu.portal_pu_id), label))
-        self.fields["selected_pu_id"].choices = [("", "Общая сводка"), *pu_choices]
+        self.fields["selected_pu_id"].choices = [("", GENERAL_SUMMARY_PU_LABEL), *pu_choices]
 
     def clean_selected_pu_id(self):
         value = self.cleaned_data.get("selected_pu_id")
-        if not value or value == "general":
+        if is_general_summary_pu(value):
             return None
         try:
             return uuid.UUID(str(value))

@@ -10,7 +10,12 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views import View
 
-from apps.analysis_app.forms import PuSelectionForm, UploadDocxForm
+from apps.analysis_app.forms import (
+    GENERAL_SUMMARY_PU_LABEL,
+    PuSelectionForm,
+    UploadDocxForm,
+    is_general_summary_pu,
+)
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
 from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
@@ -40,10 +45,36 @@ def _display_filename(file_name: str | None) -> str:
     return PurePath(normalized).name
 
 
-def _resolve_selected_pu_name(selection_form: PuSelectionForm, selected_pu_id: str) -> str:
-    if not selected_pu_id:
-        return ""
+def _cached_pu_full_name_map(request) -> dict[str, str]:
+    cached = getattr(request, "_pu_full_name_map", None)
+    if cached is not None:
+        return cached
+
+    pu_map: dict[str, str] = {}
+    for pu in CachedPU.objects.all().only("portal_pu_id", "full_name", "short_name"):
+        pu_map[str(pu.portal_pu_id)] = str(pu.full_name or pu.short_name or "")
+
+    if not pu_map:
+        from apps.portaldb.gateway import get_portal_gateway
+
+        gateway = get_portal_gateway()
+        for pu in gateway.list_pus():
+            pu_map[str(pu.pu_id)] = str(pu.full_name or pu.short_name or "")
+
+    setattr(request, "_pu_full_name_map", pu_map)
+    return pu_map
+
+
+def _resolve_selected_pu_name(request, selection_form: PuSelectionForm, selected_pu_id: str | None) -> str:
+    if is_general_summary_pu(selected_pu_id):
+        return GENERAL_SUMMARY_PU_LABEL
+
     selected_value = str(selected_pu_id)
+    pu_map = _cached_pu_full_name_map(request)
+    resolved_name = pu_map.get(selected_value)
+    if resolved_name:
+        return resolved_name
+
     for value, label in selection_form.fields["selected_pu_id"].choices:
         if str(value) == selected_value:
             return str(label or "")
@@ -674,7 +705,7 @@ class UploadView(View):
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
         selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
         run.selected_pu_id = str(selected_pu_id) if selected_pu_id else ""
-        run.selected_pu_name = _resolve_selected_pu_name(selection_form, run.selected_pu_id)
+        run.selected_pu_name = _resolve_selected_pu_name(request, selection_form, run.selected_pu_id)
         run.status = AnalysisRun.Status.QUEUED
         run.queued_at = timezone.now()
         run.error_message = ""
@@ -788,10 +819,9 @@ class AnalysisDetailView(View):
             selected_pu = CachedPU.objects.filter(
                 portal_pu_id=run.selected_pu_id
             ).first()
-        pu_label = "Общая сводка"
+        pu_label = GENERAL_SUMMARY_PU_LABEL
         if selected_pu:
-            label_parts = [part for part in [selected_pu.short_name, selected_pu.full_name] if part]
-            pu_label = " — ".join(label_parts) if label_parts else pu_label
+            pu_label = str(selected_pu.full_name or selected_pu.short_name or pu_label)
         return render(
             request,
             self.template_name,

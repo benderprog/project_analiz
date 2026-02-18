@@ -43,7 +43,7 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertIn(payload["status"], {AnalysisRun.Status.DONE, AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED})
         self.assertIn("worker_ok", payload)
         self.assertEqual(payload["uploaded_filename"], "sample.docx")
-        self.assertEqual(payload["selected_pu_name"], "")
+        self.assertEqual(payload["selected_pu_name"], "Общая сводка")
 
     def test_upload_stores_original_filename_basename(self):
         docx_bytes = self._make_docx_bytes()
@@ -120,12 +120,12 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<span id="analysis-filename">sample.docx</span>', html=True)
-        self.assertContains(response, '<span id="analysis-pu-name">ПУ Север — Пограничное управление Север</span>', html=True)
+        self.assertContains(response, '<span id="analysis-pu-name">Пограничное управление Север</span>', html=True)
         run.refresh_from_db()
-        self.assertEqual(run.selected_pu_name, "ПУ Север — Пограничное управление Север")
+        self.assertEqual(run.selected_pu_name, "Пограничное управление Север")
         status_response = self.client.get(reverse("analysis-status", kwargs={"run_id": run.run_id}))
         payload = status_response.json()
-        self.assertEqual(payload["selected_pu_name"], "ПУ Север — Пограничное управление Север")
+        self.assertEqual(payload["selected_pu_name"], "Пограничное управление Север")
 
     def test_uploaded_file_is_deleted_after_sync_analysis(self):
         docx_bytes = self._make_docx_bytes()
