@@ -20,6 +20,7 @@
   if (!root) return;
 
   const statusLabel = document.getElementById('analysis-status-label');
+  const filenameLabel = document.getElementById('analysis-filename');
   const elapsedLabel = document.getElementById('analysis-elapsed');
   const workerLabel = document.getElementById('analysis-worker');
   const doneLabel = document.getElementById('analysis-done');
@@ -53,6 +54,9 @@
       const data = await response.json();
 
       statusLabel.textContent = data.status || 'unknown';
+      if (filenameLabel && data.uploaded_filename) {
+        filenameLabel.textContent = data.uploaded_filename;
+      }
       workerLabel.textContent = data.worker_ok ? 'ok' : 'нет связи';
       serverElapsed = data.elapsed_seconds || 0;
       lastSyncAtMs = Date.now();

@@ -1,5 +1,6 @@
 import tempfile
 from io import BytesIO
+from pathlib import Path
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -40,6 +41,24 @@ class UploadAnalysisDocxTests(TestCase):
         payload = status_response.json()
         self.assertIn(payload["status"], {AnalysisRun.Status.DONE, AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED})
         self.assertIn("worker_ok", payload)
+        self.assertEqual(payload["uploaded_filename"], "sample.docx")
+
+    def test_upload_stores_original_filename_basename(self):
+        docx_bytes = self._make_docx_bytes()
+        upload = SimpleUploadedFile(
+            "folder/nested/test_big.docx",
+            docx_bytes,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                response = self.client.post(reverse("analysis-upload"), {"file": upload})
+
+        self.assertEqual(response.status_code, 200)
+        run = AnalysisRun.objects.first()
+        self.assertIsNotNone(run)
+        self.assertEqual(run.original_filename, "test_big.docx")
 
     def _make_docx_bytes(self) -> bytes:
         document = Document()
@@ -72,3 +91,26 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertIn(response.status_code, {200, 302})
         run.refresh_from_db()
         self.assertEqual(run.status, AnalysisRun.Status.DONE)
+
+    def test_uploaded_file_is_deleted_after_sync_analysis(self):
+        docx_bytes = self._make_docx_bytes()
+        upload = SimpleUploadedFile(
+            "sample.docx",
+            docx_bytes,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir, ANALYSIS_DELETE_UPLOADS=True):
+                self.client.post(reverse("analysis-upload"), {"file": upload})
+                run = AnalysisRun.objects.first()
+                saved_name = run.file.name
+                self.client.post(
+                    reverse("analysis-upload"),
+                    {"upload_id": run.run_id, "selected_pu_id": ""},
+                )
+                run.refresh_from_db()
+                file_path = Path(tmp_dir) / saved_name
+
+        self.assertEqual(run.status, AnalysisRun.Status.DONE)
+        self.assertFalse(file_path.exists())
