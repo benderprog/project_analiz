@@ -42,7 +42,7 @@ class EventTypeSemanticWindowTests(TestCase):
         text = "В ходе проверки найдены признаки финансрования ВСУ и иные сведения."
 
         with mock.patch("apps.analysis_app.services.get_sentence_model", return_value=_StubModel()):
-            predicted_type, _, event_match = _classify_event_type(text)
+            predicted_type, _, event_match, _ = _classify_event_type(text)
 
         self.assertEqual(predicted_type, "Оперативный интерес")
         self.assertIsNotNone(event_match)

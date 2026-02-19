@@ -8,6 +8,7 @@ class EventType(models.Model):
 
     event_type_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event_type = models.TextField(unique=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Event type"
@@ -33,6 +34,7 @@ class EventTypePattern(models.Model):
     )
     pattern = models.TextField()
     article_of_law = models.CharField(max_length=255, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Event type pattern"
