@@ -113,3 +113,45 @@ class ParseDocxParagraphFilterTests(SimpleTestCase):
             self.assertEqual(events[1].joined_text, f"{long_row[0].strip()} {long_row[1].strip()}")
         finally:
             os.unlink(file_path)
+
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=60)
+    def test_parse_docx_detects_table_header_and_skips_it_as_event(self):
+        header = ["Дата", "Время", "Событие"]
+        row_1 = ["01.01.2026", "12:00", "Описание события " + ("очень важное " * 6)]
+        row_2 = ["02.01.2026", "13:00", "Второе описание события " + ("детали " * 8)]
+        file_path = self._write_docx([], [header, row_1, row_2])
+
+        try:
+            events = parse_docx(file_path)
+
+            self.assertEqual(len(events), 2)
+            self.assertEqual([event.kind for event in events], ["table_row", "table_row"])
+            self.assertEqual(events[0].cells, row_1)
+            self.assertEqual(events[1].cells, row_2)
+            self.assertEqual(events[0].table_header_cells, header)
+            self.assertEqual(events[1].table_header_cells, header)
+        finally:
+            os.unlink(file_path)
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=60)
+    def test_parse_docx_table_without_header_keeps_first_row_as_event(self):
+        row_1 = [
+            "Первое длинное описание события " + ("данные " * 8),
+            "Продолжение первого описания " + ("детали " * 7),
+        ]
+        row_2 = [
+            "Второе длинное описание события " + ("данные " * 8),
+            "Продолжение второго описания " + ("детали " * 7),
+        ]
+        file_path = self._write_docx([], [row_1, row_2])
+
+        try:
+            events = parse_docx(file_path)
+
+            self.assertEqual(len(events), 2)
+            self.assertEqual(events[0].cells, row_1)
+            self.assertIsNone(events[0].table_header_cells)
+            self.assertIsNone(events[1].table_header_cells)
+        finally:
+            os.unlink(file_path)

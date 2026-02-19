@@ -608,6 +608,18 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
 
     source_kind = getattr(paragraph, "source_kind", "paragraph") or "paragraph"
     source_cells = getattr(paragraph, "source_cells", None)
+    source_table_header_cells = getattr(paragraph, "source_table_header_cells", None)
+    padded_source_cells = source_cells
+    padded_source_table_header_cells = source_table_header_cells
+    if source_kind == "table_row" and isinstance(source_cells, list):
+        header_cells = source_table_header_cells if isinstance(source_table_header_cells, list) else []
+        max_cols = max(len(source_cells), len(header_cells))
+        padded_source_cells = source_cells + ([""] * (max_cols - len(source_cells)))
+        padded_source_table_header_cells = (
+            header_cells + ([""] * (max_cols - len(header_cells)))
+            if header_cells
+            else None
+        )
 
     return {
         "idx": paragraph.idx,
@@ -616,7 +628,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         "preview": preview,
         "full_text": text,
         "source_kind": source_kind,
-        "source_cells": source_cells,
+        "source_cells": padded_source_cells,
+        "source_table_header_cells": padded_source_table_header_cells,
         "highlighted_html": _build_highlighted_html(text, extracted, match_result),
         "extracted_timestamp_display": extracted_timestamp_display,
         "portal_timestamp_display": portal_timestamp_display,
