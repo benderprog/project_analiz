@@ -19,6 +19,7 @@ from apps.analysis_app.forms import (
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
 from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
+    _classify_event_type,
     _find_case_insensitive_span,
     _find_datetime_span,
     extract_attributes,
@@ -576,6 +577,34 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     preview = text[:80] + ("…" if len(text) > 80 else "")
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}
+    best_pattern_text = predicted.get("best_pattern_text")
+    if not best_pattern_text and isinstance(predicted.get("event_pattern"), dict):
+        best_pattern_text = predicted.get("event_pattern", {}).get("pattern_text")
+
+    classifier_candidates = (
+        predicted.get("classifier_pattern_candidates")
+        or predicted.get("classifier_candidates")
+        or []
+    )
+    if best_pattern_text and not classifier_candidates:
+        try:
+            _, predicted_article, event_pattern, classifier_candidates = _classify_event_type(text)
+            if isinstance(match_result, dict):
+                predicted = match_result.setdefault("predicted", {})
+            if isinstance(predicted, dict):
+                predicted["classifier_candidates"] = classifier_candidates or []
+                predicted["classifier_pattern_candidates"] = classifier_candidates or []
+                if predicted_article:
+                    predicted["classifier_article_of_law"] = predicted_article
+                    match_result["classifier_article_of_law"] = predicted_article
+                if isinstance(event_pattern, dict):
+                    predicted.setdefault("best_pattern_text", event_pattern.get("pattern_text"))
+                    predicted.setdefault("best_pattern_fragment", event_pattern.get("matched_fragment"))
+                result.match_result = match_result
+                result.save(update_fields=["match_result"])
+        except Exception:  # noqa: BLE001 - detail page should remain renderable
+            classifier_candidates = []
+
     classifier_article = (
         match_result.get("classifier_article_of_law")
         or predicted.get("classifier_article_of_law")
@@ -658,10 +687,6 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "pattern_text": classifier_best.get("pattern_text"),
             "classifier_article": _display_article(classifier_best.get("classifier_article")),
         }
-
-    best_pattern_text = predicted.get("best_pattern_text")
-    if not best_pattern_text and isinstance(predicted.get("event_pattern"), dict):
-        best_pattern_text = predicted.get("event_pattern", {}).get("pattern_text")
 
     return {
         "idx": paragraph.idx,
