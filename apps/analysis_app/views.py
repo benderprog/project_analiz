@@ -665,20 +665,47 @@ class UploadView(View):
     def _recent_runs(limit: int = 10):
         return AnalysisRun.objects.order_by("-created_at")[:limit]
 
+    @staticmethod
+    def _ensure_session_key(request) -> str:
+        if request.session.session_key:
+            return request.session.session_key
+        request.session.create()
+        return str(request.session.session_key or "")
+
+    def _pending_queryset(self, request):
+        qs = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED).exclude(file="")
+        if request.user.is_authenticated:
+            return qs.filter(uploaded_by=request.user)
+        session_key = self._ensure_session_key(request)
+        return qs.filter(created_session_key=session_key)
+
+    def _build_pending_runs(self, request):
+        pending_runs = []
+        for run in self._pending_queryset(request).order_by("created_at"):
+            initial_pu_id = run.detected_pu_id or ""
+            selection_form = PuSelectionForm(
+                initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
+            )
+            pending_runs.append(
+                {
+                    "run": run,
+                    "selection_form": selection_form,
+                    "detected_pu_name": run.detected_pu_name,
+                }
+            )
+        return pending_runs
+
     def _build_context(
         self,
+        request,
         *,
         upload_form=None,
-        selection_form=None,
-        detection=None,
         pending_runs=None,
         selected_run_id=None,
     ):
         return {
             "upload_form": upload_form or UploadDocxForm(),
-            "selection_form": selection_form,
-            "detection": detection,
-            "pending_runs": pending_runs or [],
+            "pending_runs": pending_runs if pending_runs is not None else self._build_pending_runs(request),
             "queue_runs": self._recent_runs(),
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
@@ -689,66 +716,63 @@ class UploadView(View):
         return render(
             request,
             self.template_name,
-            self._build_context(selected_run_id=selected_run_id),
+            self._build_context(request, selected_run_id=selected_run_id),
         )
 
     def post(self, request):
         if request.FILES.getlist("file"):
             upload_form = UploadDocxForm(request.POST, request.FILES)
             if not upload_form.is_valid():
-                return render(request, self.template_name, self._build_context(upload_form=upload_form))
+                return render(request, self.template_name, self._build_context(request, upload_form=upload_form))
 
             from docx import Document
 
-            pending_runs = []
             selected_run_id = None
+            created_session_key = self._ensure_session_key(request)
             for uploaded_file in upload_form.cleaned_data["file"]:
                 run = AnalysisRun.objects.create(
                     uploaded_by=request.user if request.user.is_authenticated else None,
+                    created_session_key=created_session_key,
                     file=uploaded_file,
                     original_filename=os.path.basename(uploaded_file.name or ""),
                     status=AnalysisRun.Status.CREATED,
                 )
                 selected_run_id = selected_run_id or run.run_id
 
-                detection = None
                 try:
                     document = Document(run.file.path)
                     detection = detect_pu_from_docx(document)
                 except Exception:  # noqa: BLE001
                     logger.exception("Failed to detect PU for uploaded run %s", run.run_id)
+                    detection = None
 
-                initial_pu_id = str(detection.pu.portal_pu_id) if detection and detection.pu else ""
-                selection_form = PuSelectionForm(
-                    initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
-                )
-                pending_runs.append(
-                    {
-                        "run": run,
-                        "detection": detection,
-                        "selection_form": selection_form,
-                    }
-                )
+                if detection and detection.pu:
+                    run.detected_pu_id = str(detection.pu.portal_pu_id)
+                    run.detected_pu_name = str(detection.pu.full_name or detection.pu.short_name or "")
+                    run.save(update_fields=["detected_pu_id", "detected_pu_name"])
 
-            return render(
-                request,
-                self.template_name,
-                self._build_context(
-                    upload_form=UploadDocxForm(),
-                    pending_runs=pending_runs,
-                    selected_run_id=selected_run_id,
-                ),
-            )
+            upload_url = redirect("analysis-upload").url
+            if selected_run_id:
+                return redirect(f"{upload_url}?run={selected_run_id}")
+            return redirect(upload_url)
 
         selection_form = PuSelectionForm(request.POST)
         if not selection_form.is_valid():
             return render(
                 request,
                 self.template_name,
-                self._build_context(selection_form=selection_form),
+                self._build_context(request),
             )
 
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
+        if request.user.is_authenticated:
+            if run.uploaded_by_id != request.user.id:
+                return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+        else:
+            session_key = self._ensure_session_key(request)
+            if run.created_session_key != session_key:
+                return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
+
         selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
         run.selected_pu_id = str(selected_pu_id) if selected_pu_id else ""
         run.selected_pu_name = _resolve_selected_pu_name(request, selection_form, run.selected_pu_id)
@@ -784,6 +808,10 @@ class UploadView(View):
         task = run_docx_analysis.delay(str(run.run_id), str(selected_pu_id) if selected_pu_id else None)
         run.celery_task_id = task.id
         run.save(update_fields=["celery_task_id"])
+
+        wants_json = request.headers.get("x-requested-with") == "XMLHttpRequest" or "application/json" in request.headers.get("Accept", "")
+        if wants_json:
+            return JsonResponse({"ok": True, "run_id": str(run.run_id), "new_status": run.status})
         return redirect(f"{redirect('analysis-upload').url}?run={run.run_id}")
 
 
