@@ -19,31 +19,33 @@ def is_general_summary_pu(selected_pu_id: str | uuid.UUID | None) -> bool:
     return normalized in {"", "general"}
 
 
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultipleFileField(forms.FileField):
+    def clean(self, data, initial=None):
+        if data is None:
+            return []
+        if isinstance(data, (list, tuple)):
+            return [super().clean(item, initial) for item in data]
+        return [super().clean(data, initial)]
+
+
 class UploadDocxForm(forms.Form):
-    file = forms.FileField(
+    file = MultipleFileField(
         label="DOCX файл",
-        required=False,
-        widget=forms.FileInput(attrs={"multiple": True}),
+        required=True,
+        widget=MultipleFileInput(attrs={"multiple": True}),
     )
 
-    def clean(self):
-        cleaned_data = super().clean()
-        files = self.files.getlist("file")
-        if not files:
-            self.add_error("file", "Выберите хотя бы один DOCX файл.")
-            return cleaned_data
-
+    def clean_file(self):
+        files = self.cleaned_data["file"]
         for uploaded_file in files:
             ext = os.path.splitext(uploaded_file.name or "")[1].lower()
             if ext != ".docx":
-                self.add_error("file", f"Файл {uploaded_file.name} должен быть в формате DOCX.")
-
-        if self.errors.get("file"):
-            return cleaned_data
-
-        cleaned_data["files"] = files
-        cleaned_data["file"] = files[0]
-        return cleaned_data
+                raise forms.ValidationError(f"Файл {uploaded_file.name} должен быть в формате DOCX.")
+        return files
 
 
 class PuSelectionForm(forms.Form):
