@@ -1774,6 +1774,7 @@ def _event_type_match_to_payload(match: EventTypeMatch) -> dict[str, object]:
     if match.matched_fragment:
         payload["matched_fragment"] = match.matched_fragment
         payload["evidence_text"] = match.matched_fragment
+    payload["classifier_article"] = match.article_of_law
     return payload
 
 
@@ -2294,6 +2295,30 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
     predicted_type, predicted_article, predicted_event_pattern, classifier_candidates = _classify_event_type(text)
+    predicted_payload = {
+        "event_type": predicted_type,
+        "article_of_law": attributes.article_of_law,
+        "classifier_article_of_law": predicted_article,
+        "event_pattern": predicted_event_pattern,
+        "event_type_match": predicted_event_pattern,
+        "classifier_best": {
+            "event_type_id": (predicted_event_pattern or {}).get("event_type_id"),
+            "event_type_name": predicted_type,
+            "score": (predicted_event_pattern or {}).get("score"),
+            "pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
+            "classifier_article": predicted_article,
+        } if predicted_event_pattern else None,
+        "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
+        "best_pattern_fragment": (predicted_event_pattern or {}).get("matched_fragment"),
+        "classifier_candidates": classifier_candidates,
+        "classifier_pattern_candidates": classifier_candidates,
+        "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
+    }
+    logger.debug(
+        "Prepared match_result predicted payload: classifier_candidates_len=%s, best_pattern=%s",
+        len(classifier_candidates),
+        predicted_payload.get("best_pattern_text"),
+    )
     svodka_article = attributes.article_of_law
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
@@ -2395,25 +2420,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "subdivision_unit_type_conflict": unit_type_conflict,
             "extracted_subdivision_name": attributes.subdivision_name,
             "portal": None,
-            "predicted": {
-                "event_type": predicted_type,
-                "article_of_law": svodka_article,
-                "classifier_article_of_law": predicted_article,
-                "event_pattern": predicted_event_pattern,
-                "event_type_match": predicted_event_pattern,
-                "classifier_best": {
-                    "event_type_id": (predicted_event_pattern or {}).get("event_type_id"),
-                    "event_type_name": predicted_type,
-                    "score": (predicted_event_pattern or {}).get("score"),
-                    "pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
-                    "classifier_article": predicted_article,
-                } if predicted_event_pattern else None,
-                "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
-                "best_pattern_fragment": (predicted_event_pattern or {}).get("matched_fragment"),
-                "classifier_candidates": classifier_candidates,
-                "classifier_pattern_candidates": classifier_candidates,
-                "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
-            },
+            "predicted": predicted_payload,
             "match_method": None,
             "time_mismatch": False,
             "subdivision_mismatch": False,
@@ -2593,23 +2600,13 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "article_of_law": best_event.event.article_of_law,
         },
         "predicted": {
+            **predicted_payload,
             "event_type": best_flags.get("predicted_type"),
             "article_of_law": best_flags.get("predicted_article"),
-            "classifier_article_of_law": predicted_article,
-            "event_pattern": predicted_event_pattern,
-            "event_type_match": predicted_event_pattern,
             "classifier_best": {
-                "event_type_id": (predicted_event_pattern or {}).get("event_type_id"),
+                **(predicted_payload.get("classifier_best") or {}),
                 "event_type_name": best_flags.get("predicted_type"),
-                "score": (predicted_event_pattern or {}).get("score"),
-                "pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
-                "classifier_article": predicted_article,
-            } if predicted_event_pattern else None,
-            "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
-            "best_pattern_fragment": (predicted_event_pattern or {}).get("matched_fragment"),
-            "classifier_candidates": classifier_candidates,
-            "classifier_pattern_candidates": classifier_candidates,
-            "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
+            } if predicted_payload.get("classifier_best") else None,
         },
         "offender_matches": offender_matches,
         "match_method": match_method,
