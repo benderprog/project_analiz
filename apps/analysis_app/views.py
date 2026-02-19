@@ -19,9 +19,9 @@ from apps.analysis_app.forms import (
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
 from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
-    _classify_event_type,
     _find_case_insensitive_span,
     _find_datetime_span,
+    ensure_classifier_candidates,
     extract_attributes,
     highlight_text,
     match_event,
@@ -586,20 +586,20 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         or predicted.get("classifier_candidates")
         or []
     )
-    if best_pattern_text and not classifier_candidates:
+    candidates_were_missing = bool(best_pattern_text and not classifier_candidates)
+    if candidates_were_missing:
         try:
-            _, predicted_article, event_pattern, classifier_candidates = _classify_event_type(text)
-            if isinstance(match_result, dict):
-                predicted = match_result.setdefault("predicted", {})
-            if isinstance(predicted, dict):
-                predicted["classifier_candidates"] = classifier_candidates or []
-                predicted["classifier_pattern_candidates"] = classifier_candidates or []
+            predicted = ensure_classifier_candidates(predicted, text)
+            classifier_candidates = (
+                predicted.get("classifier_pattern_candidates")
+                or predicted.get("classifier_candidates")
+                or []
+            )
+            if classifier_candidates:
+                match_result["predicted"] = predicted
+                predicted_article = predicted.get("classifier_article_of_law")
                 if predicted_article:
-                    predicted["classifier_article_of_law"] = predicted_article
                     match_result["classifier_article_of_law"] = predicted_article
-                if isinstance(event_pattern, dict):
-                    predicted.setdefault("best_pattern_text", event_pattern.get("pattern_text"))
-                    predicted.setdefault("best_pattern_fragment", event_pattern.get("matched_fragment"))
                 result.match_result = match_result
                 result.save(update_fields=["match_result"])
         except Exception:  # noqa: BLE001 - detail page should remain renderable

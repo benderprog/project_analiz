@@ -1890,6 +1890,37 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None
     return semantic_match["event_type"], semantic_match["article_of_law"], event_pattern, candidate_payload
 
 
+def ensure_classifier_candidates(predicted: dict, text: str) -> dict:
+    """Backfill classifier candidates when best pattern exists but candidates are absent."""
+    if not isinstance(predicted, dict):
+        return {}
+
+    best_pattern_text = predicted.get("best_pattern_text")
+    if not best_pattern_text and isinstance(predicted.get("event_pattern"), dict):
+        best_pattern_text = (predicted.get("event_pattern") or {}).get("pattern_text")
+    if not best_pattern_text:
+        return predicted
+
+    existing_candidates = (
+        predicted.get("classifier_pattern_candidates")
+        or predicted.get("classifier_candidates")
+        or []
+    )
+    if existing_candidates:
+        return predicted
+
+    _, predicted_article, event_pattern, classifier_candidates = _classify_event_type(text)
+    predicted["classifier_candidates"] = classifier_candidates or []
+    predicted["classifier_pattern_candidates"] = classifier_candidates or []
+    if predicted_article:
+        predicted.setdefault("classifier_article_of_law", predicted_article)
+    if isinstance(event_pattern, dict):
+        predicted.setdefault("best_pattern_text", event_pattern.get("pattern_text"))
+        predicted.setdefault("best_pattern_fragment", event_pattern.get("matched_fragment"))
+    predicted.setdefault("classifier_min_score_used", float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)))
+    return predicted
+
+
 def _select_event_by_subdivision_time(
     subdivision_id: str, target_dt: datetime
 ) -> tuple[HydratedEvent | None, int | None]:
@@ -2314,9 +2345,10 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "classifier_pattern_candidates": classifier_candidates,
         "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
     }
+    predicted_payload = ensure_classifier_candidates(predicted_payload, text)
     logger.debug(
         "Prepared match_result predicted payload: classifier_candidates_len=%s, best_pattern=%s",
-        len(classifier_candidates),
+        len(predicted_payload.get("classifier_candidates") or []),
         predicted_payload.get("best_pattern_text"),
     )
     svodka_article = attributes.article_of_law
