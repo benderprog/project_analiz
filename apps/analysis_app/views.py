@@ -506,6 +506,15 @@ def _status_from_flag(flag: bool | None) -> str:
     return "neutral"
 
 
+
+
+def _score_to_percent(score: object) -> int:
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return 0
+    return int(round(max(0.0, min(1.0, value)) * 100))
+
 def _display_article(value: object) -> str | None:
     if value is None:
         return None
@@ -621,6 +630,37 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             else None
         )
 
+    classifier_candidates = predicted.get("classifier_candidates") or []
+    formatted_classifier_candidates = [
+        {
+            "event_type_id": item.get("event_type_id"),
+            "event_type_name": item.get("event_type_name"),
+            "score": item.get("score"),
+            "score_percent": _score_to_percent(item.get("score")),
+            "pattern_text": item.get("pattern_text"),
+            "matched_fragment": item.get("matched_fragment"),
+            "text_article": _display_article(item.get("text_article")) or _display_article(predicted.get("article_of_law")),
+            "classifier_article": _display_article(item.get("classifier_article")),
+        }
+        for item in classifier_candidates
+    ]
+
+    classifier_best = predicted.get("classifier_best") or {}
+    classifier_best_payload = None
+    if isinstance(classifier_best, dict) and classifier_best:
+        classifier_best_payload = {
+            "event_type_id": classifier_best.get("event_type_id"),
+            "event_type_name": classifier_best.get("event_type_name"),
+            "score": classifier_best.get("score"),
+            "score_percent": _score_to_percent(classifier_best.get("score")),
+            "pattern_text": classifier_best.get("pattern_text"),
+            "classifier_article": _display_article(classifier_best.get("classifier_article")),
+        }
+
+    best_pattern_text = predicted.get("best_pattern_text")
+    if not best_pattern_text and isinstance(predicted.get("event_pattern"), dict):
+        best_pattern_text = predicted.get("event_pattern", {}).get("pattern_text")
+
     return {
         "idx": paragraph.idx,
         "title": title,
@@ -664,7 +704,10 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "event_type": predicted.get("event_type"),
             "article_of_law": _display_article(predicted.get("article_of_law")),
             "classifier_article_of_law": _display_article(classifier_article),
-            "classifier_candidates": predicted.get("classifier_candidates") or [],
+            "classifier_best": classifier_best_payload,
+            "best_pattern_text": best_pattern_text,
+            "classifier_candidates": formatted_classifier_candidates,
+            "classifier_min_score_used": predicted.get("classifier_min_score_used"),
         },
         "status": {
             "timestamp": _status_for_timestamp(match_result),

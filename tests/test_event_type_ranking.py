@@ -4,7 +4,7 @@ from apps.analysis_app.services import rank_event_types
 from apps.classifier.models import EventType, EventTypePattern
 
 
-@override_settings(SKIP_SEMANTIC_MODEL=True, CLASSIFIER_MIN_SCORE=0.35, CLASSIFIER_TOP_K=5)
+@override_settings(SKIP_SEMANTIC_MODEL=True, CLASSIFIER_MIN_SCORE=0.5, CLASSIFIER_TOP_K=5)
 class EventTypeRankingTests(TestCase):
     def test_regex_candidates_ranked_by_longer_match(self):
         t1 = EventType.objects.create(event_type="Короткий")
@@ -17,11 +17,12 @@ class EventTypeRankingTests(TestCase):
         self.assertIsNotNone(best)
         self.assertEqual(best.event_type_name, "Длинный")
         self.assertEqual(best.match_method, "regex_hit")
+        self.assertLessEqual(best.score, 1.0)
         self.assertGreaterEqual(len(candidates), 2)
         self.assertEqual([c.event_type_name for c in candidates[:2]], ["Длинный", "Короткий"])
 
     @override_settings(CLASSIFIER_MIN_SCORE=0.8)
-    def test_fuzzy_best_respects_min_score_threshold(self):
+    def test_candidates_respect_min_score_threshold(self):
         t1 = EventType.objects.create(event_type="ДТП")
         t2 = EventType.objects.create(event_type="Пожар")
         EventTypePattern.objects.create(event_type=t1, pattern="дорожно транспортное происшествие")
@@ -29,8 +30,7 @@ class EventTypeRankingTests(TestCase):
 
         best, candidates = rank_event_types("случайный текст без совпадений", top_k=5)
 
-        self.assertTrue(candidates)
-        self.assertLess(candidates[0].score, 0.8)
+        self.assertFalse(candidates)
         self.assertIsNone(best)
 
     def test_inactive_event_types_and_patterns_are_skipped(self):

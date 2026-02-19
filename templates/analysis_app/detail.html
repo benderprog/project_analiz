@@ -219,11 +219,24 @@
             {% if selected_event.status.article == "green" %}✓{% elif selected_event.status.article == "yellow" %}!{% elif selected_event.status.article == "red" %}✕{% else %}—{% endif %}
           </span>
         </h4>
+        <p id="best-pattern">
+          Паттерн: <span data-field="best-pattern">{{ selected_event.predicted.best_pattern_text|default:"—" }}</span>
+        </p>
         <p id="predicted-type">
           Определено:
-          <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
+          <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не определено" }}</span>
           (<span data-field="pred-article">{{ selected_event.predicted.article_of_law|default:"—" }}</span>)
         </p>
+        {% if selected_event.predicted.classifier_candidates %}
+          <details id="predicted-candidates" class="candidate-list-block">
+            <summary>Кандидаты</summary>
+            <ul>
+              {% for candidate in selected_event.predicted.classifier_candidates %}
+                <li>— {{ candidate.event_type_name|default:"—" }} ({{ candidate.text_article|default:"—" }}) ({{ candidate.score_percent|default:0 }}%)</li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
         <p id="portal-type">
           В БД:
           <span data-field="portal-event-type">{{ selected_event.portal.event_type|default:"не задан" }}</span>
@@ -231,23 +244,19 @@
         </p>
         <p id="classifier-type">
           По классификатору:
-          <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
+          <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не задан" }}</span>
           (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
-        <div id="classifier-candidates" class="candidate-list-block">
-          <h5>Кандидаты по классификатору</h5>
-          <ul>
-            {% for candidate in selected_event.predicted.classifier_candidates %}
-              <li>
-                {% if forloop.first and selected_event.predicted.event_type %}✓ {% endif %}
-                {{ candidate.score_percent|default:0|floatformat:0 }}% {{ candidate.event_type_name|default:"—" }}
-                {% if candidate.pattern_text %}(pattern: "{{ candidate.pattern_text|truncatechars:60 }}"){% endif %}
-              </li>
-            {% empty %}
-              <li>—</li>
-            {% endfor %}
-          </ul>
-        </div>
+        {% if selected_event.predicted.classifier_candidates %}
+          <details id="classifier-candidates" class="candidate-list-block">
+            <summary>Кандидаты</summary>
+            <ul>
+              {% for candidate in selected_event.predicted.classifier_candidates %}
+                <li>— {{ candidate.event_type_name|default:"—" }} ({{ candidate.classifier_article|default:"—" }}) ({{ candidate.score_percent|default:0 }}%)</li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
       </div>
 
       <div class="detail-block">
@@ -286,7 +295,9 @@
       metricOffenders: document.getElementById("metric-offenders"),
       offendersDetails: document.getElementById("offenders-details"),
       commentsList: document.getElementById("comments-list"),
+      predictedCandidates: document.querySelector("#predicted-candidates ul"),
       classifierCandidates: document.querySelector("#classifier-candidates ul"),
+      bestPattern: document.querySelector('[data-field="best-pattern"]'),
       fields: {
         predEventType: document.querySelector('[data-field="pred-event-type"]'),
         predArticle: document.querySelector('[data-field="pred-article"]'),
@@ -351,18 +362,17 @@
     };
 
 
-    const renderClassifierCandidates = (items, bestEventType) => {
+    const renderClassifierCandidates = (items, articleField) => {
       if (!items || !items.length) {
-        return "<li>—</li>";
+        return "";
       }
       return items
-        .map((item, index) => {
+        .map((item) => {
           const score = item.score_percent !== null && item.score_percent !== undefined
-            ? `${Math.round(item.score_percent)}%`
+            ? `${Math.max(0, Math.min(100, Math.round(item.score_percent)))}%`
             : "0%";
-          const marker = index === 0 && bestEventType ? "✓ " : "";
-          const pattern = item.pattern_text ? ` (pattern: &quot;${escapeHtml(item.pattern_text).slice(0, 60)}&quot;)` : "";
-          return `<li>${marker}${score} ${escapeHtml(item.event_type_name || "—")}${pattern}</li>`;
+          const article = item?.[articleField] || "—";
+          return `<li>— ${escapeHtml(item.event_type_name || "—")} (${escapeHtml(article)}) (${score})</li>`;
         })
         .join("");
     };
@@ -433,16 +443,23 @@
         dom.badges.article.textContent = badgeIcons[articleStatus] || "—";
       }
 
-      if (dom.fields.predEventType) dom.fields.predEventType.textContent = event.predicted?.event_type || "не удалось";
+      if (dom.fields.predEventType) dom.fields.predEventType.textContent = event.predicted?.event_type || "не определено";
       if (dom.fields.predArticle) dom.fields.predArticle.textContent = event.predicted?.article_of_law || "—";
       if (dom.fields.portalEventType) dom.fields.portalEventType.textContent = event.portal?.event_type || "не задан";
       if (dom.fields.portalArticle) dom.fields.portalArticle.textContent = event.portal?.article_of_law || "—";
-      if (dom.fields.clsEventType) dom.fields.clsEventType.textContent = event.predicted?.event_type || "не удалось";
+      if (dom.fields.clsEventType) dom.fields.clsEventType.textContent = event.predicted?.event_type || "не задан";
       if (dom.fields.clsArticle) dom.fields.clsArticle.textContent = event.predicted?.classifier_article_of_law || "—";
+      if (dom.bestPattern) dom.bestPattern.textContent = event.predicted?.best_pattern_text || "—";
+      if (dom.predictedCandidates) {
+        dom.predictedCandidates.innerHTML = renderClassifierCandidates(
+          event.predicted?.classifier_candidates || [],
+          "text_article"
+        );
+      }
       if (dom.classifierCandidates) {
         dom.classifierCandidates.innerHTML = renderClassifierCandidates(
           event.predicted?.classifier_candidates || [],
-          event.predicted?.event_type || ""
+          "classifier_article"
         );
       }
 
