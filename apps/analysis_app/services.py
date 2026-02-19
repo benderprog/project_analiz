@@ -13,6 +13,7 @@ from functools import lru_cache
 from uuid import UUID
 
 from django.conf import settings
+from django.db.models import Q
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -1690,40 +1691,74 @@ def _build_pattern_candidates(
     *,
     best_pattern_text: str | None,
     pattern_fragment: str | None,
-    event_types: list[EventType],
     min_score: float,
 ) -> list[dict[str, object]]:
     normalized_pattern = _normalize_classifier_text(best_pattern_text or "")
     if not normalized_pattern:
         return []
 
-    fragment_normalized = _normalize_classifier_text(pattern_fragment or best_pattern_text or "")
+    pattern_text = (best_pattern_text or "").strip()
+    pattern_rows_qs = EventTypePattern.objects.all()
+    if hasattr(EventTypePattern, "is_active"):
+        pattern_rows_qs = pattern_rows_qs.filter(is_active=True)
+
+    if pattern_text:
+        pattern_rows_qs = pattern_rows_qs.filter(Q(pattern=pattern_text) | Q(pattern__iexact=pattern_text))
+
+    pattern_rows = [
+        row
+        for row in pattern_rows_qs.only(
+            "event_type_pattern_id",
+            "event_type_id",
+            "pattern",
+            "article_of_law",
+        )
+        if _normalize_classifier_text((row.pattern or "").strip()) == normalized_pattern
+    ]
+    if not pattern_rows:
+        return []
+
+    event_type_ids = list({row.event_type_id for row in pattern_rows})
+    event_types = EventType.objects.filter(event_type_id__in=event_type_ids, is_active=True).only(
+        "event_type_id", "event_type"
+    )
+    event_type_by_id = {event_type.event_type_id: event_type for event_type in event_types}
+
     candidates: list[dict[str, object]] = []
-    for event_type in event_types:
-        for pattern_row in event_type.patterns.all():
-            if not pattern_row.is_active:
-                continue
-            pattern_text = (pattern_row.pattern or "").strip()
-            if _normalize_classifier_text(pattern_text) != normalized_pattern:
-                continue
-            score = _clamp_score(SequenceMatcher(None, fragment_normalized, normalized_pattern).ratio())
-            if score < min_score:
-                continue
-            candidates.append(
-                {
-                    "event_type_id": str(event_type.event_type_id),
-                    "event_type_name": event_type.event_type,
-                    "score": round(score, 6),
-                    "score_percent": round(score * 100, 1),
-                    "match_method": "pattern_fragment",
-                    "pattern_id": str(pattern_row.event_type_pattern_id),
-                    "pattern_text": pattern_text,
-                    "matched_fragment": pattern_fragment or best_pattern_text,
-                    "classifier_article": pattern_row.article_of_law,
-                    "text_article": None,
-                }
-            )
-            break
+    for pattern_row in pattern_rows:
+        event_type = event_type_by_id.get(pattern_row.event_type_id)
+        if event_type is None:
+            continue
+
+        row_pattern_text = (pattern_row.pattern or "").strip()
+        matched_fragment = (pattern_fragment or "").strip() or row_pattern_text
+        score = _clamp_score(
+            SequenceMatcher(
+                None,
+                _normalize_classifier_text(matched_fragment),
+                _normalize_classifier_text(row_pattern_text),
+            ).ratio()
+        )
+        if score < min_score:
+            continue
+
+        classifier_article = getattr(pattern_row, "article_of_law", None) or getattr(pattern_row, "article", None)
+        candidates.append(
+            {
+                "event_type_id": str(event_type.event_type_id),
+                "event_type_name": event_type.event_type,
+                "score": round(score, 6),
+                "score_percent": round(score * 100, 1),
+                "match_method": "pattern_fragment",
+                "pattern_id": str(pattern_row.event_type_pattern_id),
+                "pattern_text": row_pattern_text,
+                "matched_fragment": matched_fragment,
+                "classifier_article": classifier_article,
+                "text_article": None,
+            }
+        )
+
+    candidates.sort(key=lambda item: (-(item.get("score") or 0.0), item.get("event_type_name") or ""))
     return candidates
 
 
@@ -1825,16 +1860,11 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None
     best_match, _ = rank_event_types(text, top_k=top_k)
 
     min_score = float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5))
-    event_types = list(
-        EventType.objects.filter(is_active=True).prefetch_related("patterns")
-    )
-
     best_pattern_text = (best_match.pattern_text if best_match else None) or ""
     best_pattern_fragment = (best_match.matched_fragment if best_match else None) or best_pattern_text
     candidate_payload = _build_pattern_candidates(
         best_pattern_text=best_pattern_text,
         pattern_fragment=best_pattern_fragment,
-        event_types=event_types,
         min_score=min_score,
     )
 
