@@ -1665,13 +1665,17 @@ def _normalize_classifier_text(text: str) -> str:
     return normalized.strip()
 
 
+def _clamp_score(score: float) -> float:
+    return max(0.0, min(1.0, float(score)))
+
+
 def _event_type_match_to_payload(match: EventTypeMatch) -> dict[str, object]:
     payload: dict[str, object] = {
         "event_type_id": match.event_type_id,
         "event_type_label": match.event_type_name,
         "pattern_id": match.pattern_id,
         "pattern_text": match.pattern_text,
-        "score": round(float(match.score), 6),
+        "score": round(_clamp_score(match.score), 6),
         "method": match.match_method,
     }
     if match.matched_fragment:
@@ -1688,7 +1692,7 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
     max_chars = int(getattr(settings, "CLASSIFIER_MAX_TEXT_CHARS", 800))
     limited_text = normalized_text[:max_chars]
     fuzzy_window = limited_text[:500]
-    min_fuzzy_score = float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.35))
+    min_score = float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5))
 
     event_types = list(
         EventType.objects.filter(is_active=True).prefetch_related("patterns")
@@ -1714,13 +1718,15 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
                     regex_match = None
                 if regex_match:
                     fragment = regex_match.group(0) or ""
-                    match_len_ratio = min(1.0, len(fragment) / max(60, min(len(limited_text), 300)))
-                    specificity = min(0.25, len(_EVENT_PATTERN_TOKEN_RE.findall(pattern.lower())) * 0.02)
-                    score = 1.0 + 0.5 * match_len_ratio + specificity
+                    score = SequenceMatcher(
+                        None,
+                        _normalize_classifier_text(pattern),
+                        _normalize_classifier_text(fragment),
+                    ).ratio()
                     candidate = EventTypeMatch(
                         event_type_id=str(event_type.event_type_id),
                         event_type_name=event_type.event_type,
-                        score=score,
+                        score=_clamp_score(score),
                         match_method="regex_hit",
                         pattern_id=str(pattern_row.event_type_pattern_id),
                         pattern_text=pattern,
@@ -1733,7 +1739,7 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
                 candidate = EventTypeMatch(
                     event_type_id=str(event_type.event_type_id),
                     event_type_name=event_type.event_type,
-                    score=ratio,
+                    score=_clamp_score(ratio),
                     match_method="fuzzy",
                     pattern_id=str(pattern_row.event_type_pattern_id),
                     pattern_text=pattern,
@@ -1747,13 +1753,10 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
             matches.append(best)
 
     matches.sort(key=lambda item: item.score, reverse=True)
-    top_matches = matches[: max(1, int(top_k))]
+    filtered_matches = [item for item in matches if item.score >= min_score]
+    top_matches = filtered_matches[: max(1, int(top_k))]
 
     best = top_matches[0] if top_matches else None
-    if best is None:
-        return None, top_matches
-    if best.match_method != "regex_hit" and best.score < min_fuzzy_score:
-        return None, top_matches
     return best, top_matches
 
 
@@ -1765,13 +1768,13 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None
         {
             "event_type_id": item.event_type_id,
             "event_type_name": item.event_type_name,
-            "score": round(float(item.score), 6),
-            "score_percent": round(float(item.score) * 100, 2),
+            "score": round(_clamp_score(item.score), 6),
             "match_method": item.match_method,
             "pattern_id": item.pattern_id,
             "pattern_text": item.pattern_text,
             "matched_fragment": item.matched_fragment,
-            "article_of_law": item.article_of_law,
+            "classifier_article": item.article_of_law,
+            "text_article": None,
         }
         for item in candidates
     ]
@@ -2309,7 +2312,16 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "classifier_article_of_law": predicted_article,
                 "event_pattern": predicted_event_pattern,
                 "event_type_match": predicted_event_pattern,
+                "classifier_best": {
+                    "event_type_id": (predicted_event_pattern or {}).get("event_type_id"),
+                    "event_type_name": predicted_type,
+                    "score": (predicted_event_pattern or {}).get("score"),
+                    "pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
+                    "classifier_article": predicted_article,
+                } if predicted_event_pattern else None,
+                "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
                 "classifier_candidates": classifier_candidates,
+                "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
             },
             "match_method": None,
             "time_mismatch": False,
@@ -2495,7 +2507,16 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "classifier_article_of_law": predicted_article,
             "event_pattern": predicted_event_pattern,
             "event_type_match": predicted_event_pattern,
+            "classifier_best": {
+                "event_type_id": (predicted_event_pattern or {}).get("event_type_id"),
+                "event_type_name": best_flags.get("predicted_type"),
+                "score": (predicted_event_pattern or {}).get("score"),
+                "pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
+                "classifier_article": predicted_article,
+            } if predicted_event_pattern else None,
+            "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
             "classifier_candidates": classifier_candidates,
+            "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
         },
         "offender_matches": offender_matches,
         "match_method": match_method,
