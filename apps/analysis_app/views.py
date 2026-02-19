@@ -640,10 +640,12 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "pattern_text": item.get("pattern_text"),
             "matched_fragment": item.get("matched_fragment"),
             "text_article": _display_article(item.get("text_article")) or _display_article(predicted.get("article_of_law")),
-            "classifier_article": _display_article(item.get("classifier_article")),
+            "classifier_article": _display_article(item.get("classifier_article") or item.get("article")),
         }
         for item in classifier_candidates
     ]
+    predicted["classifier_candidates"] = formatted_classifier_candidates
+    predicted["classifier_pattern_candidates"] = formatted_classifier_candidates
 
     classifier_best = predicted.get("classifier_best") or {}
     classifier_best_payload = None
@@ -708,6 +710,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "best_pattern_text": best_pattern_text,
             "best_pattern_fragment": predicted.get("best_pattern_fragment"),
             "classifier_candidates": formatted_classifier_candidates,
+            "classifier_pattern_candidates": formatted_classifier_candidates,
             "classifier_min_score_used": predicted.get("classifier_min_score_used"),
         },
         "status": {
