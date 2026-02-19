@@ -227,7 +227,7 @@
           <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не определено" }}</span>
           (<span data-field="pred-article">{{ selected_event.predicted.article_of_law|default:"—" }}</span>)
         </p>
-        {% if selected_event.predicted.classifier_candidates %}
+        {% if selected_event.predicted.classifier_candidates|length > 0 %}
           <details id="predicted-candidates" class="candidate-list-block">
             <summary>Кандидаты</summary>
             <ul>
@@ -247,7 +247,7 @@
           <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не задан" }}</span>
           (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
-        {% if selected_event.predicted.classifier_candidates %}
+        {% if selected_event.predicted.classifier_candidates|length > 0 %}
           <details id="classifier-candidates" class="candidate-list-block">
             <summary>Кандидаты</summary>
             <ul>
@@ -297,6 +297,8 @@
       commentsList: document.getElementById("comments-list"),
       predictedCandidates: document.querySelector("#predicted-candidates ul"),
       classifierCandidates: document.querySelector("#classifier-candidates ul"),
+      predictedCandidatesBlock: document.getElementById("predicted-candidates"),
+      classifierCandidatesBlock: document.getElementById("classifier-candidates"),
       bestPattern: document.querySelector('[data-field="best-pattern"]'),
       fields: {
         predEventType: document.querySelector('[data-field="pred-event-type"]'),
@@ -451,16 +453,24 @@
       if (dom.fields.clsArticle) dom.fields.clsArticle.textContent = event.predicted?.classifier_article_of_law || "—";
       if (dom.bestPattern) dom.bestPattern.textContent = event.predicted?.best_pattern_text || "—";
       if (dom.predictedCandidates) {
+        const predictedItems = event.predicted?.classifier_candidates || [];
         dom.predictedCandidates.innerHTML = renderClassifierCandidates(
-          event.predicted?.classifier_candidates || [],
+          predictedItems,
           "text_article"
         );
+        if (dom.predictedCandidatesBlock) {
+          dom.predictedCandidatesBlock.hidden = !predictedItems.length;
+        }
       }
       if (dom.classifierCandidates) {
+        const classifierItems = event.predicted?.classifier_candidates || [];
         dom.classifierCandidates.innerHTML = renderClassifierCandidates(
-          event.predicted?.classifier_candidates || [],
+          classifierItems,
           "classifier_article"
         );
+        if (dom.classifierCandidatesBlock) {
+          dom.classifierCandidatesBlock.hidden = !classifierItems.length;
+        }
       }
 
       dom.commentsList.innerHTML = renderListItems(event.comments);

@@ -630,13 +630,13 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             else None
         )
 
-    classifier_candidates = predicted.get("classifier_candidates") or []
+    classifier_candidates = predicted.get("classifier_pattern_candidates") or predicted.get("classifier_candidates") or []
     formatted_classifier_candidates = [
         {
             "event_type_id": item.get("event_type_id"),
             "event_type_name": item.get("event_type_name"),
             "score": item.get("score"),
-            "score_percent": _score_to_percent(item.get("score")),
+            "score_percent": item.get("score_percent") if item.get("score_percent") is not None else _score_to_percent(item.get("score")),
             "pattern_text": item.get("pattern_text"),
             "matched_fragment": item.get("matched_fragment"),
             "text_article": _display_article(item.get("text_article")) or _display_article(predicted.get("article_of_law")),
@@ -706,6 +706,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "classifier_article_of_law": _display_article(classifier_article),
             "classifier_best": classifier_best_payload,
             "best_pattern_text": best_pattern_text,
+            "best_pattern_fragment": predicted.get("best_pattern_fragment"),
             "classifier_candidates": formatted_classifier_candidates,
             "classifier_min_score_used": predicted.get("classifier_min_score_used"),
         },

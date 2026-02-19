@@ -1669,6 +1669,64 @@ def _clamp_score(score: float) -> float:
     return max(0.0, min(1.0, float(score)))
 
 
+def _best_fuzzy_fragment(pattern_text: str, source_text: str) -> str:
+    pattern_normalized = _normalize_classifier_text(pattern_text)
+    source_normalized = _normalize_classifier_text(source_text)
+    if not pattern_normalized or not source_normalized:
+        return (pattern_text or "").strip()
+    match = SequenceMatcher(None, pattern_normalized, source_normalized).find_longest_match(
+        0,
+        len(pattern_normalized),
+        0,
+        len(source_normalized),
+    )
+    if match.size <= 0:
+        return (pattern_text or "").strip()
+    fragment = source_normalized[match.b : match.b + match.size].strip()
+    return fragment or (pattern_text or "").strip()
+
+
+def _build_pattern_candidates(
+    *,
+    best_pattern_text: str | None,
+    pattern_fragment: str | None,
+    event_types: list[EventType],
+    min_score: float,
+) -> list[dict[str, object]]:
+    normalized_pattern = _normalize_classifier_text(best_pattern_text or "")
+    if not normalized_pattern:
+        return []
+
+    fragment_normalized = _normalize_classifier_text(pattern_fragment or best_pattern_text or "")
+    candidates: list[dict[str, object]] = []
+    for event_type in event_types:
+        for pattern_row in event_type.patterns.all():
+            if not pattern_row.is_active:
+                continue
+            pattern_text = (pattern_row.pattern or "").strip()
+            if _normalize_classifier_text(pattern_text) != normalized_pattern:
+                continue
+            score = _clamp_score(SequenceMatcher(None, fragment_normalized, normalized_pattern).ratio())
+            if score < min_score:
+                continue
+            candidates.append(
+                {
+                    "event_type_id": str(event_type.event_type_id),
+                    "event_type_name": event_type.event_type,
+                    "score": round(score, 6),
+                    "score_percent": round(score * 100, 1),
+                    "match_method": "pattern_fragment",
+                    "pattern_id": str(pattern_row.event_type_pattern_id),
+                    "pattern_text": pattern_text,
+                    "matched_fragment": pattern_fragment or best_pattern_text,
+                    "classifier_article": pattern_row.article_of_law,
+                    "text_article": None,
+                }
+            )
+            break
+    return candidates
+
+
 def _event_type_match_to_payload(match: EventTypeMatch) -> dict[str, object]:
     payload: dict[str, object] = {
         "event_type_id": match.event_type_id,
@@ -1736,6 +1794,7 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
 
             if candidate is None:
                 ratio = SequenceMatcher(None, _normalize_classifier_text(pattern), fuzzy_window).ratio()
+                best_fragment = _best_fuzzy_fragment(pattern, fuzzy_window)
                 candidate = EventTypeMatch(
                     event_type_id=str(event_type.event_type_id),
                     event_type_name=event_type.event_type,
@@ -1743,6 +1802,7 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
                     match_method="fuzzy",
                     pattern_id=str(pattern_row.event_type_pattern_id),
                     pattern_text=pattern,
+                    matched_fragment=best_fragment,
                     article_of_law=pattern_row.article_of_law,
                 )
 
@@ -1762,22 +1822,21 @@ def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, 
 
 def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None, list[dict]]:
     top_k = int(getattr(settings, "CLASSIFIER_TOP_K", 5))
-    best_match, candidates = rank_event_types(text, top_k=top_k)
+    best_match, _ = rank_event_types(text, top_k=top_k)
 
-    candidate_payload = [
-        {
-            "event_type_id": item.event_type_id,
-            "event_type_name": item.event_type_name,
-            "score": round(_clamp_score(item.score), 6),
-            "match_method": item.match_method,
-            "pattern_id": item.pattern_id,
-            "pattern_text": item.pattern_text,
-            "matched_fragment": item.matched_fragment,
-            "classifier_article": item.article_of_law,
-            "text_article": None,
-        }
-        for item in candidates
-    ]
+    min_score = float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5))
+    event_types = list(
+        EventType.objects.filter(is_active=True).prefetch_related("patterns")
+    )
+
+    best_pattern_text = (best_match.pattern_text if best_match else None) or ""
+    best_pattern_fragment = (best_match.matched_fragment if best_match else None) or best_pattern_text
+    candidate_payload = _build_pattern_candidates(
+        best_pattern_text=best_pattern_text,
+        pattern_fragment=best_pattern_fragment,
+        event_types=event_types,
+        min_score=min_score,
+    )
 
     if best_match is not None:
         event_pattern = _event_type_match_to_payload(best_match)
@@ -2320,7 +2379,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                     "classifier_article": predicted_article,
                 } if predicted_event_pattern else None,
                 "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
+                "best_pattern_fragment": (predicted_event_pattern or {}).get("matched_fragment"),
                 "classifier_candidates": classifier_candidates,
+                "classifier_pattern_candidates": classifier_candidates,
                 "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
             },
             "match_method": None,
@@ -2515,7 +2576,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "classifier_article": predicted_article,
             } if predicted_event_pattern else None,
             "best_pattern_text": (predicted_event_pattern or {}).get("pattern_text"),
+            "best_pattern_fragment": (predicted_event_pattern or {}).get("matched_fragment"),
             "classifier_candidates": classifier_candidates,
+            "classifier_pattern_candidates": classifier_candidates,
             "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
         },
         "offender_matches": offender_matches,
