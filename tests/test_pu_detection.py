@@ -94,8 +94,9 @@ class UploadFlowPuSelectionTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
                 response = self.client.post(reverse("analysis-upload"), {"file": upload})
-                self.assertEqual(response.status_code, 200)
-                self.assertContains(response, f'value="{pu.portal_pu_id}" selected')
+                self.assertEqual(response.status_code, 302)
+                page = self.client.get(reverse("analysis-upload"))
+                self.assertContains(page, f'value="{pu.portal_pu_id}" selected')
 
                 run = AnalysisRun.objects.first()
                 response = self.client.post(

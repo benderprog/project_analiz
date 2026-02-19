@@ -57,10 +57,58 @@ class UploadAnalysisDocxTests(TestCase):
             with override_settings(MEDIA_ROOT=tmp_dir):
                 response = self.client.post(reverse("analysis-upload"), {"file": upload})
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.first()
         self.assertIsNotNone(run)
         self.assertEqual(run.original_filename, "test_big.docx")
+
+
+    def test_get_upload_shows_pending_runs_for_same_anonymous_session(self):
+        docx_a = SimpleUploadedFile(
+            "first.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        docx_b = SimpleUploadedFile(
+            "second.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                self.client.post(reverse("analysis-upload"), {"file": [docx_a, docx_b]})
+                response = self.client.get(reverse("analysis-upload"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "first.docx")
+        self.assertContains(response, "second.docx")
+
+    def test_selection_keeps_other_pending_runs_visible(self):
+        docx_a = SimpleUploadedFile(
+            "first.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        docx_b = SimpleUploadedFile(
+            "second.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                self.client.post(reverse("analysis-upload"), {"file": [docx_a, docx_b]})
+                run_to_queue = AnalysisRun.objects.filter(original_filename="first.docx").first()
+                self.client.post(
+                    reverse("analysis-upload"),
+                    {"upload_id": run_to_queue.run_id, "selected_pu_id": ""},
+                )
+                response = self.client.get(reverse("analysis-upload"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'value="%s"' % run_to_queue.run_id)
+        self.assertContains(response, "second.docx")
 
     def _make_docx_bytes(self) -> bytes:
         document = Document()
@@ -81,7 +129,7 @@ class UploadAnalysisDocxTests(TestCase):
             with override_settings(MEDIA_ROOT=tmp_dir):
                 response = self.client.post(reverse("analysis-upload"), {"file": upload})
 
-                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.status_code, 302)
                 run = AnalysisRun.objects.first()
                 self.assertIsNotNone(run)
 
