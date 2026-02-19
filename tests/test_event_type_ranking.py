@@ -1,6 +1,6 @@
 from django.test import TestCase, override_settings
 
-from apps.analysis_app.services import rank_event_types
+from apps.analysis_app.services import _classify_event_type, rank_event_types
 from apps.classifier.models import EventType, EventTypePattern
 
 
@@ -45,3 +45,22 @@ class EventTypeRankingTests(TestCase):
         self.assertIsNotNone(best)
         self.assertEqual(best.event_type_name, "Активный")
         self.assertEqual(len(candidates), 1)
+
+    def test_pattern_candidates_include_all_event_types_with_same_pattern(self):
+        phrase = "вещество растительного происхождения"
+        t1 = EventType.objects.create(event_type="Внос/вынос")
+        t2 = EventType.objects.create(event_type="Специальные действия (СД)")
+        EventTypePattern.objects.create(event_type=t1, pattern=phrase, article_of_law="18.3 ч.1")
+        EventTypePattern.objects.create(event_type=t2, pattern=phrase)
+
+        _, _, event_pattern, classifier_candidates = _classify_event_type(
+            f"В сводке указано: {phrase}."
+        )
+
+        self.assertEqual((event_pattern or {}).get("pattern_text"), phrase)
+        self.assertEqual(len(classifier_candidates), 2)
+        self.assertEqual(
+            {item.get("event_type_name") for item in classifier_candidates},
+            {"Внос/вынос", "Специальные действия (СД)"},
+        )
+        self.assertTrue(all(item.get("score_percent") == 100.0 for item in classifier_candidates))
