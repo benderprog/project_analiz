@@ -702,7 +702,7 @@ class UploadView(View):
 
             pending_runs = []
             selected_run_id = None
-            for uploaded_file in upload_form.cleaned_data["files"]:
+            for uploaded_file in upload_form.cleaned_data["file"]:
                 run = AnalysisRun.objects.create(
                     uploaded_by=request.user if request.user.is_authenticated else None,
                     file=uploaded_file,
