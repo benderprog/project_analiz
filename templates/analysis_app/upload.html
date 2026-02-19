@@ -19,7 +19,26 @@
   </form>
 </section>
 
-{% if selection_form %}
+{% if pending_runs %}
+  <section class="card">
+    <h2>Выбор ПУ для загруженных файлов</h2>
+    {% for pending in pending_runs %}
+      <article style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e5e7eb;">
+        <h3 style="margin-bottom: 0.5rem;">{{ pending.run.original_filename|default:pending.run.file.name }}</h3>
+        {% if pending.detection and pending.detection.pu %}
+          <p>Определено автоматически: {{ pending.detection.pu.short_name }} — {{ pending.detection.pu.full_name }}</p>
+        {% else %}
+          <p>Автоопределение не нашло ПУ. Можно выбрать вручную или оставить «Общая сводка».</p>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          {{ pending.selection_form.as_p }}
+          <button type="submit" class="primary">Поставить в очередь</button>
+        </form>
+      </article>
+    {% endfor %}
+  </section>
+{% elif selection_form %}
   <section class="card">
     <h2>Пограничное управление</h2>
     {% if detection and detection.pu %}

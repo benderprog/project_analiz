@@ -665,11 +665,20 @@ class UploadView(View):
     def _recent_runs(limit: int = 10):
         return AnalysisRun.objects.order_by("-created_at")[:limit]
 
-    def _build_context(self, *, upload_form=None, selection_form=None, detection=None, selected_run_id=None):
+    def _build_context(
+        self,
+        *,
+        upload_form=None,
+        selection_form=None,
+        detection=None,
+        pending_runs=None,
+        selected_run_id=None,
+    ):
         return {
             "upload_form": upload_form or UploadDocxForm(),
             "selection_form": selection_form,
             "detection": detection,
+            "pending_runs": pending_runs or [],
             "queue_runs": self._recent_runs(),
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
@@ -684,32 +693,50 @@ class UploadView(View):
         )
 
     def post(self, request):
-        if request.FILES.get("file"):
+        if request.FILES.getlist("file"):
             upload_form = UploadDocxForm(request.POST, request.FILES)
             if not upload_form.is_valid():
                 return render(request, self.template_name, self._build_context(upload_form=upload_form))
 
-            run = AnalysisRun.objects.create(
-                uploaded_by=request.user if request.user.is_authenticated else None,
-                file=upload_form.cleaned_data["file"],
-                original_filename=os.path.basename(upload_form.cleaned_data["file"].name or ""),
-                status=AnalysisRun.Status.CREATED,
-            )
             from docx import Document
 
-            document = Document(run.file.path)
-            detection = detect_pu_from_docx(document)
-            initial_pu_id = str(detection.pu.portal_pu_id) if detection.pu else ""
-            selection_form = PuSelectionForm(
-                initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
-            )
+            pending_runs = []
+            selected_run_id = None
+            for uploaded_file in upload_form.cleaned_data["files"]:
+                run = AnalysisRun.objects.create(
+                    uploaded_by=request.user if request.user.is_authenticated else None,
+                    file=uploaded_file,
+                    original_filename=os.path.basename(uploaded_file.name or ""),
+                    status=AnalysisRun.Status.CREATED,
+                )
+                selected_run_id = selected_run_id or run.run_id
+
+                detection = None
+                try:
+                    document = Document(run.file.path)
+                    detection = detect_pu_from_docx(document)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Failed to detect PU for uploaded run %s", run.run_id)
+
+                initial_pu_id = str(detection.pu.portal_pu_id) if detection and detection.pu else ""
+                selection_form = PuSelectionForm(
+                    initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
+                )
+                pending_runs.append(
+                    {
+                        "run": run,
+                        "detection": detection,
+                        "selection_form": selection_form,
+                    }
+                )
+
             return render(
                 request,
                 self.template_name,
                 self._build_context(
-                    selection_form=selection_form,
-                    detection=detection,
-                    selected_run_id=run.run_id,
+                    upload_form=UploadDocxForm(),
+                    pending_runs=pending_runs,
+                    selected_run_id=selected_run_id,
                 ),
             )
 

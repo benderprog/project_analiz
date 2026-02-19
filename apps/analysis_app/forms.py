@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 
 from django import forms
@@ -19,7 +20,30 @@ def is_general_summary_pu(selected_pu_id: str | uuid.UUID | None) -> bool:
 
 
 class UploadDocxForm(forms.Form):
-    file = forms.FileField(label="DOCX файл")
+    file = forms.FileField(
+        label="DOCX файл",
+        required=False,
+        widget=forms.ClearableFileInput(attrs={"multiple": True}),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        files = self.files.getlist("file")
+        if not files:
+            self.add_error("file", "Выберите хотя бы один DOCX файл.")
+            return cleaned_data
+
+        for uploaded_file in files:
+            ext = os.path.splitext(uploaded_file.name or "")[1].lower()
+            if ext != ".docx":
+                self.add_error("file", f"Файл {uploaded_file.name} должен быть в формате DOCX.")
+
+        if self.errors.get("file"):
+            return cleaned_data
+
+        cleaned_data["files"] = files
+        cleaned_data["file"] = files[0]
+        return cleaned_data
 
 
 class PuSelectionForm(forms.Form):
