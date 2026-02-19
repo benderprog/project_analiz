@@ -20,12 +20,13 @@ class Command(BaseCommand):
             raise CommandError(f"DOCX file not found: {docx_path}")
 
         try:
-            paragraphs = parse_docx(str(docx_path))
-            if not paragraphs:
-                self.stdout.write("No event paragraphs found after filtering.")
+            events = parse_docx(str(docx_path))
+            if not events:
+                self.stdout.write("No events found after filtering.")
                 return
 
-            for idx, text in enumerate(paragraphs, start=1):
+            for idx, event in enumerate(events, start=1):
+                text = event.joined_text
                 attributes = extract_attributes(text)
                 match_result = match_event(attributes, text)
                 date_label = format_local_naive(attributes.date_time) or "<none>"

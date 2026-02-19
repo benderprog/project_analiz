@@ -606,12 +606,17 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     not_found = not bool(match_result.get("matched"))
     title = f"Событие {paragraph.idx}" + (" — в базе данных не найдено" if not_found else "")
 
+    source_kind = getattr(paragraph, "source_kind", "paragraph") or "paragraph"
+    source_cells = getattr(paragraph, "source_cells", None)
+
     return {
         "idx": paragraph.idx,
         "title": title,
         "not_found": not_found,
         "preview": preview,
         "full_text": text,
+        "source_kind": source_kind,
+        "source_cells": source_cells,
         "highlighted_html": _build_highlighted_html(text, extracted, match_result),
         "extracted_timestamp_display": extracted_timestamp_display,
         "portal_timestamp_display": portal_timestamp_display,
