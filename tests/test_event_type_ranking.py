@@ -64,3 +64,4 @@ class EventTypeRankingTests(TestCase):
             {"Внос/вынос", "Специальные действия (СД)"},
         )
         self.assertTrue(all(item.get("score_percent") == 100.0 for item in classifier_candidates))
+        self.assertTrue(all(item.get("score") == 1.0 for item in classifier_candidates))
