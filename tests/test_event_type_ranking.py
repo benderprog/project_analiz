@@ -1,7 +1,13 @@
 from django.test import TestCase, override_settings
 from unittest.mock import patch
 
-from apps.analysis_app.services import _classify_event_type, ExtractedAttributes, match_event, rank_event_types
+from apps.analysis_app.services import (
+    _classify_event_type,
+    ensure_classifier_candidates,
+    ExtractedAttributes,
+    match_event,
+    rank_event_types,
+)
 from apps.classifier.models import EventType, EventTypePattern
 
 
@@ -66,6 +72,27 @@ class EventTypeRankingTests(TestCase):
         )
         self.assertTrue(all(item.get("score_percent") == 100.0 for item in classifier_candidates))
         self.assertTrue(all(item.get("score") == 1.0 for item in classifier_candidates))
+
+
+    def test_ensure_classifier_candidates_backfills_when_best_pattern_exists(self):
+        phrase = "вещество растительного происхождения"
+        text = f"В сводке указано: {phrase}."
+        t1 = EventType.objects.create(event_type="Внос/вынос")
+        t2 = EventType.objects.create(event_type="Специальные действия (СД)")
+        EventTypePattern.objects.create(event_type=t1, pattern=phrase, article_of_law="18.3 ч.1")
+        EventTypePattern.objects.create(event_type=t2, pattern=phrase)
+
+        predicted = {
+            "best_pattern_text": phrase,
+            "classifier_candidates": [],
+            "classifier_pattern_candidates": [],
+        }
+
+        updated = ensure_classifier_candidates(predicted, text)
+
+        self.assertEqual(len(updated["classifier_candidates"]), 2)
+        self.assertEqual(updated.get("classifier_pattern_candidates"), updated.get("classifier_candidates"))
+
 
 
     def test_match_event_persists_classifier_candidates_and_articles(self):
