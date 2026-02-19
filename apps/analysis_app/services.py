@@ -91,6 +91,7 @@ def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
             text=event.joined_text,
             source_kind=event.kind,
             source_cells=event.cells,
+            source_table_header_cells=event.table_header_cells,
         )
         attributes = extract_attributes(event.joined_text, selected_pu_id=selected_pu_id)
         match_result = match_event(attributes, event.joined_text)
@@ -233,7 +234,34 @@ class ParsedEvent:
     kind: Literal["paragraph", "table_row"]
     joined_text: str
     cells: list[str] | None = None
+    table_header_cells: list[str] | None = None
 
+
+
+
+_TABLE_HEADER_KEYWORDS = ("дата", "время", "подраздел", "пу", "кпп", "событ", "наруш", "статья", "комментар")
+
+
+def _looks_like_table_header(rows: list[list[str]], min_chars: int) -> bool:
+    if not rows:
+        return False
+    header_cells = rows[0]
+    if not any(header_cells):
+        return False
+
+    lowered = [cell.lower() for cell in header_cells if cell]
+    if any(keyword in cell for cell in lowered for keyword in _TABLE_HEADER_KEYWORDS):
+        return True
+
+    if len(rows) < 2:
+        return False
+
+    header_is_short = all(len(cell) <= 40 for cell in header_cells if cell)
+    if not header_is_short:
+        return False
+
+    row_1_joined = normalize_event_paragraph_text(" ".join(rows[1]))
+    return len(row_1_joined) >= min_chars
 
 def iter_docx_blocks(document) -> Iterable[DocxBlock]:
     from docx.document import Document as DocxDocument
@@ -275,9 +303,15 @@ def parse_docx(file_path: str) -> list[ParsedEvent]:
             events.append(ParsedEvent(kind="paragraph", joined_text=text))
             continue
 
-        for row in block.table.rows:
+        rows = [
+            [normalize_event_paragraph_text(cell.text) for cell in row.cells]
+            for row in block.table.rows
+        ]
+        header_cells: list[str] | None = rows[0] if _looks_like_table_header(rows, min_chars) else None
+        start_idx = 1 if header_cells else 0
+
+        for cells in rows[start_idx:]:
             total += 1
-            cells = [normalize_event_paragraph_text(cell.text) for cell in row.cells]
             if not any(cells):
                 skipped_empty_rows += 1
                 continue
@@ -285,7 +319,17 @@ def parse_docx(file_path: str) -> list[ParsedEvent]:
             if len(joined_text) < min_chars:
                 skipped_short += 1
                 continue
-            events.append(ParsedEvent(kind="table_row", joined_text=joined_text, cells=cells))
+            events.append(
+                ParsedEvent(
+                    kind="table_row",
+                    joined_text=joined_text,
+                    cells=cells,
+                    table_header_cells=header_cells,
+                )
+            )
+
+        if header_cells:
+            total += 1
 
     logger.info(
         "docx split: total=%s, kept=%s, skipped_short=%s, skipped_empty_rows=%s, min_chars=%s",

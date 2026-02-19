@@ -4,7 +4,7 @@
 <style>
   .badge + .badge { margin-left: .35rem; }
   .event-source-table { width: 100%; border-collapse: collapse; }
-  .event-source-table td { border: 1px solid #d9d9d9; padding: .4rem .5rem; vertical-align: top; }
+  .event-source-table td, .event-source-table th { border: 1px solid #d9d9d9; padding: .4rem .5rem; vertical-align: top; }
 </style>
 <section class="card">
   <h2>Результаты анализа</h2>
@@ -40,11 +40,17 @@
 
       <div class="event-text" id="event-text">
         {% if selected_event.source_kind == "table_row" and selected_event.source_cells %}
-          <table class="event-source-table"><tr>{% for cell in selected_event.source_cells %}<td>{{ cell|linebreaksbr }}</td>{% endfor %}</tr></table>
+          <table class="event-source-table">
+            {% if selected_event.source_table_header_cells %}
+              <thead><tr>{% for cell in selected_event.source_table_header_cells %}<th>{{ cell|linebreaksbr }}</th>{% endfor %}</tr></thead>
+            {% endif %}
+            <tbody><tr>{% for cell in selected_event.source_cells %}<td>{{ cell|linebreaksbr }}</td>{% endfor %}</tr></tbody>
+          </table>
         {% else %}
           {{ selected_event.highlighted_html|safe }}
         {% endif %}
       </div>
+
 
       <div class="detail-block">
         <h4>Основные атрибуты</h4>
@@ -202,7 +208,6 @@
           </tbody>
         </table>
       </div>
-
       <div class="detail-block">
         <h4>
           Тип события
@@ -332,10 +337,20 @@
 
     const renderEventText = (event) => {
       if (event.source_kind === "table_row" && Array.isArray(event.source_cells) && event.source_cells.length) {
-        const cells = event.source_cells
-          .map((cell) => `<td>${escapeHtml(cell || "").replaceAll("\n", "<br>")}</td>`)
-          .join("");
-        return `<table class="event-source-table"><tr>${cells}</tr></table>`;
+        const rowCells = event.source_cells || [];
+        const headerCells = Array.isArray(event.source_table_header_cells) ? event.source_table_header_cells : [];
+        const maxColumns = Math.max(rowCells.length, headerCells.length);
+        const paddedHeaders = Array.from({ length: maxColumns }, (_, idx) => headerCells[idx] || "");
+        const paddedRows = Array.from({ length: maxColumns }, (_, idx) => rowCells[idx] || "");
+        const thead = headerCells.length
+          ? `<thead><tr>${paddedHeaders
+              .map((cell) => `<th>${escapeHtml(cell).replaceAll("\n", "<br>")}</th>`)
+              .join("")}</tr></thead>`
+          : "";
+        const tbody = `<tbody><tr>${paddedRows
+          .map((cell) => `<td>${escapeHtml(cell).replaceAll("\n", "<br>")}</td>`)
+          .join("")}</tr></tbody>`;
+        return `<table class="event-source-table">${thead}${tbody}</table>`;
       }
       return event.highlighted_html;
     };

@@ -54,6 +54,7 @@ class AnalysisParagraph(models.Model):
         default=SourceKind.PARAGRAPH,
     )
     source_cells = models.JSONField(null=True, blank=True)
+    source_table_header_cells = models.JSONField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Paragraph {self.idx}"
