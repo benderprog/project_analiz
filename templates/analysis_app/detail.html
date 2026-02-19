@@ -3,6 +3,8 @@
 {% block content %}
 <style>
   .badge + .badge { margin-left: .35rem; }
+  .event-source-table { width: 100%; border-collapse: collapse; }
+  .event-source-table td { border: 1px solid #d9d9d9; padding: .4rem .5rem; vertical-align: top; }
 </style>
 <section class="card">
   <h2>Результаты анализа</h2>
@@ -37,7 +39,11 @@
       </div>
 
       <div class="event-text" id="event-text">
-        {{ selected_event.highlighted_html|safe }}
+        {% if selected_event.source_kind == "table_row" and selected_event.source_cells %}
+          <table class="event-source-table"><tr>{% for cell in selected_event.source_cells %}<td>{{ cell|linebreaksbr }}</td>{% endfor %}</tr></table>
+        {% else %}
+          {{ selected_event.highlighted_html|safe }}
+        {% endif %}
       </div>
 
       <div class="detail-block">
@@ -324,9 +330,19 @@
         .join("");
     };
 
+    const renderEventText = (event) => {
+      if (event.source_kind === "table_row" && Array.isArray(event.source_cells) && event.source_cells.length) {
+        const cells = event.source_cells
+          .map((cell) => `<td>${escapeHtml(cell || "").replaceAll("\n", "<br>")}</td>`)
+          .join("");
+        return `<table class="event-source-table"><tr>${cells}</tr></table>`;
+      }
+      return event.highlighted_html;
+    };
+
     const renderEvent = (event) => {
       dom.title.textContent = event.title || `Событие ${event.idx}`;
-      dom.text.innerHTML = event.highlighted_html;
+      dom.text.innerHTML = renderEventText(event);
       dom.attrTimestamp.textContent = event.extracted_timestamp_display || "—";
       dom.attrSubdivisionValue.textContent = event.extracted.subdivision_name || "—";
       dom.subdivisionCandidates.querySelector("ul").innerHTML = renderCandidates(

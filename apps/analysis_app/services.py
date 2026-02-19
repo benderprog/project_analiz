@@ -6,6 +6,7 @@ import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any, Iterable, Literal
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from functools import lru_cache
 from uuid import UUID
@@ -82,11 +83,17 @@ _EVENT_PATTERN_MAX_WINDOWS = 90
 def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
-    paragraphs = parse_docx(run.file.path)
-    for idx, text in enumerate(paragraphs, start=1):
-        paragraph = AnalysisParagraph.objects.create(run=run, idx=idx, text=text)
-        attributes = extract_attributes(text, selected_pu_id=selected_pu_id)
-        match_result = match_event(attributes, text)
+    events = parse_docx(run.file.path)
+    for idx, event in enumerate(events, start=1):
+        paragraph = AnalysisParagraph.objects.create(
+            run=run,
+            idx=idx,
+            text=event.joined_text,
+            source_kind=event.kind,
+            source_cells=event.cells,
+        )
+        attributes = extract_attributes(event.joined_text, selected_pu_id=selected_pu_id)
+        match_result = match_event(attributes, event.joined_text)
         AnalysisResult.objects.create(
             paragraph=paragraph,
             extracted_attributes={
@@ -214,31 +221,81 @@ def normalize_event_paragraph_text(text: str | None) -> str:
     return normalized
 
 
-def parse_docx(file_path: str) -> list[str]:
-    """Split DOCX content into event paragraphs with minimum normalized length."""
+@dataclass(frozen=True)
+class DocxBlock:
+    kind: Literal["paragraph", "table"]
+    text: str = ""
+    table: Any = None
+
+
+@dataclass(frozen=True)
+class ParsedEvent:
+    kind: Literal["paragraph", "table_row"]
+    joined_text: str
+    cells: list[str] | None = None
+
+
+def iter_docx_blocks(document) -> Iterable[DocxBlock]:
+    from docx.document import Document as DocxDocument
+    from docx.oxml.text.paragraph import CT_P
+    from docx.oxml.table import CT_Tbl
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    if not isinstance(document, DocxDocument):
+        raise TypeError("document must be an instance of docx.document.Document")
+
+    for child in document.element.body.iterchildren():
+        if isinstance(child, CT_P):
+            paragraph = Paragraph(child, document)
+            yield DocxBlock(kind="paragraph", text=getattr(paragraph, "text", ""))
+        elif isinstance(child, CT_Tbl):
+            table = Table(child, document)
+            yield DocxBlock(kind="table", table=table)
+
+
+def parse_docx(file_path: str) -> list[ParsedEvent]:
+    """Split DOCX content into ordered events from paragraphs and table rows."""
     from docx import Document
 
     document = Document(file_path)
     min_chars = max(int(getattr(settings, "MIN_EVENT_PARAGRAPH_CHARS", 100) or 0), 0)
-    paragraphs: list[str] = []
+    events: list[ParsedEvent] = []
     total = 0
     skipped_short = 0
-    for paragraph in document.paragraphs:
-        total += 1
-        text = normalize_event_paragraph_text(getattr(paragraph, "text", None))
-        if len(text) < min_chars:
-            skipped_short += 1
+    skipped_empty_rows = 0
+
+    for block in iter_docx_blocks(document):
+        if block.kind == "paragraph":
+            total += 1
+            text = normalize_event_paragraph_text(block.text)
+            if len(text) < min_chars:
+                skipped_short += 1
+                continue
+            events.append(ParsedEvent(kind="paragraph", joined_text=text))
             continue
-        paragraphs.append(text)
+
+        for row in block.table.rows:
+            total += 1
+            cells = [normalize_event_paragraph_text(cell.text) for cell in row.cells]
+            if not any(cells):
+                skipped_empty_rows += 1
+                continue
+            joined_text = normalize_event_paragraph_text(" ".join(cells))
+            if len(joined_text) < min_chars:
+                skipped_short += 1
+                continue
+            events.append(ParsedEvent(kind="table_row", joined_text=joined_text, cells=cells))
 
     logger.info(
-        "docx split: total=%s, kept=%s, skipped_short=%s, min_chars=%s",
+        "docx split: total=%s, kept=%s, skipped_short=%s, skipped_empty_rows=%s, min_chars=%s",
         total,
-        len(paragraphs),
+        len(events),
         skipped_short,
+        skipped_empty_rows,
         min_chars,
     )
-    return paragraphs
+    return events
 
 
 @lru_cache(maxsize=1)

@@ -41,9 +41,19 @@ class AnalysisRun(models.Model):
 
 
 class AnalysisParagraph(models.Model):
+    class SourceKind(models.TextChoices):
+        PARAGRAPH = "paragraph", "Paragraph"
+        TABLE_ROW = "table_row", "Table row"
+
     run = models.ForeignKey(AnalysisRun, on_delete=models.CASCADE, related_name="paragraphs")
     idx = models.PositiveIntegerField()
     text = models.TextField()
+    source_kind = models.CharField(
+        max_length=20,
+        choices=SourceKind.choices,
+        default=SourceKind.PARAGRAPH,
+    )
+    source_cells = models.JSONField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Paragraph {self.idx}"
