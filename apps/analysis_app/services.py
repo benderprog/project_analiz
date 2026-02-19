@@ -4,6 +4,7 @@ import logging
 import math
 import re
 import uuid
+from difflib import SequenceMatcher
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal
@@ -18,7 +19,7 @@ from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import SafeString, mark_safe
 
-from apps.classifier.models import EventTypePattern
+from apps.classifier.models import EventType, EventTypePattern
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_naive, to_local_naive
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.analysis_app.utils.offender_format import portal_offender_fullname, svodka_offender_fullname
@@ -1537,7 +1538,11 @@ def _event_span_to_original(span: tuple[int, int], mapping: list[int]) -> list[i
 @lru_cache(maxsize=1)
 def _get_event_pattern_embedding_cache() -> tuple[dict, ...]:
     rows = list(EventTypePattern.objects.select_related("event_type"))
-    active_rows = [row for row in rows if (row.pattern or "").strip()]
+    active_rows = [
+        row
+        for row in rows
+        if row.event_type.is_active and row.is_active and (row.pattern or "").strip()
+    ]
     if not active_rows or settings.SKIP_SEMANTIC_MODEL:
         return ()
 
@@ -1640,59 +1645,144 @@ def _find_semantic_event_pattern(text: str):
     return best_match
 
 
-def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None]:
-    lowered = text.lower()
-    best_match = None
-    best_length = -1
-    patterns = EventTypePattern.objects.select_related("event_type")
+@dataclass(slots=True)
+class EventTypeMatch:
+    event_type_id: str
+    event_type_name: str
+    score: float
+    match_method: str
+    pattern_id: str | None = None
+    pattern_text: str | None = None
+    matched_fragment: str | None = None
+    article_of_law: str | None = None
 
-    for row in patterns:
-        pattern = row.pattern.strip()
-        if not pattern:
-            continue
 
-        is_regex = _looks_like_regex(pattern)
-        matched = False
-        if is_regex:
-            try:
-                matched = re.search(pattern, lowered, re.IGNORECASE) is not None
-            except re.error:
-                logger.warning("Invalid regex pattern skipped: %s", pattern)
-                matched = False
-        else:
-            matched = pattern.lower() in lowered
+def _normalize_classifier_text(text: str) -> str:
+    normalized = (text or "").lower().replace("ё", "е")
+    normalized = re.sub(r"[\t\r\n]+", " ", normalized)
+    normalized = re.sub(r"[|/\,;]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
 
-        if matched:
-            match_length = len(pattern)
-            if match_length > best_length:
-                best_match = row
-                best_length = match_length
 
-    if best_match:
-        best_pattern = best_match.pattern.strip()
-        pattern_spans = _collect_pattern_spans(
-            text,
-            best_pattern,
-            is_regex=_looks_like_regex(best_pattern),
-            max_matches=1,
-        )
-        span = list(pattern_spans[0]) if pattern_spans else None
-        evidence_text = text[span[0]:span[1]] if span else None
-        event_pattern = {
-            "event_type_id": str(best_match.event_type.event_type_id),
-            "event_type_label": best_match.event_type.event_type,
-            "pattern_id": str(best_match.event_type_pattern_id),
-            "pattern_text": best_pattern,
-            "score": 1.0,
-            "method": "exact",
-            "span": span,
-            "evidence_text": evidence_text,
+def _event_type_match_to_payload(match: EventTypeMatch) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "event_type_id": match.event_type_id,
+        "event_type_label": match.event_type_name,
+        "pattern_id": match.pattern_id,
+        "pattern_text": match.pattern_text,
+        "score": round(float(match.score), 6),
+        "method": match.match_method,
+    }
+    if match.matched_fragment:
+        payload["matched_fragment"] = match.matched_fragment
+        payload["evidence_text"] = match.matched_fragment
+    return payload
+
+
+def rank_event_types(text: str, top_k: int = 5) -> tuple[EventTypeMatch | None, list[EventTypeMatch]]:
+    normalized_text = _normalize_classifier_text(text)
+    if not normalized_text:
+        return None, []
+
+    max_chars = int(getattr(settings, "CLASSIFIER_MAX_TEXT_CHARS", 800))
+    limited_text = normalized_text[:max_chars]
+    fuzzy_window = limited_text[:500]
+    min_fuzzy_score = float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.35))
+
+    event_types = list(
+        EventType.objects.filter(is_active=True).prefetch_related("patterns")
+    )
+    matches: list[EventTypeMatch] = []
+
+    for event_type in event_types:
+        best: EventTypeMatch | None = None
+        for pattern_row in event_type.patterns.all():
+            if not pattern_row.is_active:
+                continue
+            pattern = (pattern_row.pattern or "").strip()
+            if not pattern:
+                continue
+
+            candidate: EventTypeMatch | None = None
+            is_regex = _looks_like_regex(pattern)
+            if is_regex:
+                try:
+                    regex_match = re.search(pattern, limited_text, re.IGNORECASE)
+                except re.error:
+                    logger.warning("Invalid regex pattern skipped: %s", pattern)
+                    regex_match = None
+                if regex_match:
+                    fragment = regex_match.group(0) or ""
+                    match_len_ratio = min(1.0, len(fragment) / max(60, min(len(limited_text), 300)))
+                    specificity = min(0.25, len(_EVENT_PATTERN_TOKEN_RE.findall(pattern.lower())) * 0.02)
+                    score = 1.0 + 0.5 * match_len_ratio + specificity
+                    candidate = EventTypeMatch(
+                        event_type_id=str(event_type.event_type_id),
+                        event_type_name=event_type.event_type,
+                        score=score,
+                        match_method="regex_hit",
+                        pattern_id=str(pattern_row.event_type_pattern_id),
+                        pattern_text=pattern,
+                        matched_fragment=fragment,
+                        article_of_law=pattern_row.article_of_law,
+                    )
+
+            if candidate is None:
+                ratio = SequenceMatcher(None, _normalize_classifier_text(pattern), fuzzy_window).ratio()
+                candidate = EventTypeMatch(
+                    event_type_id=str(event_type.event_type_id),
+                    event_type_name=event_type.event_type,
+                    score=ratio,
+                    match_method="fuzzy",
+                    pattern_id=str(pattern_row.event_type_pattern_id),
+                    pattern_text=pattern,
+                    article_of_law=pattern_row.article_of_law,
+                )
+
+            if best is None or candidate.score > best.score:
+                best = candidate
+
+        if best is not None:
+            matches.append(best)
+
+    matches.sort(key=lambda item: item.score, reverse=True)
+    top_matches = matches[: max(1, int(top_k))]
+
+    best = top_matches[0] if top_matches else None
+    if best is None:
+        return None, top_matches
+    if best.match_method != "regex_hit" and best.score < min_fuzzy_score:
+        return None, top_matches
+    return best, top_matches
+
+
+def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None, list[dict]]:
+    top_k = int(getattr(settings, "CLASSIFIER_TOP_K", 5))
+    best_match, candidates = rank_event_types(text, top_k=top_k)
+
+    candidate_payload = [
+        {
+            "event_type_id": item.event_type_id,
+            "event_type_name": item.event_type_name,
+            "score": round(float(item.score), 6),
+            "score_percent": round(float(item.score) * 100, 2),
+            "match_method": item.match_method,
+            "pattern_id": item.pattern_id,
+            "pattern_text": item.pattern_text,
+            "matched_fragment": item.matched_fragment,
+            "article_of_law": item.article_of_law,
         }
-        return best_match.event_type.event_type, best_match.article_of_law, event_pattern
+        for item in candidates
+    ]
+
+    if best_match is not None:
+        event_pattern = _event_type_match_to_payload(best_match)
+        return best_match.event_type_name, best_match.article_of_law, event_pattern, candidate_payload
 
     semantic_match = _find_semantic_event_pattern(text)
     if not semantic_match:
-        return None, None, None
+        return None, None, None, candidate_payload
 
     event_pattern = {
         "event_type_id": semantic_match["event_type_id"],
@@ -1704,7 +1794,7 @@ def _classify_event_type(text: str) -> tuple[str | None, str | None, dict | None
         "span": semantic_match["span"],
         "evidence_text": semantic_match["evidence_text"],
     }
-    return semantic_match["event_type"], semantic_match["article_of_law"], event_pattern
+    return semantic_match["event_type"], semantic_match["article_of_law"], event_pattern, candidate_payload
 
 
 def _select_event_by_subdivision_time(
@@ -2111,7 +2201,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
-    predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
+    predicted_type, predicted_article, predicted_event_pattern, classifier_candidates = _classify_event_type(text)
     svodka_article = attributes.article_of_law
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
@@ -2219,6 +2309,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
                 "classifier_article_of_law": predicted_article,
                 "event_pattern": predicted_event_pattern,
                 "event_type_match": predicted_event_pattern,
+                "classifier_candidates": classifier_candidates,
             },
             "match_method": None,
             "time_mismatch": False,
@@ -2404,6 +2495,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "classifier_article_of_law": predicted_article,
             "event_pattern": predicted_event_pattern,
             "event_type_match": predicted_event_pattern,
+            "classifier_candidates": classifier_candidates,
         },
         "offender_matches": offender_matches,
         "match_method": match_method,

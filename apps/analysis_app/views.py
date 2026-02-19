@@ -664,6 +664,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "event_type": predicted.get("event_type"),
             "article_of_law": _display_article(predicted.get("article_of_law")),
             "classifier_article_of_law": _display_article(classifier_article),
+            "classifier_candidates": predicted.get("classifier_candidates") or [],
         },
         "status": {
             "timestamp": _status_for_timestamp(match_result),

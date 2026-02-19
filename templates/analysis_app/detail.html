@@ -234,6 +234,20 @@
           <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не удалось" }}</span>
           (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
+        <div id="classifier-candidates" class="candidate-list-block">
+          <h5>Кандидаты по классификатору</h5>
+          <ul>
+            {% for candidate in selected_event.predicted.classifier_candidates %}
+              <li>
+                {% if forloop.first and selected_event.predicted.event_type %}✓ {% endif %}
+                {{ candidate.score_percent|default:0|floatformat:0 }}% {{ candidate.event_type_name|default:"—" }}
+                {% if candidate.pattern_text %}(pattern: "{{ candidate.pattern_text|truncatechars:60 }}"){% endif %}
+              </li>
+            {% empty %}
+              <li>—</li>
+            {% endfor %}
+          </ul>
+        </div>
       </div>
 
       <div class="detail-block">
@@ -272,6 +286,7 @@
       metricOffenders: document.getElementById("metric-offenders"),
       offendersDetails: document.getElementById("offenders-details"),
       commentsList: document.getElementById("comments-list"),
+      classifierCandidates: document.querySelector("#classifier-candidates ul"),
       fields: {
         predEventType: document.querySelector('[data-field="pred-event-type"]'),
         predArticle: document.querySelector('[data-field="pred-article"]'),
@@ -332,6 +347,23 @@
                 : ""
             }</li>`
         )
+        .join("");
+    };
+
+
+    const renderClassifierCandidates = (items, bestEventType) => {
+      if (!items || !items.length) {
+        return "<li>—</li>";
+      }
+      return items
+        .map((item, index) => {
+          const score = item.score_percent !== null && item.score_percent !== undefined
+            ? `${Math.round(item.score_percent)}%`
+            : "0%";
+          const marker = index === 0 && bestEventType ? "✓ " : "";
+          const pattern = item.pattern_text ? ` (pattern: &quot;${escapeHtml(item.pattern_text).slice(0, 60)}&quot;)` : "";
+          return `<li>${marker}${score} ${escapeHtml(item.event_type_name || "—")}${pattern}</li>`;
+        })
         .join("");
     };
 
@@ -407,6 +439,12 @@
       if (dom.fields.portalArticle) dom.fields.portalArticle.textContent = event.portal?.article_of_law || "—";
       if (dom.fields.clsEventType) dom.fields.clsEventType.textContent = event.predicted?.event_type || "не удалось";
       if (dom.fields.clsArticle) dom.fields.clsArticle.textContent = event.predicted?.classifier_article_of_law || "—";
+      if (dom.classifierCandidates) {
+        dom.classifierCandidates.innerHTML = renderClassifierCandidates(
+          event.predicted?.classifier_candidates || [],
+          event.predicted?.event_type || ""
+        );
+      }
 
       dom.commentsList.innerHTML = renderListItems(event.comments);
     };

@@ -1490,4 +1490,4 @@ class EventPatternClassificationTests(TestCase):
 
         self.assertEqual(result["predicted"]["event_type"], "Точный тип")
         self.assertEqual(result["predicted"]["article_of_law"], "12.1")
-        self.assertEqual(result["predicted"]["event_pattern"]["method"], "exact")
+        self.assertEqual(result["predicted"]["event_pattern"]["method"], "regex_hit")
