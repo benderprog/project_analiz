@@ -1,6 +1,7 @@
 from django.test import TestCase, override_settings
+from unittest.mock import patch
 
-from apps.analysis_app.services import _classify_event_type, rank_event_types
+from apps.analysis_app.services import _classify_event_type, ExtractedAttributes, match_event, rank_event_types
 from apps.classifier.models import EventType, EventTypePattern
 
 
@@ -65,3 +66,35 @@ class EventTypeRankingTests(TestCase):
         )
         self.assertTrue(all(item.get("score_percent") == 100.0 for item in classifier_candidates))
         self.assertTrue(all(item.get("score") == 1.0 for item in classifier_candidates))
+
+
+    def test_match_event_persists_classifier_candidates_and_articles(self):
+        phrase = "вещество растительного происхождения"
+        t1 = EventType.objects.create(event_type="Внос/вынос")
+        t2 = EventType.objects.create(event_type="Специальные действия (СД)")
+        EventTypePattern.objects.create(event_type=t1, pattern=phrase, article_of_law="18.3 ч. 1")
+        EventTypePattern.objects.create(event_type=t2, pattern=phrase)
+
+        attributes = ExtractedAttributes(
+            date_time=None,
+            time_found=False,
+            subdivision_id=None,
+            offenders=[],
+            subdivision_name=None,
+            article_of_law=None,
+        )
+
+        with patch("apps.analysis_app.services.get_event_candidates", return_value=([], {"stages": [], "stage_queries": []})):
+            match_result = match_event(attributes, f"В сводке указано: {phrase}.")
+
+        predicted = match_result["predicted"]
+        candidates = predicted["classifier_candidates"]
+
+        self.assertEqual(len(candidates), 2)
+        by_type = {item["event_type_name"]: item for item in candidates}
+        self.assertEqual(by_type["Внос/вынос"]["classifier_article"], "18.3 ч. 1")
+        self.assertIsNone(by_type["Специальные действия (СД)"]["classifier_article"])
+        self.assertEqual(predicted.get("classifier_pattern_candidates"), candidates)
+        self.assertIsNotNone(predicted.get("classifier_best"))
+        self.assertEqual(predicted.get("best_pattern_text"), phrase)
+        self.assertEqual(predicted.get("classifier_article_of_law"), "18.3 ч. 1")
