@@ -23,7 +23,7 @@ class UploadDocxForm(forms.Form):
     file = forms.FileField(
         label="DOCX файл",
         required=False,
-        widget=forms.ClearableFileInput(attrs={"multiple": True}),
+        widget=forms.FileInput(attrs={"multiple": True}),
     )
 
     def clean(self):
