@@ -274,6 +274,18 @@
             </details>
           {% endif %}
         {% endwith %}
+        {% with sim=selected_event.predicted.classifier_similar_candidates %}
+          {% if sim %}
+            <details id="classifier-similar-candidates" class="candidate-list-block">
+              <summary>Похожие паттерны (>= 50%)</summary>
+              <ul>
+                {% for item in sim %}
+                  <li>— {{ item.event_type_name|default:"—" }} ({{ item.classifier_article|default:"—" }}) — "{{ item.pattern_text|default:"—" }}" ({{ item.score_percent|floatformat:0 }}%)</li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endif %}
+        {% endwith %}
       </div>
 
       <div class="detail-block">
@@ -314,8 +326,10 @@
       commentsList: document.getElementById("comments-list"),
       predictedCandidates: document.querySelector("#predicted-candidates ul"),
       classifierCandidates: document.querySelector("#classifier-candidates ul"),
+      similarPatternCandidates: document.querySelector("#classifier-similar-candidates ul"),
       predictedCandidatesBlock: document.getElementById("predicted-candidates"),
       classifierCandidatesBlock: document.getElementById("classifier-candidates"),
+      similarPatternCandidatesBlock: document.getElementById("classifier-similar-candidates"),
       patternEventTypesBlock: document.getElementById("pattern-event-types-block"),
       patternEventTypesList: document.getElementById("pattern-event-types"),
       bestPattern: document.querySelector('[data-field="best-pattern"]'),
@@ -394,6 +408,22 @@
             : "0%";
           const article = item?.[articleField] || "—";
           return `<li>— ${escapeHtml(item.event_type_name || "—")} (${escapeHtml(article)}) (${score})</li>`;
+        })
+        .join("");
+    };
+
+    const renderSimilarPatternCandidates = (items) => {
+      if (!items || !items.length) {
+        return "";
+      }
+      return items
+        .map((item) => {
+          const score = item.score_percent !== null && item.score_percent !== undefined
+            ? `${Math.max(0, Math.min(100, Math.round(item.score_percent)))}%`
+            : "0%";
+          return `<li>— ${escapeHtml(item.event_type_name || "—")} (${escapeHtml(
+            item.classifier_article || "—"
+          )}) — "${escapeHtml(item.pattern_text || "—")}" (${score})</li>`;
         })
         .join("");
     };
@@ -516,6 +546,13 @@
         dom.patternEventTypesList.innerHTML = renderPatternEventTypes(patternEventTypes);
         if (dom.patternEventTypesBlock) {
           dom.patternEventTypesBlock.hidden = !patternEventTypes.length;
+        }
+      }
+      if (dom.similarPatternCandidates) {
+        const similarItems = event.predicted?.classifier_similar_candidates || [];
+        dom.similarPatternCandidates.innerHTML = renderSimilarPatternCandidates(similarItems);
+        if (dom.similarPatternCandidatesBlock) {
+          dom.similarPatternCandidatesBlock.hidden = !similarItems.length;
         }
       }
 
