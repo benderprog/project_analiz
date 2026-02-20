@@ -7,7 +7,7 @@ from django.utils import timezone
 
 import psycopg2
 
-from apps.analysis_app.admin_forms import PortalDbConnectionSettingsAdminForm
+from apps.analysis_app.admin_forms import PortalDbConnectionSettingsAdminForm, SvodkaTemplateAdminForm
 from apps.analysis_app.models import (
     CachedPU,
     CachedSubdivision,
@@ -264,9 +264,9 @@ class CachedSubdivisionAliasAdmin(admin.ModelAdmin):
 
 @admin.register(SvodkaTemplate)
 class SvodkaTemplateAdmin(admin.ModelAdmin):
+    form = SvodkaTemplateAdminForm
     list_display = (
         "scope",
-        "pu_id",
         "pu_name",
         "is_active",
         "begin_marker",
@@ -274,5 +274,6 @@ class SvodkaTemplateAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("scope", "is_active")
-    search_fields = ("pu_id", "pu_name")
+    search_fields = ("pu_name",)
     list_editable = ("is_active",)
+    exclude = ("pu_id", "scope")
