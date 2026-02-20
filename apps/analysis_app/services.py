@@ -1574,10 +1574,82 @@ def _get_event_pattern_embedding_cache() -> tuple[dict, ...]:
     return tuple(cached)
 
 
+@lru_cache(maxsize=1)
+def _get_active_classifier_pattern_rows() -> tuple[dict[str, str | None], ...]:
+    rows = (
+        EventTypePattern.objects.filter(is_active=True, event_type__is_active=True)
+        .select_related("event_type")
+        .only("event_type_id", "pattern", "article_of_law", "event_type__event_type")
+    )
+    payload: list[dict[str, str | None]] = []
+    for row in rows:
+        pattern_text = str(row.pattern or "").strip()
+        if not pattern_text:
+            continue
+        payload.append(
+            {
+                "event_type_id": str(row.event_type_id),
+                "event_type_name": row.event_type.event_type,
+                "pattern_text": pattern_text,
+                "classifier_article": row.article_of_law,
+            }
+        )
+    return tuple(payload)
+
+
+def _build_similar_pattern_candidates(
+    best_pattern_text: str | None,
+    *,
+    min_score: float = 0.5,
+    limit: int = 20,
+) -> list[dict[str, object]]:
+    pattern_text = str(best_pattern_text or "").strip()
+    if not pattern_text:
+        return []
+
+    normalized_best = _normalize_classifier_text(pattern_text)
+    if not normalized_best:
+        return []
+
+    candidates: list[dict[str, object]] = []
+    for row in _get_active_classifier_pattern_rows():
+        row_pattern_text = str(row.get("pattern_text") or "").strip()
+        normalized_pattern = _normalize_classifier_text(row_pattern_text)
+        if not normalized_pattern:
+            continue
+
+        score = _clamp_score(SequenceMatcher(None, normalized_best, normalized_pattern).ratio())
+        if normalized_best in normalized_pattern or normalized_pattern in normalized_best:
+            score = 1.0
+        if score < min_score:
+            continue
+
+        candidates.append(
+            {
+                "event_type_id": row.get("event_type_id"),
+                "event_type_name": row.get("event_type_name"),
+                "pattern_text": row_pattern_text,
+                "classifier_article": row.get("classifier_article"),
+                "score": round(score, 6),
+                "score_percent": round(score * 100, 1),
+            }
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            -(item.get("score") or 0.0),
+            item.get("event_type_name") or "",
+            item.get("pattern_text") or "",
+        )
+    )
+    return candidates[: max(1, int(limit))]
+
+
 @receiver(post_save, sender=EventTypePattern)
 @receiver(post_delete, sender=EventTypePattern)
 def _invalidate_event_pattern_embedding_cache(**kwargs) -> None:
     _get_event_pattern_embedding_cache.cache_clear()
+    _get_active_classifier_pattern_rows.cache_clear()
 
 
 def _find_semantic_event_pattern(text: str):
@@ -2326,6 +2398,14 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
     predicted_type, predicted_article, predicted_event_pattern, classifier_candidates = _classify_event_type(text)
+    similar_min_score = float(getattr(settings, "CLASSIFIER_SIMILAR_PATTERN_MIN_SCORE", 0.5))
+    similar_limit = int(getattr(settings, "CLASSIFIER_SIMILAR_PATTERN_LIMIT", 20))
+    similar_candidates = _build_similar_pattern_candidates(
+        (predicted_event_pattern or {}).get("pattern_text"),
+        min_score=similar_min_score,
+        limit=similar_limit,
+    )
+
     predicted_payload = {
         "event_type": predicted_type,
         "article_of_law": attributes.article_of_law,
@@ -2343,6 +2423,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "best_pattern_fragment": (predicted_event_pattern or {}).get("matched_fragment"),
         "classifier_candidates": classifier_candidates,
         "classifier_pattern_candidates": classifier_candidates,
+        "classifier_similar_candidates": similar_candidates,
+        "classifier_similar_min_score_used": similar_min_score,
+        "classifier_similar_limit_used": similar_limit,
         "classifier_min_score_used": float(getattr(settings, "CLASSIFIER_MIN_SCORE", 0.5)),
     }
     predicted_payload = ensure_classifier_candidates(predicted_payload, text)

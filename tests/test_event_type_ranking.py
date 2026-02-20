@@ -2,11 +2,13 @@ from django.test import TestCase, override_settings
 from unittest.mock import patch
 
 from apps.analysis_app.services import (
+    _build_similar_pattern_candidates,
     _classify_event_type,
     ensure_classifier_candidates,
     ExtractedAttributes,
     match_event,
     rank_event_types,
+    _get_active_classifier_pattern_rows,
 )
 from apps.classifier.models import EventType, EventTypePattern
 
@@ -95,6 +97,28 @@ class EventTypeRankingTests(TestCase):
 
 
 
+    def test_build_similar_pattern_candidates_respects_score_sort_and_limit(self):
+        _get_active_classifier_pattern_rows.cache_clear()
+        t1 = EventType.objects.create(event_type="Тип A")
+        t2 = EventType.objects.create(event_type="Тип B")
+        t3 = EventType.objects.create(event_type="Тип C")
+        EventTypePattern.objects.create(event_type=t1, pattern="вещество растительного происхождения", article_of_law="18.1")
+        EventTypePattern.objects.create(event_type=t2, pattern="вещество растительного", article_of_law="18.2")
+        EventTypePattern.objects.create(event_type=t3, pattern="совершенно другой паттерн", article_of_law="19.1")
+
+        candidates = _build_similar_pattern_candidates(
+            "вещество растительного происхождения",
+            min_score=0.5,
+            limit=2,
+        )
+
+        self.assertEqual(len(candidates), 2)
+        self.assertGreaterEqual(candidates[0]["score"], candidates[1]["score"])
+        self.assertTrue(all(item["score"] >= 0.5 for item in candidates))
+        self.assertEqual(candidates[0]["pattern_text"], "вещество растительного происхождения")
+        self.assertEqual(candidates[0]["score_percent"], 100.0)
+
+
     def test_match_event_persists_classifier_candidates_and_articles(self):
         phrase = "вещество растительного происхождения"
         t1 = EventType.objects.create(event_type="Внос/вынос")
@@ -125,3 +149,6 @@ class EventTypeRankingTests(TestCase):
         self.assertIsNotNone(predicted.get("classifier_best"))
         self.assertEqual(predicted.get("best_pattern_text"), phrase)
         self.assertEqual(predicted.get("classifier_article_of_law"), "18.3 ч. 1")
+        self.assertTrue(predicted.get("classifier_similar_candidates"))
+        self.assertEqual(predicted.get("classifier_similar_min_score_used"), 0.5)
+        self.assertEqual(predicted.get("classifier_similar_limit_used"), 20)

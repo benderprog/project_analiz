@@ -714,8 +714,20 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         }
         for item in classifier_candidates
     ]
+    similar_candidates = predicted.get("classifier_similar_candidates") or []
+    formatted_similar_candidates = [
+        {
+            "event_type_id": item.get("event_type_id"),
+            "event_type_name": item.get("event_type_name"),
+            "pattern_text": item.get("pattern_text"),
+            "classifier_article": _display_article(item.get("classifier_article") or item.get("article")),
+            "score_percent": item.get("score_percent") if item.get("score_percent") is not None else _score_to_percent(item.get("score")),
+        }
+        for item in similar_candidates
+    ]
     predicted["classifier_candidates"] = formatted_classifier_candidates
     predicted["classifier_pattern_candidates"] = formatted_classifier_candidates
+    predicted["classifier_similar_candidates"] = formatted_similar_candidates
 
     classifier_best = predicted.get("classifier_best") or {}
     classifier_best_payload = None
@@ -777,6 +789,9 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "best_pattern_fragment": predicted.get("best_pattern_fragment"),
             "classifier_candidates": formatted_classifier_candidates,
             "classifier_pattern_candidates": formatted_classifier_candidates,
+            "classifier_similar_candidates": formatted_similar_candidates,
+            "classifier_similar_min_score_used": predicted.get("classifier_similar_min_score_used"),
+            "classifier_similar_limit_used": predicted.get("classifier_similar_limit_used"),
             "classifier_min_score_used": predicted.get("classifier_min_score_used"),
         },
         "status": {
