@@ -222,6 +222,18 @@
         <p id="best-pattern">
           Паттерн: <span data-field="best-pattern">{{ selected_event.predicted.best_pattern_text|default:"—" }}</span>
         </p>
+        {% with sim=selected_event.predicted.classifier_similar_candidates %}
+          {% if sim %}
+            <details id="classifier-similar-candidates" class="candidate-list-block">
+              <summary>Похожие паттерны (>= 50%)</summary>
+              <ul>
+                {% for item in sim %}
+                  <li>— {{ item.event_type_name|default:"—" }} ({{ item.classifier_article|default:"—" }}) — "{{ item.pattern_text|default:"—" }}" ({{ item.score_percent|floatformat:0 }}%)</li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endif %}
+        {% endwith %}
         <details
           id="pattern-event-types-block"
           class="candidate-list-block"
@@ -269,18 +281,6 @@
               <ul>
                 {% for candidate in cands %}
                   <li>— {{ candidate.event_type_name|default:"—" }} ({{ candidate.classifier_article|default:"—" }}) ({{ candidate.score_percent|floatformat:0 }}%)</li>
-                {% endfor %}
-              </ul>
-            </details>
-          {% endif %}
-        {% endwith %}
-        {% with sim=selected_event.predicted.classifier_similar_candidates %}
-          {% if sim %}
-            <details id="classifier-similar-candidates" class="candidate-list-block">
-              <summary>Похожие паттерны (>= 50%)</summary>
-              <ul>
-                {% for item in sim %}
-                  <li>— {{ item.event_type_name|default:"—" }} ({{ item.classifier_article|default:"—" }}) — "{{ item.pattern_text|default:"—" }}" ({{ item.score_percent|floatformat:0 }}%)</li>
                 {% endfor %}
               </ul>
             </details>
