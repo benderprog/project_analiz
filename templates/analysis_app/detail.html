@@ -220,21 +220,26 @@
           </span>
         </h4>
         <p id="best-pattern">
-          Паттерн: <span data-field="best-pattern">{{ selected_event.predicted.best_pattern_text|default:"—" }}</span>
+          Тип события:
+          <span data-field="best-pattern">{{ selected_event.predicted.best_pattern_text|default:"—" }}</span>
+          - <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не определено" }}</span>
+          (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
         {% with sim=selected_event.predicted.classifier_similar_candidates %}
-          {% if sim %}
-            <details id="classifier-similar-candidates" class="candidate-list-block">
-              <summary>Похожие паттерны (>= 50%)</summary>
-              <ul>
-                {% for item in sim %}
-                  <li>
-                    — "{{ item.pattern_text|default:"—" }}" ({{ item.score_percent|floatformat:0 }}%) - {{ item.event_type_name|default:"—" }}{% if item.classifier_article and item.classifier_article != "—" %} ({{ item.classifier_article }}){% endif %}
-                  </li>
-                {% endfor %}
-              </ul>
-            </details>
-          {% endif %}
+          <details
+            id="classifier-similar-candidates"
+            class="candidate-list-block"
+            {% if not sim %}hidden{% endif %}
+          >
+            <summary>Похожие (&gt;=50%):</summary>
+            <ul>
+              {% for item in sim %}
+                <li>
+                  — {{ item.pattern_text|default:"—" }} {{ item.score_percent|floatformat:0 }}% - {{ item.event_type_name|default:"—" }}{% if item.classifier_article and item.classifier_article != "—" %} ({{ item.classifier_article }}){% elif item.article_of_law and item.article_of_law != "—" %} ({{ item.article_of_law }}){% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
         {% endwith %}
         <details
           id="pattern-event-types-block"
@@ -248,11 +253,6 @@
             {% endfor %}
           </ul>
         </details>
-        <p id="predicted-type">
-          Определено:
-          <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не определено" }}</span>
-          (<span data-field="pred-article">{{ selected_event.predicted.article_of_law|default:"—" }}</span>)
-        </p>
         {% with cands=selected_event.predicted.classifier_candidates|default:selected_event.predicted.classifier_pattern_candidates %}
           <!-- classifier_candidates_count={{ cands|length }} -->
           {% if cands %}
@@ -270,11 +270,6 @@
           В БД:
           <span data-field="portal-event-type">{{ selected_event.portal.event_type|default:"не задан" }}</span>
           (<span data-field="portal-article">{{ selected_event.portal.article_of_law|default:"—" }}</span>)
-        </p>
-        <p id="classifier-type">
-          По классификатору:
-          <span data-field="cls-event-type">{{ selected_event.predicted.event_type|default:"не задан" }}</span>
-          (<span data-field="cls-article">{{ selected_event.predicted.classifier_article_of_law|default:"—" }}</span>)
         </p>
         {% with cands=selected_event.predicted.classifier_candidates|default:selected_event.predicted.classifier_pattern_candidates %}
           {% if cands %}
@@ -427,7 +422,7 @@
           const patternText = item.pattern_text || item.best_pattern_text || item.pattern;
           const renderedArticle =
             article && article !== "—" ? ` (${escapeHtml(article)})` : "";
-          return `<li>— "${escapeHtml(patternText || "—")}" (${score}) - ${escapeHtml(
+          return `<li>— ${escapeHtml(patternText || "—")} ${score} - ${escapeHtml(
             item.event_type_name || "—"
           )}${renderedArticle}</li>`;
         })
