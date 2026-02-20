@@ -222,6 +222,18 @@
         <p id="best-pattern">
           Паттерн: <span data-field="best-pattern">{{ selected_event.predicted.best_pattern_text|default:"—" }}</span>
         </p>
+        <details
+          id="pattern-event-types-block"
+          class="candidate-list-block"
+          {% if not selected_event.predicted.pattern_event_types %}hidden{% endif %}
+        >
+          <summary>Типы событий с этим паттерном</summary>
+          <ul id="pattern-event-types">
+            {% for item in selected_event.predicted.pattern_event_types %}
+              <li>— {{ item.event_type_name|default:"—" }} ({{ item.article_of_law|default:"—" }})</li>
+            {% endfor %}
+          </ul>
+        </details>
         <p id="predicted-type">
           Определено:
           <span data-field="pred-event-type">{{ selected_event.predicted.event_type|default:"не определено" }}</span>
@@ -304,6 +316,8 @@
       classifierCandidates: document.querySelector("#classifier-candidates ul"),
       predictedCandidatesBlock: document.getElementById("predicted-candidates"),
       classifierCandidatesBlock: document.getElementById("classifier-candidates"),
+      patternEventTypesBlock: document.getElementById("pattern-event-types-block"),
+      patternEventTypesList: document.getElementById("pattern-event-types"),
       bestPattern: document.querySelector('[data-field="best-pattern"]'),
       fields: {
         predEventType: document.querySelector('[data-field="pred-event-type"]'),
@@ -381,6 +395,20 @@
           const article = item?.[articleField] || "—";
           return `<li>— ${escapeHtml(item.event_type_name || "—")} (${escapeHtml(article)}) (${score})</li>`;
         })
+        .join("");
+    };
+
+    const renderPatternEventTypes = (items) => {
+      if (!items || !items.length) {
+        return "";
+      }
+      return items
+        .map(
+          (item) =>
+            `<li>— ${escapeHtml(item.event_type_name || "—")} (${escapeHtml(
+              item.article_of_law || "—"
+            )})</li>`
+        )
         .join("");
     };
 
@@ -481,6 +509,13 @@
         );
         if (dom.classifierCandidatesBlock) {
           dom.classifierCandidatesBlock.hidden = !classifierItems.length;
+        }
+      }
+      if (dom.patternEventTypesList) {
+        const patternEventTypes = event.predicted?.pattern_event_types || [];
+        dom.patternEventTypesList.innerHTML = renderPatternEventTypes(patternEventTypes);
+        if (dom.patternEventTypesBlock) {
+          dom.patternEventTypesBlock.hidden = !patternEventTypes.length;
         }
       }
 

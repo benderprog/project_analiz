@@ -32,6 +32,7 @@ from apps.analysis_app.subdivision_matcher import (
 )
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
+from apps.classifier.models import EventTypePattern
 
 TIME_ERROR_MINUTES = int(getattr(settings, "TIME_ERROR_MINUTES", 30))
 
@@ -152,6 +153,46 @@ def _dedupe_pairs(pairs: list[dict], *, key_getter) -> list[dict]:
         seen.add(key)
         deduped.append(pair)
     return deduped
+
+
+def _build_pattern_event_types_map(events: list[dict]) -> dict[str, list[dict]]:
+    patterns = {
+        str((event.get("predicted") or {}).get("best_pattern_text") or "").strip()
+        for event in events
+    }
+    patterns.discard("")
+    if not patterns:
+        return {}
+
+    rows = (
+        EventTypePattern.objects.filter(
+            is_active=True,
+            event_type__is_active=True,
+            pattern__in=patterns,
+        )
+        .select_related("event_type")
+        .order_by("event_type__event_type", "article_of_law")
+    )
+
+    mapping: dict[str, list[dict]] = {}
+    seen_by_pattern: dict[str, set[str]] = {}
+    for row in rows:
+        pattern = str(row.pattern or "").strip()
+        if not pattern:
+            continue
+        event_type_id = str(row.event_type.event_type_id)
+        pattern_seen = seen_by_pattern.setdefault(pattern, set())
+        if event_type_id in pattern_seen:
+            continue
+        pattern_seen.add(event_type_id)
+        mapping.setdefault(pattern, []).append(
+            {
+                "event_type_id": event_type_id,
+                "event_type_name": row.event_type.event_type,
+                "article_of_law": row.article_of_law or None,
+            }
+        )
+    return mapping
 
 
 def _status_for_timestamp(match_result: dict) -> str:
@@ -987,6 +1028,13 @@ class AnalysisDetailView(View):
         run = get_object_or_404(AnalysisRun, run_id=run_id)
         paragraphs = run.paragraphs.select_related("result").order_by("idx")
         events = [_build_event_card(paragraph) for paragraph in paragraphs]
+        pattern_event_types_map = _build_pattern_event_types_map(events)
+        for event in events:
+            predicted = event.get("predicted") or {}
+            best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
+            predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
+            event["predicted"] = predicted
+
         selected_idx = request.GET.get("event")
         try:
             selected_idx = int(selected_idx)
