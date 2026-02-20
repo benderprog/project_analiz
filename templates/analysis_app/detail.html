@@ -228,7 +228,9 @@
               <summary>Похожие паттерны (>= 50%)</summary>
               <ul>
                 {% for item in sim %}
-                  <li>— {{ item.event_type_name|default:"—" }} ({{ item.classifier_article|default:"—" }}) — "{{ item.pattern_text|default:"—" }}" ({{ item.score_percent|floatformat:0 }}%)</li>
+                  <li>
+                    — "{{ item.pattern_text|default:"—" }}" ({{ item.score_percent|floatformat:0 }}%) - {{ item.event_type_name|default:"—" }}{% if item.classifier_article and item.classifier_article != "—" %} ({{ item.classifier_article }}){% endif %}
+                  </li>
                 {% endfor %}
               </ul>
             </details>
@@ -421,9 +423,13 @@
           const score = item.score_percent !== null && item.score_percent !== undefined
             ? `${Math.max(0, Math.min(100, Math.round(item.score_percent)))}%`
             : "0%";
-          return `<li>— ${escapeHtml(item.event_type_name || "—")} (${escapeHtml(
-            item.classifier_article || "—"
-          )}) — "${escapeHtml(item.pattern_text || "—")}" (${score})</li>`;
+          const article = item.classifier_article || item.article_of_law;
+          const patternText = item.pattern_text || item.best_pattern_text || item.pattern;
+          const renderedArticle =
+            article && article !== "—" ? ` (${escapeHtml(article)})` : "";
+          return `<li>— "${escapeHtml(patternText || "—")}" (${score}) - ${escapeHtml(
+            item.event_type_name || "—"
+          )}${renderedArticle}</li>`;
         })
         .join("");
     };
