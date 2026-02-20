@@ -461,7 +461,7 @@ class MatchingTests(TestCase):
 
         self.assertTrue(result["matched"])
         self.assertEqual(len(attributes.staff), 1)
-        self.assertEqual(attributes.staff[0]["display"], "ст. л-т Васильев А.А.")
+        self.assertEqual(attributes.staff[0]["display"], "Старший лейтенант Васильев А.А.")
         self.assertEqual(len(attributes.offenders), 1)
         self.assertEqual(attributes.offenders[0]["second_name"], "Иванов")
 

@@ -1,23 +1,113 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from dataclasses import asdict, dataclass
 
 
 _TOKEN_RE = re.compile(r"[А-ЯЁа-яё0-9.-]+")
-_RANK_PATTERN = (
-    r"(?:"
-    r"(?:ст\.\s*)?(?:пр-к|л-т|м-н)"
-    r"|лейтенант|капитан|майор|подполковник|полковник|мичман|старшина"
-    r"|генерал|адмирал|контр-адмирал|капитан-лейтенант|прапорщик|кап\.?"
-    r")(?:\s+(?:2|3)\s+ранга)?"
+
+
+def normalize_rank_token(value: str) -> str:
+    lowered = (value or "").lower().replace("ё", "е")
+    lowered = re.sub(r"[–—−]", "-", lowered)
+    lowered = re.sub(r"[\s\-]", "", lowered)
+    lowered = re.sub(r"[\./\\,;:()\[\]{}\"'«»]", "", lowered)
+    return re.sub(r"[^а-я0-9]", "", lowered)
+
+
+_CANONICAL_RANK_ALIASES = {
+    "прк": "Прапорщик",
+    "прапорщик": "Прапорщик",
+    "стпрк": "Старший прапорщик",
+    "старшийпрапорщик": "Старший прапорщик",
+    "мллт": "Младший лейтенант",
+    "младшийлейтенант": "Младший лейтенант",
+    "лт": "Лейтенант",
+    "лейтенант": "Лейтенант",
+    "стлт": "Старший лейтенант",
+    "старшийлейтенант": "Старший лейтенант",
+    "кн": "Капитан",
+    "кап": "Капитан",
+    "капитан": "Капитан",
+    "мр": "Майор",
+    "майор": "Майор",
+    "ппк": "Подполковник",
+    "подполковник": "Подполковник",
+    "пк": "Полковник",
+    "полковник": "Полковник",
+    "мн": "Мичман",
+    "мичман": "Мичман",
+    "стмн": "Старший мичман",
+    "старшиймичман": "Старший мичман",
+    "кл": "Капитан-лейтенант",
+    "капитанлейтенант": "Капитан-лейтенант",
+    "к3р": "Капитан 3-го ранга",
+    "капитан3горанга": "Капитан 3-го ранга",
+    "капитан3ранга": "Капитан 3-го ранга",
+    "к2р": "Капитан 2-го ранга",
+    "капитан2горанга": "Капитан 2-го ранга",
+    "капитан2ранга": "Капитан 2-го ранга",
+    "к1р": "Капитан 1-го ранга",
+    "капитан1горанга": "Капитан 1-го ранга",
+    "капитан1ранга": "Капитан 1-го ранга",
+    "старшина": "Старшина",
+    "генерал": "Генерал",
+    "адмирал": "Адмирал",
+    "контрадмирал": "Контр-адмирал",
+}
+
+RANK_ALIASES = {
+    normalize_rank_token(alias): full_rank
+    for alias, full_rank in _CANONICAL_RANK_ALIASES.items()
+}
+_FULL_RANK_KEYS = {k: v for k, v in RANK_ALIASES.items() if len(k) >= 6}
+
+
+def _abbr_pattern(alias: str) -> str:
+    joiner = r"[\s.\-/\\–—]*"
+    return joiner.join(re.escape(char) for char in alias)
+
+
+_SHORT_ALIASES = sorted(
+    {
+        normalize_rank_token(alias)
+        for alias in (
+            "пр-к",
+            "ст. пр-к",
+            "мл. л-т",
+            "л-т",
+            "ст. л-т",
+            "к-н",
+            "м-р",
+            "п/п-к",
+            "п-к",
+            "м-н",
+            "ст. м-н",
+            "к/л",
+            "к-3р",
+            "к-2р",
+            "к-1р",
+        )
+    },
+    key=len,
+    reverse=True,
 )
+_SHORT_RANK_PATTERN = "|".join(_abbr_pattern(alias) for alias in _SHORT_ALIASES)
+_FULL_RANK_PATTERN = (
+    r"(?:"
+    r"прапорщик|старш(?:ий|ая)\s+прапорщик|младш(?:ий|ая)\s+лейтенант|лейтенант|старш(?:ий|ая)\s+лейтенант"
+    r"|капитан(?:\s*[\-–—]?\s*лейтенант)?|майор|подполковник|полковник"
+    r"|мичман|старш(?:ий|ая)\s+мичман|старшина|генерал|адмирал|контр\s*[\-–—]?\s*адмирал"
+    r")(?:\s+[-–—]?\s*[123](?:-?\s*го)?\s+ранга)?"
+)
+_RANK_PATTERN = rf"(?:{_SHORT_RANK_PATTERN}|{_FULL_RANK_PATTERN}|[А-ЯЁа-яё]{{6,}})"
 _STAFF_RE = re.compile(
-    rf"(?:(?P<rank>{_RANK_PATTERN})\s+)?(?P<surname>[А-ЯЁ][а-яё]{{2,}})\s+(?P<initials>(?:[А-ЯЁ]\s*\.\s*){{2}})(?:\+\d+)?",
+    rf"(?:^|[\s(,;:])(?:(?P<rank>{_RANK_PATTERN})\s+)?(?P<surname>[А-ЯЁ][а-яё]{{2,}})\s+(?P<initials>(?:[А-ЯЁ]\s*\.\s*){{2}})(?:\+\d+)?",
     re.IGNORECASE,
 )
 _RANK_PREFIX_RE = re.compile(
-    r"(?:^|[\s(,;:])(?P<rank>(?:(?:ст\.\s*)?(?:пр-к|л-т|м-н)|лейтенант|капитан|майор|подполковник|полковник|мичман|старшина|генерал|адмирал|контр-адмирал|капитан-лейтенант|прапорщик|кап\.?)(?:\s+(?:2|3)\s+ранга)?)\s*$",
+    rf"(?:^|[\s(,;:])(?P<rank>{_RANK_PATTERN})\s*$",
     re.IGNORECASE,
 )
 
@@ -52,6 +142,7 @@ _CONNECTOR_TOKENS = {"2", "3", "ст", "ст.", "мл", "мл."}
 class StaffMention:
     rank_raw: str
     rank_norm: str
+    rank_full: str
     surname: str
     initials: str
     display: str
@@ -115,9 +206,32 @@ def _extract_rank_before(text: str, surname_start: int) -> str:
 
 
 def _normalize_rank(raw: str) -> str:
-    rank = re.sub(r"\s+", " ", raw).strip()
-    rank = re.sub(r"(?i)^ст\.\s+пр-к$", "ст.пр-к", rank)
-    return rank
+    return re.sub(r"\s+", " ", raw).strip(" ,;:")
+
+
+def _resolve_rank(raw: str) -> tuple[str, str]:
+    rank_norm = _normalize_rank(raw)
+    normalized = normalize_rank_token(rank_norm)
+    if not normalized:
+        return rank_norm, ""
+
+    direct = RANK_ALIASES.get(normalized)
+    if direct:
+        return rank_norm, direct
+
+    if len(normalized) < 6:
+        return rank_norm, ""
+
+    best_key = ""
+    best_ratio = 0.0
+    for key in _FULL_RANK_KEYS:
+        ratio = SequenceMatcher(None, normalized, key).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_key = key
+    if best_key and best_ratio >= 0.8:
+        return rank_norm, _FULL_RANK_KEYS[best_key]
+    return rank_norm, ""
 
 
 def _staff_key(surname: str, initials: str, rank: str) -> str:
@@ -158,9 +272,13 @@ def extract_staff_mentions(text: str) -> list[StaffMention]:
         if _has_significant_overlap(span, seen_spans):
             continue
 
-        rank_norm = _normalize_rank(rank_raw)
-        display = f"{rank_norm} {surname} {initials}".strip() if rank_norm else f"{surname} {initials}"
-        key = _staff_key(surname, initials, rank_norm)
+        rank_norm, rank_full = _resolve_rank(rank_raw)
+        if not rank_full and not normalize_rank_token(rank_norm) in RANK_ALIASES:
+            continue
+
+        rank_for_display = rank_full or rank_norm
+        display = f"{rank_for_display} {surname} {initials}".strip() if rank_for_display else f"{surname} {initials}"
+        key = _staff_key(surname, initials, rank_for_display)
         if key in seen:
             continue
         seen.add(key)
@@ -169,6 +287,7 @@ def extract_staff_mentions(text: str) -> list[StaffMention]:
             StaffMention(
                 rank_raw=rank_raw,
                 rank_norm=rank_norm,
+                rank_full=rank_full,
                 surname=surname,
                 initials=initials,
                 display=display,
@@ -204,8 +323,12 @@ def build_staff_from_excluded_mentions(excluded_mentions: list, text: str) -> li
             display = f"{surname} {initials}"
         if not rank_raw:
             continue
-        if rank_raw and display:
-            display = f"{rank_raw} {display}"
+        rank_norm, rank_full = _resolve_rank(rank_raw)
+        rank_for_display = rank_full or rank_norm
+        if not rank_for_display:
+            continue
+        if display:
+            display = f"{rank_for_display} {display}"
 
         if span_tuple:
             rank_start = max(0, span_tuple[0] - len(rank_raw) - 2)
@@ -216,8 +339,7 @@ def build_staff_from_excluded_mentions(excluded_mentions: list, text: str) -> li
         if span_tuple and _has_significant_overlap(span_tuple, seen_spans):
             continue
 
-        rank_norm = _normalize_rank(rank_raw)
-        key = _staff_key(surname, initials, rank_norm)
+        key = _staff_key(surname, initials, rank_for_display)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -227,6 +349,7 @@ def build_staff_from_excluded_mentions(excluded_mentions: list, text: str) -> li
             StaffMention(
                 rank_raw=rank_raw,
                 rank_norm=rank_norm,
+                rank_full=rank_full,
                 surname=surname,
                 initials=initials,
                 display=display.strip(),

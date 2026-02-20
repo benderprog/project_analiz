@@ -15,7 +15,8 @@ class StaffExtractorTests(SimpleTestCase):
         self.assertEqual(len(staff), 1)
         self.assertEqual(staff[0].surname, "Антонов")
         self.assertEqual(staff[0].initials, "Д.В.")
-        self.assertEqual(staff[0].display, "ст.пр-к Антонов Д.В.")
+        self.assertEqual(staff[0].rank_full, "Старший прапорщик")
+        self.assertEqual(staff[0].display, "Старший прапорщик Антонов Д.В.")
 
     def test_extract_spaced_rank_praporshchik_normalized_to_fused(self):
         text = "... (ст. пр-к Антонов Д.В.), ..."
@@ -23,7 +24,7 @@ class StaffExtractorTests(SimpleTestCase):
         staff = extract_staff_mentions(text)
 
         self.assertEqual(len(staff), 1)
-        self.assertEqual(staff[0].display, "ст.пр-к Антонов Д.В.")
+        self.assertEqual(staff[0].display, "Старший прапорщик Антонов Д.В.")
 
     def test_extract_praporshchik_without_st(self):
         text = "... (пр-к Антонов Д.В.), ..."
@@ -31,7 +32,7 @@ class StaffExtractorTests(SimpleTestCase):
         staff = extract_staff_mentions(text)
 
         self.assertEqual(len(staff), 1)
-        self.assertEqual(staff[0].display, "пр-к Антонов Д.В.")
+        self.assertEqual(staff[0].display, "Прапорщик Антонов Д.В.")
 
     def test_extract_fused_rank_with_spaced_initials(self):
         text = "... (ст.пр-к Антонов Д. В.), ..."
@@ -39,7 +40,7 @@ class StaffExtractorTests(SimpleTestCase):
         staff = extract_staff_mentions(text)
 
         self.assertEqual(len(staff), 1)
-        self.assertEqual(staff[0].display, "ст.пр-к Антонов Д.В.")
+        self.assertEqual(staff[0].display, "Старший прапорщик Антонов Д.В.")
 
     def test_extract_parenthetical_rank_and_initials(self):
         text = "пн (ст. л-т Васильев А.А.)"
@@ -47,7 +48,7 @@ class StaffExtractorTests(SimpleTestCase):
         staff = extract_staff_mentions(text)
 
         self.assertEqual(len(staff), 1)
-        self.assertEqual(staff[0].display, "ст. л-т Васильев А.А.")
+        self.assertEqual(staff[0].display, "Старший лейтенант Васильев А.А.")
 
     def test_extract_st_mn_with_plus_counter(self):
         text = "пн (ст.м-н Смирнов А.А.+1)"
@@ -55,7 +56,7 @@ class StaffExtractorTests(SimpleTestCase):
         staff = extract_staff_mentions(text)
 
         self.assertEqual(len(staff), 1)
-        self.assertEqual(staff[0].display, "ст.м-н Смирнов А.А.")
+        self.assertEqual(staff[0].display, "Старший мичман Смирнов А.А.")
 
     def test_extract_full_navy_rank(self):
         text = "доложил капитан 2 ранга Иванов П.П."
@@ -63,7 +64,41 @@ class StaffExtractorTests(SimpleTestCase):
         staff = extract_staff_mentions(text)
 
         self.assertEqual(len(staff), 1)
-        self.assertEqual(staff[0].display, "капитан 2 ранга Иванов П.П.")
+        self.assertEqual(staff[0].display, "Капитан 2-го ранга Иванов П.П.")
+
+    def test_extract_major_short_rank_variants(self):
+        texts = [
+            "м-р Кылосова О.Д.",
+            "(м-р Кылосова О.Д.)",
+            "м—р Кылосова О.Д.",
+            "м.р Кылосова О.Д.",
+        ]
+
+        for text in texts:
+            with self.subTest(text=text):
+                staff = extract_staff_mentions(text)
+                self.assertEqual(len(staff), 1)
+                self.assertEqual(staff[0].rank_full, "Майор")
+                self.assertTrue(staff[0].display.startswith("Майор"))
+
+    def test_extract_additional_short_ranks(self):
+        cases = [
+            ("п/п-к Иванов И.И.", "Подполковник Иванов И.И."),
+            ("к-3р Петров П.П.", "Капитан 3-го ранга Петров П.П."),
+            ("ст. пр-к Сидоров С.С.", "Старший прапорщик Сидоров С.С."),
+        ]
+
+        for text, expected in cases:
+            with self.subTest(text=text):
+                staff = extract_staff_mentions(text)
+                self.assertEqual(len(staff), 1)
+                self.assertEqual(staff[0].display, expected)
+
+    def test_fuzzy_full_rank_typo(self):
+        staff = extract_staff_mentions("подполквник Иванов И.И.")
+
+        self.assertEqual(len(staff), 1)
+        self.assertEqual(staff[0].display, "Подполковник Иванов И.И.")
 
 
 class StaffAndOffendersSeparationTests(SimpleTestCase):
@@ -78,4 +113,4 @@ class StaffAndOffendersSeparationTests(SimpleTestCase):
         self.assertEqual(offender_names, ["Иванов Иван Иванович"])
 
         staff_display = [item.display for item in extract_staff_mentions(text)]
-        self.assertIn("ст.м-н Смирнов А.А.", staff_display)
+        self.assertIn("Старший мичман Смирнов А.А.", staff_display)

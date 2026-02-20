@@ -376,7 +376,7 @@ class EmployeeContextParenthesesRegressionTests(SimpleTestCase):
             ["Климов Андрей Олегович", "Смирнова Мария Сергеевна"],
         )
         self.assertEqual(len(attrs.staff), 1)
-        self.assertEqual(attrs.staff[0]["display"], "ст. л-т Васильев А.А.")
+        self.assertEqual(attrs.staff[0]["display"], "Старший лейтенант Васильев А.А.")
 
     def test_parenthetical_ranked_staff_is_excluded_from_eligible(self):
         text = "(ст. л-т Васильев А.А.)"
@@ -398,6 +398,6 @@ class EmployeeContextParenthesesRegressionTests(SimpleTestCase):
             attrs = extract_attributes(text)
 
         self.assertEqual(len(attrs.staff), 1)
-        self.assertEqual(attrs.staff[0]["display"], "пр-к Кылосова О.Д.")
+        self.assertEqual(attrs.staff[0]["display"], "Прапорщик Кылосова О.Д.")
         self.assertEqual(attrs.staff[0]["surname"], "Кылосова")
         self.assertNotIn("Кылосов", [item["display"] for item in attrs.staff])
