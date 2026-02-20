@@ -13,6 +13,7 @@ from apps.analysis_app.models import (
     CachedSubdivision,
     CachedSubdivisionAlias,
     PortalDbConnectionSettings,
+    SvodkaTemplate,
 )
 from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.portal_records import PortalPURecord
@@ -259,3 +260,19 @@ class CachedSubdivisionAliasAdmin(admin.ModelAdmin):
     list_display = ("alias_text", "subdivision", "updated_at")
     search_fields = ("alias_text", "normalized_alias")
     list_select_related = ("subdivision",)
+
+
+@admin.register(SvodkaTemplate)
+class SvodkaTemplateAdmin(admin.ModelAdmin):
+    list_display = (
+        "scope",
+        "pu_id",
+        "pu_name",
+        "is_active",
+        "begin_marker",
+        "end_marker",
+        "updated_at",
+    )
+    list_filter = ("scope", "is_active")
+    search_fields = ("pu_id", "pu_name")
+    list_editable = ("is_active",)

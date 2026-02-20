@@ -40,6 +40,51 @@ class AnalysisRun(models.Model):
         return f"Run {self.run_id}"
 
 
+class SvodkaTemplate(models.Model):
+    class Scope(models.TextChoices):
+        PU = "pu", "PU"
+        GENERAL = "general", "Общая сводка"
+
+    template_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    scope = models.CharField(max_length=20, choices=Scope.choices)
+    pu_id = models.CharField(max_length=64, blank=True, default="")
+    pu_name = models.CharField(max_length=255, blank=True, default="")
+    file = models.FileField(upload_to="svodka_templates/", blank=True, null=True)
+    begin_marker = models.CharField(max_length=32, default="[BEGIN]")
+    end_marker = models.CharField(max_length=32, default="[END]")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Шаблон сводки"
+        verbose_name_plural = "Шаблоны сводки"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scope", "pu_id"],
+                condition=models.Q(is_active=True),
+                name="uniq_active_svodka_template_per_scope_pu",
+            )
+        ]
+
+    def __str__(self) -> str:
+        label = self.pu_name or self.pu_id or "Общая сводка"
+        return f"{self.get_scope_display()}: {label}"
+
+    def save(self, *args, **kwargs) -> None:
+        if self.scope == self.Scope.GENERAL:
+            self.pu_id = ""
+
+        super().save(*args, **kwargs)
+
+        if self.is_active:
+            (
+                SvodkaTemplate.objects.filter(scope=self.scope, pu_id=self.pu_id, is_active=True)
+                .exclude(template_id=self.template_id)
+                .update(is_active=False)
+            )
+
+
 class AnalysisParagraph(models.Model):
     class SourceKind(models.TextChoices):
         PARAGRAPH = "paragraph", "Paragraph"

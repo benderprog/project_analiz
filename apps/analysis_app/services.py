@@ -43,6 +43,8 @@ from .subdivision_matcher import (
     match_subdivision,
 )
 
+from .svodka_templates import slice_document_for_run
+
 logger = logging.getLogger(__name__)
 DEFAULT_DOB = date(1900, 1, 1)
 MATCH_TIME_DELTA_MINUTES = 30
@@ -85,7 +87,11 @@ _EVENT_PATTERN_MAX_WINDOWS = 90
 def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
-    events = parse_docx(run.file.path)
+    events = parse_docx(
+        run.file.path,
+        selected_pu_id=selected_pu_id or run.selected_pu_id,
+        selected_pu_name=run.selected_pu_name,
+    )
     for idx, event in enumerate(events, start=1):
         paragraph = AnalysisParagraph.objects.create(
             run=run,
@@ -284,54 +290,74 @@ def iter_docx_blocks(document) -> Iterable[DocxBlock]:
             yield DocxBlock(kind="table", table=table)
 
 
-def parse_docx(file_path: str) -> list[ParsedEvent]:
+def parse_docx(
+    file_path: str,
+    *,
+    selected_pu_id: str | None = None,
+    selected_pu_name: str | None = None,
+) -> list[ParsedEvent]:
     """Split DOCX content into ordered events from paragraphs and table rows."""
     from docx import Document
 
     document = Document(file_path)
     min_chars = max(int(getattr(settings, "MIN_EVENT_PARAGRAPH_CHARS", 100) or 0), 0)
+    elements, slicing_info = slice_document_for_run(
+        document,
+        selected_pu_id=selected_pu_id,
+        selected_pu_name=selected_pu_name,
+        min_chars=min_chars,
+    )
     events: list[ParsedEvent] = []
     total = 0
     skipped_short = 0
     skipped_empty_rows = 0
 
-    for block in iter_docx_blocks(document):
-        if block.kind == "paragraph":
+    for element in elements:
+        if element.is_table_header:
             total += 1
-            text = normalize_event_paragraph_text(block.text)
+            continue
+
+        total += 1
+        if element.kind == "paragraph":
+            text = normalize_event_paragraph_text(element.text)
             if len(text) < min_chars:
                 skipped_short += 1
                 continue
             events.append(ParsedEvent(kind="paragraph", joined_text=text))
             continue
 
-        rows = [
-            [normalize_event_paragraph_text(cell.text) for cell in row.cells]
-            for row in block.table.rows
-        ]
-        header_cells: list[str] | None = rows[0] if _looks_like_table_header(rows, min_chars) else None
-        start_idx = 1 if header_cells else 0
+        cells = [normalize_event_paragraph_text(cell) for cell in (element.cells or [])]
+        if not any(cells):
+            skipped_empty_rows += 1
+            continue
 
-        for cells in rows[start_idx:]:
-            total += 1
-            if not any(cells):
-                skipped_empty_rows += 1
-                continue
-            joined_text = normalize_event_paragraph_text(" ".join(cells))
-            if len(joined_text) < min_chars:
-                skipped_short += 1
-                continue
-            events.append(
-                ParsedEvent(
-                    kind="table_row",
-                    joined_text=joined_text,
-                    cells=cells,
-                    table_header_cells=header_cells,
-                )
+        joined_text = normalize_event_paragraph_text(" ".join(cells))
+        if len(joined_text) < min_chars:
+            skipped_short += 1
+            continue
+        events.append(
+            ParsedEvent(
+                kind="table_row",
+                joined_text=joined_text,
+                cells=cells,
+                table_header_cells=element.table_header_cells,
             )
+        )
 
-        if header_cells:
-            total += 1
+    template = slicing_info.selected_template
+    if template:
+        logger.info(
+            "svodka template: scope=%s pu_id=%s template_id=%s segments_detected=%s segments_applied=%s kept_elements=%s total_elements=%s",
+            template.scope,
+            template.pu_id,
+            template.template_id,
+            slicing_info.detected_segments,
+            slicing_info.applied_segments,
+            slicing_info.kept_elements,
+            slicing_info.total_elements,
+        )
+    else:
+        logger.info("svodka template: none selected")
 
     logger.info(
         "docx split: total=%s, kept=%s, skipped_short=%s, skipped_empty_rows=%s, min_chars=%s",
