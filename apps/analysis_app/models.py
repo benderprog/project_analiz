@@ -71,7 +71,29 @@ class SvodkaTemplate(models.Model):
         label = self.pu_name or self.pu_id or "Общая сводка"
         return f"{self.get_scope_display()}: {label}"
 
+    @staticmethod
+    def _normalize_label(value: str | None) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    def clean(self) -> None:
+        super().clean()
+        normalized_general = self._normalize_label("Общая сводка")
+        normalized_name = self._normalize_label(self.pu_name)
+
+        if not (self.pu_id or "").strip() or normalized_name == normalized_general:
+            self.scope = self.Scope.GENERAL
+            self.pu_id = ""
+            if not (self.pu_name or "").strip():
+                self.pu_name = "Общая сводка"
+
+        if self.scope == self.Scope.PU and not (self.pu_id or "").strip():
+            self.scope = self.Scope.GENERAL
+            self.pu_id = ""
+            if not (self.pu_name or "").strip():
+                self.pu_name = "Общая сводка"
+
     def save(self, *args, **kwargs) -> None:
+        self.clean()
         if self.scope == self.Scope.GENERAL:
             self.pu_id = ""
 
