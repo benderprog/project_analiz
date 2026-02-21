@@ -35,6 +35,9 @@ class SlicingDebugInfo:
     segments_failed: int
     kept_elements: int
     total_elements: int
+    target_markers_found: bool = False
+    target_segments_count: int = 0
+    target_kept_elements: int = 0
     fallback_reason: str | None = None
 
 
@@ -133,6 +136,67 @@ def _element_texts_for_segments(template_doc_or_elements: Any) -> list[str]:
     ):
         return [item.text for item in template_doc_or_elements]
     return [element.text for element in iter_doc_elements(template_doc_or_elements)]
+
+
+def _replace_markers(text: str, marker: str) -> str:
+    if not marker:
+        return text
+    return re.sub(re.escape(marker), " ", text, flags=re.IGNORECASE)
+
+
+def _clean_element_text(element: DocElement, cleaned_text: str) -> DocElement:
+    return DocElement(
+        kind=element.kind,
+        text=cleaned_text,
+        cells=element.cells,
+        table_header_cells=element.table_header_cells,
+        is_table_header=element.is_table_header,
+    )
+
+
+def slice_by_markers(
+    elements: Sequence[DocElement], begin: str = "[BEGIN]", end: str = "[END]"
+) -> tuple[list[DocElement], dict[str, int | bool]]:
+    begin_l = (begin or "").lower()
+    end_l = (end or "").lower()
+
+    if not begin_l or not end_l:
+        return [], {"markers_found": False, "segments_count": 0, "kept_elements": 0}
+
+    active = False
+    segments_count = 0
+    markers_found = False
+    kept: list[DocElement] = []
+
+    for element in elements:
+        text = element.text
+        lowered = text.lower()
+        has_begin = begin_l in lowered
+        has_end = end_l in lowered
+
+        if has_begin:
+            markers_found = True
+            if not active:
+                segments_count += 1
+            active = True
+
+        should_keep = active
+        if has_end:
+            markers_found = True
+
+        if should_keep:
+            cleaned = _normalize_ws(_replace_markers(_replace_markers(text, begin), end))
+            if cleaned:
+                kept.append(_clean_element_text(element, cleaned))
+
+        if has_end and active:
+            active = False
+
+    return kept, {
+        "markers_found": markers_found,
+        "segments_count": segments_count,
+        "kept_elements": len(kept),
+    }
 
 
 def build_template_segments(template_doc, begin_marker: str, end_marker: str) -> list[SegmentAnchors]:
@@ -283,7 +347,25 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             segments_failed=0,
             kept_elements=len(target_elements),
             total_elements=len(target_elements),
+            target_markers_found=False,
+            target_segments_count=0,
+            target_kept_elements=0,
             fallback_reason="no-template",
+        )
+
+    marker_sliced, marker_debug = slice_by_markers(target_elements, template.begin_marker, template.end_marker)
+    if marker_debug["markers_found"] and marker_debug["kept_elements"] > 0:
+        return marker_sliced, SlicingDebugInfo(
+            selected_template=template,
+            template_segments_total=0,
+            segments_applied=0,
+            segments_failed=0,
+            kept_elements=len(marker_sliced),
+            total_elements=len(target_elements),
+            target_markers_found=bool(marker_debug["markers_found"]),
+            target_segments_count=int(marker_debug["segments_count"]),
+            target_kept_elements=int(marker_debug["kept_elements"]),
+            fallback_reason=None,
         )
 
     from docx import Document
@@ -298,6 +380,9 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             segments_failed=0,
             kept_elements=len(target_elements),
             total_elements=len(target_elements),
+            target_markers_found=bool(marker_debug["markers_found"]),
+            target_segments_count=int(marker_debug["segments_count"]),
+            target_kept_elements=int(marker_debug["kept_elements"]),
             fallback_reason="no-segments-detected",
         )
 
@@ -316,5 +401,8 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         segments_failed=failed_segments,
         kept_elements=len(kept),
         total_elements=len(target_elements),
+        target_markers_found=bool(marker_debug["markers_found"]),
+        target_segments_count=int(marker_debug["segments_count"]),
+        target_kept_elements=int(marker_debug["kept_elements"]),
         fallback_reason=fallback_reason,
     )

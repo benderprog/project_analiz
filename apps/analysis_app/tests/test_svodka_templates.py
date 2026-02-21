@@ -1,6 +1,60 @@
 from django.test import SimpleTestCase
 
-from apps.analysis_app.svodka_templates import DocElement, SegmentAnchors, apply_template_segments, build_template_segments
+from apps.analysis_app.svodka_templates import (
+    DocElement,
+    SegmentAnchors,
+    apply_template_segments,
+    build_template_segments,
+    slice_by_markers,
+)
+
+
+class MarkerSlicingTests(SimpleTestCase):
+    def test_two_segments_with_gap_keeps_only_segment_content(self):
+        elements = [
+            DocElement(kind="paragraph", text="[BEGIN]"),
+            DocElement(kind="paragraph", text="A1"),
+            DocElement(kind="paragraph", text="[END]"),
+            DocElement(kind="paragraph", text="GAP"),
+            DocElement(kind="paragraph", text="[BEGIN]"),
+            DocElement(kind="paragraph", text="B1"),
+            DocElement(kind="paragraph", text="[END]"),
+        ]
+
+        kept, debug = slice_by_markers(elements, "[BEGIN]", "[END]")
+
+        self.assertEqual([item.text for item in kept], ["A1", "B1"])
+        self.assertTrue(debug["markers_found"])
+        self.assertEqual(debug["segments_count"], 2)
+        self.assertEqual(debug["kept_elements"], 2)
+
+    def test_unclosed_segment_keeps_until_document_end(self):
+        elements = [
+            DocElement(kind="paragraph", text="[BEGIN]"),
+            DocElement(kind="paragraph", text="A1"),
+            DocElement(kind="paragraph", text="A2"),
+        ]
+
+        kept, debug = slice_by_markers(elements, "[BEGIN]", "[END]")
+
+        self.assertEqual([item.text for item in kept], ["A1", "A2"])
+        self.assertTrue(debug["markers_found"])
+        self.assertEqual(debug["segments_count"], 1)
+        self.assertEqual(debug["kept_elements"], 2)
+
+    def test_end_without_begin_keeps_nothing_for_direct_marker_slicing(self):
+        elements = [
+            DocElement(kind="paragraph", text="X"),
+            DocElement(kind="paragraph", text="[END]"),
+            DocElement(kind="paragraph", text="Y"),
+        ]
+
+        kept, debug = slice_by_markers(elements, "[BEGIN]", "[END]")
+
+        self.assertEqual(kept, [])
+        self.assertTrue(debug["markers_found"])
+        self.assertEqual(debug["segments_count"], 0)
+        self.assertEqual(debug["kept_elements"], 0)
 
 
 class SvodkaTemplateSlicingTests(SimpleTestCase):
