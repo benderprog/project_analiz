@@ -46,6 +46,7 @@ from .subdivision_matcher import (
 from .svodka_templates import slice_document_for_run
 
 logger = logging.getLogger(__name__)
+TABLE_ROW_JOINER = " "
 DEFAULT_DOB = date(1900, 1, 1)
 MATCH_TIME_DELTA_MINUTES = 30
 MATCH_STAGE_SUBDIVISION_LIMIT = 500
@@ -331,7 +332,7 @@ def parse_docx(
             skipped_empty_rows += 1
             continue
 
-        joined_text = normalize_event_paragraph_text(" ".join(cells))
+        joined_text = normalize_event_paragraph_text(TABLE_ROW_JOINER.join(cells))
         if len(joined_text) < min_chars:
             skipped_short += 1
             continue

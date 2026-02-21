@@ -44,7 +44,11 @@
             {% if selected_event.source_table_header_cells %}
               <thead><tr>{% for cell in selected_event.source_table_header_cells %}<th>{{ cell|linebreaksbr }}</th>{% endfor %}</tr></thead>
             {% endif %}
-            <tbody><tr>{% for cell in selected_event.source_cells %}<td>{{ cell|linebreaksbr }}</td>{% endfor %}</tr></tbody>
+            {% if selected_event.highlighted_cells %}
+              <tbody><tr>{% for cell_html in selected_event.highlighted_cells %}<td>{{ cell_html|safe }}</td>{% endfor %}</tr></tbody>
+            {% else %}
+              <tbody><tr>{% for cell in selected_event.source_cells %}<td>{{ cell|linebreaksbr }}</td>{% endfor %}</tr></tbody>
+            {% endif %}
           </table>
         {% else %}
           {{ selected_event.highlighted_html|safe }}
@@ -446,6 +450,7 @@
     const renderEventText = (event) => {
       if (event.source_kind === "table_row" && Array.isArray(event.source_cells) && event.source_cells.length) {
         const rowCells = event.source_cells || [];
+        const highlightedCells = Array.isArray(event.highlighted_cells) ? event.highlighted_cells : [];
         const headerCells = Array.isArray(event.source_table_header_cells) ? event.source_table_header_cells : [];
         const maxColumns = Math.max(rowCells.length, headerCells.length);
         const paddedHeaders = Array.from({ length: maxColumns }, (_, idx) => headerCells[idx] || "");
@@ -456,7 +461,12 @@
               .join("")}</tr></thead>`
           : "";
         const tbody = `<tbody><tr>${paddedRows
-          .map((cell) => `<td>${escapeHtml(cell).replaceAll("\n", "<br>")}</td>`)
+          .map((cell, idx) => {
+            if (highlightedCells[idx] !== undefined && highlightedCells[idx] !== null) {
+              return `<td>${highlightedCells[idx]}</td>`;
+            }
+            return `<td>${escapeHtml(cell).replaceAll("\n", "<br>")}</td>`;
+          })
           .join("")}</tr></tbody>`;
         return `<table class="event-source-table">${thead}${tbody}</table>`;
       }

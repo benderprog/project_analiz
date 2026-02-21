@@ -19,6 +19,7 @@ from apps.analysis_app.forms import (
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
 from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
+    TABLE_ROW_JOINER,
     _find_case_insensitive_span,
     _find_datetime_span,
     ensure_classifier_candidates,
@@ -316,14 +317,14 @@ def _build_offender_report(match_result: dict) -> dict:
     return {"summary": summary, "details": details}
 
 
-def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> str:
-    spans: list[tuple[int, int, str]] = []
+def collect_highlight_spans(text: str, extracted: dict, match_result: dict) -> list[dict]:
+    spans: list[dict] = []
     strong_spans: list[tuple[int, int]] = []
 
     def _add_span(start: int, end: int, css_class: str, *, is_strong: bool = True) -> None:
         if end <= start:
             return
-        spans.append((start, end, css_class))
+        spans.append({"start": start, "end": end, "css": css_class})
         if is_strong:
             strong_spans.append((start, end))
 
@@ -426,7 +427,54 @@ def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> s
         if not overlaps_strong:
             _add_span(event_span[0], event_span[1], "hl-green hl-eventpattern", is_strong=False)
 
-    return highlight_text(text, spans)
+    return spans
+
+
+def apply_spans(text: str, spans: list[dict]) -> str:
+    safe_html = str(highlight_text(
+        text,
+        [
+            (int(span.get("start", 0)), int(span.get("end", 0)), str(span.get("css", "")))
+            for span in (spans or [])
+        ],
+    ))
+    return safe_html.replace("\n", "<br>")
+
+
+def _build_highlighted_html(text: str, extracted: dict, match_result: dict) -> str:
+    spans = collect_highlight_spans(text, extracted, match_result)
+    return apply_spans(text, spans)
+
+
+def _build_table_row_highlighted_cells(source_cells: list[str], extracted: dict, match_result: dict) -> list[str]:
+    joined_text = TABLE_ROW_JOINER.join(source_cells)
+    spans = collect_highlight_spans(joined_text, extracted, match_result)
+    offsets: list[tuple[int, int]] = []
+    cursor = 0
+    for index, cell in enumerate(source_cells):
+        start = cursor
+        end = start + len(cell)
+        offsets.append((start, end))
+        cursor = end + (len(TABLE_ROW_JOINER) if index < len(source_cells) - 1 else 0)
+
+    highlighted_cells: list[str] = []
+    for cell_text, (cell_start, cell_end) in zip(source_cells, offsets):
+        local_spans: list[dict] = []
+        for span in spans:
+            span_start = int(span.get("start", 0))
+            span_end = int(span.get("end", 0))
+            if span_end <= cell_start or span_start >= cell_end:
+                continue
+            local_spans.append(
+                {
+                    "start": max(span_start, cell_start) - cell_start,
+                    "end": min(span_end, cell_end) - cell_start,
+                    "css": span.get("css", ""),
+                }
+            )
+        highlighted_cells.append(apply_spans(cell_text, local_spans))
+
+    return highlighted_cells
 
 
 def _format_locality_label(locality: dict | None) -> str:
@@ -690,6 +738,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     source_table_header_cells = getattr(paragraph, "source_table_header_cells", None)
     padded_source_cells = source_cells
     padded_source_table_header_cells = source_table_header_cells
+    highlighted_cells = None
     if source_kind == "table_row" and isinstance(source_cells, list):
         header_cells = source_table_header_cells if isinstance(source_table_header_cells, list) else []
         max_cols = max(len(source_cells), len(header_cells))
@@ -699,6 +748,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             if header_cells
             else None
         )
+        highlighted_cells = _build_table_row_highlighted_cells(source_cells, extracted, match_result)
+        highlighted_cells = highlighted_cells + ([apply_spans("", [])] * (max_cols - len(highlighted_cells)))
 
     classifier_candidates = predicted.get("classifier_pattern_candidates") or predicted.get("classifier_candidates") or []
     formatted_classifier_candidates = [
@@ -750,6 +801,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         "source_kind": source_kind,
         "source_cells": padded_source_cells,
         "source_table_header_cells": padded_source_table_header_cells,
+        "highlighted_cells": highlighted_cells,
         "highlighted_html": _build_highlighted_html(text, extracted, match_result),
         "extracted_timestamp_display": extracted_timestamp_display,
         "portal_timestamp_display": portal_timestamp_display,
