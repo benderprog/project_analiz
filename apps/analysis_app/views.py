@@ -4,6 +4,7 @@ from pathlib import PurePath
 from datetime import timedelta
 
 from django.conf import settings
+from django.core.paginator import EmptyPage, Paginator
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -857,8 +858,30 @@ class UploadView(View):
     template_name = "analysis_app/upload.html"
 
     @staticmethod
-    def _recent_runs(limit: int = 10):
-        return AnalysisRun.objects.order_by("-created_at")[:limit]
+    def _queue_queryset(request):
+        queryset = AnalysisRun.objects.filter(
+            status__in=[
+                AnalysisRun.Status.QUEUED,
+                AnalysisRun.Status.RUNNING,
+                AnalysisRun.Status.DONE,
+                AnalysisRun.Status.FAILED,
+                AnalysisRun.Status.CANCELED,
+            ]
+        )
+        if request.user.is_authenticated:
+            queryset = queryset.filter(uploaded_by=request.user)
+        else:
+            queryset = queryset.filter(created_session_key=UploadView._ensure_session_key(request))
+        return queryset.order_by("-created_at")
+
+    def _queue_page(self, request, page_size: int = 20):
+        paginator = Paginator(self._queue_queryset(request), page_size)
+        page_number = request.GET.get("queue_page", "1")
+        try:
+            page_obj = paginator.page(page_number)
+        except EmptyPage:
+            page_obj = paginator.page(paginator.num_pages or 1)
+        return paginator, page_obj
 
     @staticmethod
     def _ensure_session_key(request) -> str:
@@ -877,9 +900,12 @@ class UploadView(View):
     ):
         if pending_selection_forms is None:
             pending_selection_forms = self._build_pending_selection_forms(request)
+        queue_paginator, queue_page_obj = self._queue_page(request)
         return {
             "upload_form": upload_form or UploadDocxWithPuForm(),
-            "queue_runs": self._recent_runs(),
+            "queue_page_obj": queue_page_obj,
+            "queue_paginator": queue_paginator,
+            "queue_page_param_name": "queue_page",
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
@@ -1009,12 +1035,44 @@ class UploadView(View):
             run.save(update_fields=["celery_task_id"])
 
         upload_url = redirect("analysis-upload").url
-        return redirect(f"{upload_url}?run={run.run_id}")
+        queue_page = request.GET.get("queue_page") or request.POST.get("queue_page")
+        query = [f"run={run.run_id}"]
+        if queue_page:
+            query.append(f"queue_page={queue_page}")
+        return redirect(f"{upload_url}?{'&'.join(query)}")
+
+
+class AnalysisQueueResetView(View):
+    def post(self, request):
+        queryset = UploadView._queue_queryset(request).filter(
+            status=AnalysisRun.Status.QUEUED,
+            started_at__isnull=True,
+            finished_at__isnull=True,
+        )
+        runs_to_cancel = list(queryset.only("run_id", "celery_task_id"))
+        if any(run.celery_task_id for run in runs_to_cancel):
+            from config.celery import app as celery_app
+
+            for task_id in [run.celery_task_id for run in runs_to_cancel if run.celery_task_id]:
+                try:
+                    celery_app.control.revoke(task_id, terminate=False)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Failed to revoke task_id=%s", task_id, exc_info=True)
+
+        queryset.update(
+            status=AnalysisRun.Status.CANCELED,
+            error_message="Queue reset by operator",
+            finished_at=timezone.now(),
+        )
+
+        upload_url = redirect("analysis-upload").url
+        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page") or "1"
+        return redirect(f"{upload_url}?queue_page={queue_page}")
 
 
 class AnalysisQueueStatusView(View):
     def get(self, request):
-        runs = list(AnalysisRun.objects.order_by("-created_at")[:10])
+        runs = list(UploadView._queue_queryset(request)[:10])
         now = timezone.now()
         payload_runs = []
         for run in runs:
@@ -1035,7 +1093,7 @@ class AnalysisQueueStatusView(View):
                     if run.status == AnalysisRun.Status.DONE
                     else None
                 ),
-                "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
+                "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
                 "position": None,
             }
             if run.status == AnalysisRun.Status.RUNNING:
@@ -1075,7 +1133,7 @@ class AnalysisStatusView(View):
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
             "elapsed_seconds": max(elapsed_seconds, 0),
-            "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
+            "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
             "worker_ok": worker_ok,
             "uploaded_filename": run.original_filename or _display_filename(run.file.name),
             "selected_pu_name": run.selected_pu_name,

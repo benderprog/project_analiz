@@ -16,6 +16,7 @@ class AnalysisRun(models.Model):
         RUNNING = "running", "Running"
         DONE = "done", "Done"
         FAILED = "failed", "Failed"
+        CANCELED = "canceled", "Canceled"
 
     run_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     uploaded_by = models.ForeignKey(
