@@ -11,33 +11,18 @@
 </section>
 
 <section class="card">
-  <h2>Ожидают выбора ПУ</h2>
-  {% if pending_runs %}
-    {% for pending in pending_runs %}
-      <article class="pending-run-item" style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #e5e7eb;" data-run-id="{{ pending.run.run_id }}">
-        <h3 style="margin-bottom: 0.5rem;">{{ pending.run.original_filename|default:pending.run.file.name }}</h3>
-        {% if pending.detected_pu_name %}
-          <p>Определено автоматически: {{ pending.detected_pu_name }}</p>
-        {% else %}
-          <p>Автоопределение не нашло ПУ. Можно выбрать вручную или оставить «Общая сводка».</p>
-        {% endif %}
-        <form method="post" class="pending-run-form">
-          {% csrf_token %}
-          {{ pending.selection_form.as_p }}
-          <button type="submit" class="primary">В очередь</button>
-        </form>
-      </article>
-    {% endfor %}
-  {% else %}
-    <p>Нет файлов, ожидающих выбора ПУ.</p>
-  {% endif %}
-</section>
-
-<section class="card">
   <h2>Загрузка новой сводки</h2>
   <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
-    {{ upload_form.as_p }}
+    <p>
+      {{ upload_form.selected_pu_id.label_tag }}
+      {{ upload_form.selected_pu_id }}
+      <small>По умолчанию: «Общая сводка».</small>
+    </p>
+    <p>
+      {{ upload_form.file.label_tag }}
+      {{ upload_form.file }}
+    </p>
     <button type="submit" class="primary">Загрузить</button>
   </form>
 </section>
@@ -142,35 +127,6 @@
     renderRuns();
   }
 
-  async function enqueuePendingForm(form) {
-    const response = await fetch(form.action || window.location.href, {
-      method: 'POST',
-      body: new FormData(form),
-      headers: {
-        'X-Requested-With': 'XMLHttpRequest',
-        'Accept': 'application/json',
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const data = await response.json();
-    if (!data.ok) {
-      throw new Error('unexpected response');
-    }
-    const block = form.closest('.pending-run-item');
-    if (block) block.remove();
-    await pollStatus();
-  }
-
-  document.querySelectorAll('.pending-run-form').forEach((form) => {
-    form.addEventListener('submit', function (event) {
-      event.preventDefault();
-      enqueuePendingForm(form).catch(() => {
-        form.submit();
-      });
-    });
-  });
 
   pollStatus();
   pollTimer = setInterval(pollStatus, 2500);

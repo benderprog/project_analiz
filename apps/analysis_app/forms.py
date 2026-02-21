@@ -48,6 +48,35 @@ class UploadDocxForm(forms.Form):
         return files
 
 
+def get_pu_choices() -> list[tuple[str, str]]:
+    choices = [
+        (str(pu.portal_pu_id), str(pu.full_name or pu.short_name or ""))
+        for pu in CachedPU.objects.order_by("short_name", "full_name")
+    ]
+    if choices:
+        return choices
+
+    from apps.portaldb.gateway import get_portal_gateway
+
+    gateway = get_portal_gateway()
+    return [
+        (str(pu.pu_id), str(pu.full_name or pu.short_name or ""))
+        for pu in gateway.list_pus()
+    ]
+
+
+class UploadDocxWithPuForm(UploadDocxForm):
+    selected_pu_id = forms.ChoiceField(
+        label="Пограничное управление",
+        required=False,
+        initial="",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["selected_pu_id"].choices = [("", GENERAL_SUMMARY_PU_LABEL), *get_pu_choices()]
+
+
 class PuSelectionForm(forms.Form):
     upload_id = forms.UUIDField(widget=forms.HiddenInput)
     selected_pu_id = forms.ChoiceField(
@@ -56,14 +85,11 @@ class PuSelectionForm(forms.Form):
     )
 
     def __init__(self, *args, **kwargs):
-        pu_choices = kwargs.pop("pu_choices", None)
+        available_pu_choices = kwargs.pop("pu_choices", None)
         super().__init__(*args, **kwargs)
-        if pu_choices is None:
-            pu_choices = []
-            for pu in CachedPU.objects.order_by("short_name", "full_name"):
-                label = str(pu.full_name or pu.short_name or "")
-                pu_choices.append((str(pu.portal_pu_id), label))
-        self.fields["selected_pu_id"].choices = [("", GENERAL_SUMMARY_PU_LABEL), *pu_choices]
+        if available_pu_choices is None:
+            available_pu_choices = get_pu_choices()
+        self.fields["selected_pu_id"].choices = [("", GENERAL_SUMMARY_PU_LABEL), *available_pu_choices]
 
     def clean_selected_pu_id(self):
         value = self.cleaned_data.get("selected_pu_id")
