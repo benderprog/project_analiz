@@ -17,7 +17,12 @@ from apps.analysis_app.services import (
     match_event,
     match_offenders,
 )
-from apps.analysis_app.views import _build_highlighted_html, _build_offender_report, _format_offenders
+from apps.analysis_app.views import (
+    _build_highlighted_html,
+    _build_offender_report,
+    _build_table_row_highlighted_cells,
+    _format_offenders,
+)
 from apps.portaldb.gateway.dtos import EventDTO
 from apps.portaldb.models import Event, Offender, Pu, Subdivision
 
@@ -1347,6 +1352,30 @@ class HighlightedHtmlOffenderStatusTests(TestCase):
         html = _build_highlighted_html("текст", {}, {"predicted": {"event_pattern": {"spans": None}}})
 
         self.assertIsInstance(html, str)
+
+    def test_build_table_row_highlighted_cells_marks_cells_by_global_spans(self):
+        source_cells = ["24 марта 2022 года", "в 6:00", "ПОГК «Очаково»"]
+        joined_text = " ".join(source_cells)
+        date_text = source_cells[0]
+        time_text = source_cells[1]
+        date_start = joined_text.index(date_text)
+        time_start = joined_text.index(time_text)
+        extracted = {
+            "date_span": [date_start, date_start + len(date_text)],
+            "time_span": [time_start, time_start + len(time_text)],
+            "offenders": [],
+        }
+
+        highlighted_cells = _build_table_row_highlighted_cells(
+            source_cells,
+            extracted,
+            {"matched": True, "time_delta_minutes": 0},
+        )
+
+        self.assertEqual(len(highlighted_cells), 3)
+        self.assertIn('<span class="hl hl-green">24 марта 2022 года</span>', highlighted_cells[0])
+        self.assertIn('<span class="hl hl-green">в 6:00</span>', highlighted_cells[1])
+        self.assertNotIn("<span", highlighted_cells[2])
 
 
 
