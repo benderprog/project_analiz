@@ -30,10 +30,12 @@ class SegmentAnchors:
 @dataclass(frozen=True)
 class SlicingDebugInfo:
     selected_template: SvodkaTemplate | None
-    detected_segments: int
-    applied_segments: int
+    template_segments_total: int
+    segments_applied: int
+    segments_failed: int
     kept_elements: int
     total_elements: int
+    fallback_reason: str | None = None
 
 
 _TABLE_HEADER_KEYWORDS = (
@@ -188,19 +190,22 @@ def _anchors_match(anchor: str, element_text: str) -> bool:
 def apply_template_segments(
     target_elements: Sequence[DocElement],
     segment_anchors: Sequence[SegmentAnchors],
-) -> tuple[list[DocElement], int]:
+) -> tuple[list[DocElement], int, int]:
     ranges: list[tuple[int, int]] = []
+    cursor = 0
+    failed_segments = 0
 
     for segment in segment_anchors:
         start_idx = next(
             (
                 idx
-                for idx, element in enumerate(target_elements)
+                for idx, element in enumerate(target_elements[cursor:], start=cursor)
                 if _anchors_match(segment.start_anchor_text, element.text)
             ),
             None,
         )
         if start_idx is None:
+            failed_segments += 1
             continue
 
         end_idx = next(
@@ -212,11 +217,18 @@ def apply_template_segments(
             None,
         )
         if end_idx is None:
+            failed_segments += 1
             continue
+
+        if end_idx < start_idx:
+            failed_segments += 1
+            continue
+
         ranges.append((start_idx, end_idx))
+        cursor = end_idx + 1
 
     if not ranges:
-        return [], 0
+        return [], 0, failed_segments
 
     ranges.sort(key=lambda pair: pair[0])
     merged: list[list[int]] = [[ranges[0][0], ranges[0][1]]]
@@ -229,7 +241,7 @@ def apply_template_segments(
     sliced: list[DocElement] = []
     for start, end in merged:
         sliced.extend(target_elements[start : end + 1])
-    return sliced, len(ranges)
+    return sliced, len(ranges), failed_segments
 
 
 def _query_active_templates() -> QuerySet[SvodkaTemplate]:
@@ -266,10 +278,12 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     if not template or not template.file:
         return target_elements, SlicingDebugInfo(
             selected_template=template,
-            detected_segments=0,
-            applied_segments=0,
+            template_segments_total=0,
+            segments_applied=0,
+            segments_failed=0,
             kept_elements=len(target_elements),
             total_elements=len(target_elements),
+            fallback_reason="no-template",
         )
 
     from docx import Document
@@ -279,22 +293,28 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     if not segments:
         return target_elements, SlicingDebugInfo(
             selected_template=template,
-            detected_segments=0,
-            applied_segments=0,
+            template_segments_total=0,
+            segments_applied=0,
+            segments_failed=0,
             kept_elements=len(target_elements),
             total_elements=len(target_elements),
+            fallback_reason="no-segments-detected",
         )
 
-    sliced_elements, applied_segments = apply_template_segments(target_elements, segments)
-    if not sliced_elements:
+    sliced_elements, applied_segments, failed_segments = apply_template_segments(target_elements, segments)
+    if applied_segments == 0:
         kept = target_elements
+        fallback_reason = "no-segments-applied"
     else:
         kept = sliced_elements
+        fallback_reason = None
 
     return kept, SlicingDebugInfo(
         selected_template=template,
-        detected_segments=len(segments),
-        applied_segments=applied_segments,
+        template_segments_total=len(segments),
+        segments_applied=applied_segments,
+        segments_failed=failed_segments,
         kept_elements=len(kept),
         total_elements=len(target_elements),
+        fallback_reason=fallback_reason,
     )

@@ -347,14 +347,16 @@ def parse_docx(
     template = slicing_info.selected_template
     if template:
         logger.info(
-            "svodka template: scope=%s pu_id=%s template_id=%s segments_detected=%s segments_applied=%s kept_elements=%s total_elements=%s",
+            "svodka template: scope=%s pu_id=%s template_id=%s segments_total=%s segments_applied=%s segments_failed=%s kept_elements=%s total_elements=%s fallback_reason=%s",
             template.scope,
             template.pu_id,
             template.template_id,
-            slicing_info.detected_segments,
-            slicing_info.applied_segments,
+            slicing_info.template_segments_total,
+            slicing_info.segments_applied,
+            slicing_info.segments_failed,
             slicing_info.kept_elements,
             slicing_info.total_elements,
+            slicing_info.fallback_reason,
         )
     else:
         logger.info("svodka template: none selected")
