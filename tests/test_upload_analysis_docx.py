@@ -331,6 +331,88 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(run_a.status, AnalysisRun.Status.CANCELED)
         self.assertEqual(run_b.status, AnalysisRun.Status.QUEUED)
 
+
+    def test_pending_run_cancel_changes_status_to_canceled(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        run = AnalysisRun.objects.create(
+            original_filename="cancel-me.docx",
+            file="uploads/cancel-me.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+
+        response = self.client.post(reverse("analysis-run-cancel", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisRun.Status.CANCELED)
+        self.assertEqual(run.error_message, "Canceled by operator")
+        self.assertIsNotNone(run.finished_at)
+
+    def test_pending_run_cancel_denies_other_user_run(self):
+        User = get_user_model()
+        owner = User.objects.create_user(username="owner", password="test-pass")
+        other = User.objects.create_user(username="other", password="test-pass")
+
+        run = AnalysisRun.objects.create(
+            original_filename="owner.docx",
+            file="uploads/owner.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+
+        self.client.force_login(other)
+        response = self.client.post(reverse("analysis-run-cancel", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+
+
+    def test_pending_run_cancel_denies_other_session_run(self):
+        owner_client = self.client_class()
+        owner_session = owner_client.session
+        owner_session.create()
+        owner_session_key = owner_session.session_key or ""
+
+        run = AnalysisRun.objects.create(
+            original_filename="session-owner.docx",
+            file="uploads/session-owner.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=owner_session_key,
+        )
+
+        outsider_client = self.client_class()
+        outsider_session = outsider_client.session
+        outsider_session.create()
+
+        response = outsider_client.post(reverse("analysis-run-cancel", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+
+    def test_pending_run_cancel_rejects_non_created_statuses(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        for status in [AnalysisRun.Status.QUEUED, AnalysisRun.Status.RUNNING, AnalysisRun.Status.DONE]:
+            run = AnalysisRun.objects.create(
+                original_filename=f"{status}.docx",
+                file=f"uploads/{status}.docx",
+                status=status,
+                created_session_key=session_key,
+            )
+
+            response = self.client.post(reverse("analysis-run-cancel", kwargs={"run_id": run.run_id}))
+            self.assertEqual(response.status_code, 302)
+            run.refresh_from_db()
+            self.assertEqual(run.status, status)
+
     def _make_docx_bytes(self) -> bytes:
         document = Document()
         document.add_paragraph("Время 08:40 02.02.2026 без имен.")

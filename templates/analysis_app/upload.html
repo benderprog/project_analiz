@@ -77,19 +77,28 @@
   {% if pending_selection_forms %}
     <div style="display:grid; gap:12px;">
       {% for item in pending_selection_forms %}
-        <form method="post" style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
-          {% csrf_token %}
-          {{ item.form.upload_id }}
+        <div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
           <p><strong>{{ item.run.original_filename|default:item.run.file.name }}</strong></p>
-          <p>
-            {{ item.form.selected_pu_id.label_tag }}
-            {{ item.form.selected_pu_id }}
-          </p>
-          {% if item.form.errors %}
-            <p style="color:#b91c1c;">{{ item.form.errors }}</p>
-          {% endif %}
-          <button type="submit" class="primary">Запустить в очередь</button>
-        </form>
+          <form method="post" id="enqueue-form-{{ item.run.run_id }}">
+            {% csrf_token %}
+            {{ item.form.upload_id }}
+            <p>
+              {{ item.form.selected_pu_id.label_tag }}
+              {{ item.form.selected_pu_id }}
+            </p>
+            {% if item.form.errors %}
+              <p style="color:#b91c1c;">{{ item.form.errors }}</p>
+            {% endif %}
+          </form>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="primary" form="enqueue-form-{{ item.run.run_id }}">Запустить в очередь</button>
+            <form method="post" action="{% url 'analysis-run-cancel' item.run.run_id %}" style="margin:0;">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <button type="submit">Отменить</button>
+            </form>
+          </div>
+        </div>
       {% endfor %}
     </div>
   {% else %}

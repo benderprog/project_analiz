@@ -1070,6 +1070,35 @@ class AnalysisQueueResetView(View):
         return redirect(f"{upload_url}?queue_page={queue_page}")
 
 
+class PendingRunCancelView(View):
+    http_method_names = ["post"]
+
+    def post(self, request, run_id):
+        run = get_object_or_404(AnalysisRun, run_id=run_id)
+
+        if request.user.is_authenticated:
+            if run.uploaded_by_id != request.user.id:
+                return redirect("analysis-upload")
+        elif run.created_session_key != UploadView._ensure_session_key(request):
+            return redirect("analysis-upload")
+
+        if run.status == AnalysisRun.Status.CREATED and not run.celery_task_id:
+            run.status = AnalysisRun.Status.CANCELED
+            run.error_message = "Canceled by operator"
+            run.finished_at = timezone.now()
+            run.save(update_fields=["status", "error_message", "finished_at"])
+
+        next_url = request.POST.get("next")
+        if next_url:
+            return redirect(next_url)
+
+        upload_url = redirect("analysis-upload").url
+        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+        if queue_page:
+            return redirect(f"{upload_url}?queue_page={queue_page}")
+        return redirect(upload_url)
+
+
 class AnalysisQueueStatusView(View):
     def get(self, request):
         runs = list(UploadView._queue_queryset(request)[:10])
