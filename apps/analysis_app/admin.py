@@ -267,13 +267,17 @@ class SvodkaTemplateAdmin(admin.ModelAdmin):
     form = SvodkaTemplateAdminForm
     list_display = (
         "scope",
-        "pu_name",
+        "pu_display",
         "is_active",
         "begin_marker",
         "end_marker",
         "updated_at",
     )
     list_filter = ("scope", "is_active")
-    search_fields = ("pu_name",)
+    search_fields = ()
     list_editable = ("is_active",)
-    exclude = ("pu_id", "scope")
+    exclude = ("pu_id", "scope", "pu_name")
+
+    @admin.display(description="Пограничное управление")
+    def pu_display(self, obj):
+        return "Общая сводка" if obj.scope == SvodkaTemplate.Scope.GENERAL else obj.pu_name

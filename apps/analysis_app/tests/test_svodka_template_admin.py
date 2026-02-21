@@ -8,11 +8,15 @@ from apps.analysis_app.models import SvodkaTemplate
 
 
 class SvodkaTemplateAdminFormTests(TestCase):
+    def test_form_does_not_expose_pu_name_field(self):
+        form = SvodkaTemplateAdminForm()
+
+        self.assertNotIn("pu_name", form.fields)
+
     def test_general_selection_sets_general_scope_and_empty_pu_id(self):
         form = SvodkaTemplateAdminForm(
             data={
                 "pu_select": GENERAL_PU_CHOICE_VALUE,
-                "pu_name": "",
                 "begin_marker": "[BEGIN]",
                 "end_marker": "[END]",
                 "is_active": "on",
@@ -22,6 +26,7 @@ class SvodkaTemplateAdminFormTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["scope"], SvodkaTemplate.Scope.GENERAL)
         self.assertEqual(form.cleaned_data["pu_id"], "")
+        self.assertEqual(form.cleaned_data["pu_name"], "Общая сводка")
 
     def test_concrete_pu_selection_sets_pu_scope_and_pu_id(self):
         fake_pu = SimpleNamespace(pu_id="pu-123", full_name="Тестовое ПУ", short_name="ТПУ")
@@ -31,7 +36,6 @@ class SvodkaTemplateAdminFormTests(TestCase):
             form = SvodkaTemplateAdminForm(
                 data={
                     "pu_select": "pu-123",
-                    "pu_name": "",
                     "begin_marker": "[BEGIN]",
                     "end_marker": "[END]",
                     "is_active": "on",
@@ -41,6 +45,13 @@ class SvodkaTemplateAdminFormTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["scope"], SvodkaTemplate.Scope.PU)
         self.assertEqual(form.cleaned_data["pu_id"], "pu-123")
+        self.assertEqual(form.cleaned_data["pu_name"], "Тестовое ПУ")
+
+    def test_choices_keep_general_when_portal_db_unavailable(self):
+        with patch("apps.analysis_app.admin_forms.get_portal_gateway", side_effect=RuntimeError("db down")):
+            form = SvodkaTemplateAdminForm()
+
+        self.assertEqual(form.fields["pu_select"].choices, [(GENERAL_PU_CHOICE_VALUE, "Общая сводка")])
 
 
 class SvodkaTemplateNormalizationTests(TestCase):
