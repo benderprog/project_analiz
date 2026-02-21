@@ -12,6 +12,7 @@ from django.views import View
 
 from apps.analysis_app.forms import (
     GENERAL_SUMMARY_PU_LABEL,
+    PuSelectionForm,
     UploadDocxWithPuForm,
     is_general_summary_pu,
 )
@@ -872,13 +873,45 @@ class UploadView(View):
         *,
         upload_form=None,
         selected_run_id=None,
+        pending_selection_forms=None,
     ):
+        if pending_selection_forms is None:
+            pending_selection_forms = self._build_pending_selection_forms(request)
         return {
             "upload_form": upload_form or UploadDocxWithPuForm(),
             "queue_runs": self._recent_runs(),
+            "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
         }
+
+    def _pending_runs(self, request, limit: int = 20):
+        queryset = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED)
+        if request.user.is_authenticated:
+            queryset = queryset.filter(uploaded_by=request.user)
+        else:
+            queryset = queryset.filter(created_session_key=self._ensure_session_key(request))
+        return queryset.order_by("-created_at")[:limit]
+
+    def _build_pending_selection_forms(self, request, *, forms_by_run_id=None):
+        pending_forms = []
+        forms_by_run_id = forms_by_run_id or {}
+        for run in self._pending_runs(request):
+            form = forms_by_run_id.get(str(run.run_id))
+            if form is None:
+                form = PuSelectionForm(
+                    initial={
+                        "upload_id": run.run_id,
+                        "selected_pu_id": run.selected_pu_id or "",
+                    }
+                )
+            pending_forms.append(
+                {
+                    "run": run,
+                    "form": form,
+                }
+            )
+        return pending_forms
 
     def get(self, request):
         selected_run_id = request.GET.get("run")
@@ -889,6 +922,12 @@ class UploadView(View):
         )
 
     def post(self, request):
+        if "upload_id" in request.POST:
+            return self._enqueue_pending_run(request)
+
+        return self._create_pending_runs(request)
+
+    def _create_pending_runs(self, request):
         upload_form = UploadDocxWithPuForm(request.POST, request.FILES)
         if not upload_form.is_valid():
             return render(request, self.template_name, self._build_context(request, upload_form=upload_form))
@@ -897,10 +936,6 @@ class UploadView(View):
         selected_pu_name = _resolve_selected_pu_name(request, selected_pu_id)
         selected_run_id = None
         created_session_key = self._ensure_session_key(request)
-        now = timezone.now()
-
-        from apps.analysis_app.tasks import run_docx_analysis
-
         for uploaded_file in upload_form.cleaned_data["file"]:
             run = AnalysisRun.objects.create(
                 uploaded_by=request.user if request.user.is_authenticated else None,
@@ -909,40 +944,72 @@ class UploadView(View):
                 original_filename=os.path.basename(uploaded_file.name or ""),
                 selected_pu_id=selected_pu_id,
                 selected_pu_name=selected_pu_name,
-                status=AnalysisRun.Status.QUEUED,
-                queued_at=now,
+                status=AnalysisRun.Status.CREATED,
                 error_message="",
             )
             selected_run_id = selected_run_id or run.run_id
 
-            if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
-                from apps.analysis_app.services import run_analysis_pipeline
-                from apps.analysis_app.tasks import cleanup_run_upload
+        upload_url = redirect("analysis-upload").url
+        if selected_run_id:
+            return redirect(f"{upload_url}?run={selected_run_id}")
+        return redirect(upload_url)
 
-                run.status = AnalysisRun.Status.RUNNING
-                run.started_at = timezone.now()
-                run.save(update_fields=["status", "started_at"])
-                try:
-                    run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
-                    run.status = AnalysisRun.Status.DONE
-                    run.finished_at = timezone.now()
-                    run.save(update_fields=["status", "finished_at"])
-                except Exception as exc:  # noqa: BLE001
-                    run.status = AnalysisRun.Status.FAILED
-                    run.error_message = str(exc)
-                    run.finished_at = timezone.now()
-                    run.save(update_fields=["status", "error_message", "finished_at"])
-                cleanup_run_upload(run)
-                continue
+    def _enqueue_pending_run(self, request):
+        selection_form = PuSelectionForm(request.POST)
+        if not selection_form.is_valid():
+            pending_forms = self._build_pending_selection_forms(
+                request,
+                forms_by_run_id={str(request.POST.get("upload_id") or ""): selection_form},
+            )
+            return render(request, self.template_name, self._build_context(request, pending_selection_forms=pending_forms))
+
+        run_id = selection_form.cleaned_data["upload_id"]
+        run = get_object_or_404(AnalysisRun, run_id=run_id, status=AnalysisRun.Status.CREATED)
+
+        if request.user.is_authenticated:
+            if run.uploaded_by_id != request.user.id:
+                return redirect("analysis-upload")
+        elif run.created_session_key != self._ensure_session_key(request):
+            return redirect("analysis-upload")
+
+        selected_pu_uuid = selection_form.cleaned_data.get("selected_pu_id")
+        selected_pu_id = str(selected_pu_uuid or "")
+        selected_pu_name = _resolve_selected_pu_name(request, selected_pu_id)
+
+        run.selected_pu_id = selected_pu_id
+        run.selected_pu_name = selected_pu_name
+        run.status = AnalysisRun.Status.QUEUED
+        run.queued_at = timezone.now()
+        run.error_message = ""
+        run.save(update_fields=["selected_pu_id", "selected_pu_name", "status", "queued_at", "error_message"])
+
+        if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
+            from apps.analysis_app.services import run_analysis_pipeline
+            from apps.analysis_app.tasks import cleanup_run_upload
+
+            run.status = AnalysisRun.Status.RUNNING
+            run.started_at = timezone.now()
+            run.save(update_fields=["status", "started_at"])
+            try:
+                run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
+                run.status = AnalysisRun.Status.DONE
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "finished_at"])
+            except Exception as exc:  # noqa: BLE001
+                run.status = AnalysisRun.Status.FAILED
+                run.error_message = str(exc)
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+            cleanup_run_upload(run)
+        else:
+            from apps.analysis_app.tasks import run_docx_analysis
 
             task = run_docx_analysis.delay(str(run.run_id), selected_pu_id or None)
             run.celery_task_id = task.id
             run.save(update_fields=["celery_task_id"])
 
         upload_url = redirect("analysis-upload").url
-        if selected_run_id:
-            return redirect(f"{upload_url}?run={selected_run_id}")
-        return redirect(upload_url)
+        return redirect(f"{upload_url}?run={run.run_id}")
 
 
 class AnalysisQueueStatusView(View):
