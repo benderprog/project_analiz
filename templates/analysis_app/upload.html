@@ -2,12 +2,57 @@
 
 {% block content %}
 <section class="card">
-  <h2>Очередь анализов</h2>
-  <div id="analysis-queue"
-       data-status-url="{{ queue_status_url }}"
-       data-selected-run-id="{{ selected_run_id|default:'' }}">
-    <p>Загрузка очереди...</p>
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+    <h2 style="margin:0;">Очередь анализов</h2>
+    <form method="post" action="{% url 'analysis-queue-reset' %}">
+      {% csrf_token %}
+      <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+      <button type="submit">Сбросить очередь</button>
+    </form>
   </div>
+
+  {% if queue_page_obj.object_list %}
+    <table>
+      <thead>
+        <tr>
+          <th>Статус</th>
+          <th>Файл</th>
+          <th>ПУ</th>
+          <th>Действие / Ошибка</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in queue_page_obj.object_list %}
+          <tr {% if selected_run_id and selected_run_id == run.run_id|stringformat:"s" %}style="background:#eff6ff;"{% endif %}>
+            <td>{{ run.status }}</td>
+            <td>{{ run.original_filename|default:run.file.name }}</td>
+            <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
+            <td>
+              {% if run.status == 'done' %}
+                <a class="primary" href="{% url 'analysis-detail' run_id=run.run_id %}">Смотреть результаты</a>
+              {% elif run.status == 'failed' or run.status == 'canceled' %}
+                {{ run.error_message|default:"—" }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div style="display:flex; gap:8px; margin-top:12px; align-items:center;">
+      {% if queue_page_obj.has_previous %}
+        <a href="?queue_page={{ queue_page_obj.previous_page_number }}">Назад</a>
+      {% endif %}
+      <span>Страница {{ queue_page_obj.number }} из {{ queue_page_obj.paginator.num_pages }}</span>
+      {% if queue_page_obj.has_next %}
+        <a href="?queue_page={{ queue_page_obj.next_page_number }}">Вперёд</a>
+      {% endif %}
+    </div>
+  {% else %}
+    <p>Запусков пока нет.</p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -52,115 +97,5 @@
   {% endif %}
 </section>
 
-<script>
-(function () {
-  const root = document.getElementById('analysis-queue');
-  if (!root) return;
 
-  const statusUrl = root.dataset.statusUrl;
-  const selectedRunId = root.dataset.selectedRunId || '';
-  let pollTimer = null;
-  let tickTimer = null;
-  let cachedRuns = [];
-
-  function escapeHtml(value) {
-    return String(value || '')
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
-  }
-
-  function formatSeconds(total) {
-    const safe = Math.max(0, Math.floor(total || 0));
-    const mm = Math.floor(safe / 60);
-    const ss = String(safe % 60).padStart(2, '0');
-    return `${mm}:${ss}`;
-  }
-
-  function rowClass(run) {
-    if (selectedRunId && selectedRunId === run.run_id) return ' style="background:#eff6ff;"';
-    return '';
-  }
-
-  function renderRuns() {
-    if (!cachedRuns.length) {
-      root.innerHTML = '<p>Запусков пока нет.</p>';
-      return;
-    }
-
-    const rows = cachedRuns.map((run) => {
-      const filename = escapeHtml(run.original_filename || '—');
-      const puName = escapeHtml(run.selected_pu_name || 'ПУ не выбран');
-
-      if (run.status === 'running') {
-        return `<tr${rowClass(run)}><td><strong>Идет анализ</strong></td><td>${filename}</td><td>${puName}</td><td>${formatSeconds(run.elapsed_seconds || 0)}</td><td>—</td></tr>`;
-      }
-      if (run.status === 'queued') {
-        const pos = run.position ? `№${run.position}` : '—';
-        return `<tr${rowClass(run)}><td>В очереди (${pos})</td><td>${filename}</td><td>${puName}</td><td>—</td><td>—</td></tr>`;
-      }
-      if (run.status === 'done') {
-        const result = run.result_url
-          ? `<a class="primary" href="${escapeHtml(run.result_url)}" target="_blank" rel="noopener noreferrer">Смотреть результаты</a>`
-          : '—';
-        return `<tr${rowClass(run)}><td>Готово</td><td>${filename}</td><td>${puName}</td><td>—</td><td>${result}</td></tr>`;
-      }
-      if (run.status === 'failed') {
-        return `<tr${rowClass(run)}><td style="color:#b91c1c;">Ошибка</td><td>${filename}</td><td>${puName}</td><td>—</td><td style="color:#b91c1c;">${escapeHtml(run.error_message || 'Ошибка анализа')}</td></tr>`;
-      }
-      return `<tr${rowClass(run)}><td>${escapeHtml(run.status)}</td><td>${filename}</td><td>${puName}</td><td>—</td><td>—</td></tr>`;
-    }).join('');
-
-    root.innerHTML = `
-      <table>
-        <thead>
-          <tr>
-            <th>Статус</th>
-            <th>Файл</th>
-            <th>ПУ</th>
-            <th>Таймер</th>
-            <th>Действие / Ошибка</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
-  }
-
-  async function pollStatus() {
-    try {
-      const response = await fetch(statusUrl, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      cachedRuns = data.runs || [];
-      renderRuns();
-    } catch (error) {
-      root.innerHTML = '<p style="color:#b91c1c;">Не удалось загрузить очередь анализов.</p>';
-    }
-  }
-
-  function tickRunning() {
-    cachedRuns = cachedRuns.map((run) => {
-      if (run.status !== 'running') return run;
-      return {
-        ...run,
-        elapsed_seconds: (run.elapsed_seconds || 0) + 1,
-      };
-    });
-    renderRuns();
-  }
-
-
-  pollStatus();
-  pollTimer = setInterval(pollStatus, 2500);
-  tickTimer = setInterval(tickRunning, 1000);
-
-  window.addEventListener('beforeunload', function () {
-    if (pollTimer) clearInterval(pollTimer);
-    if (tickTimer) clearInterval(tickTimer);
-  });
-})();
-</script>
 {% endblock %}

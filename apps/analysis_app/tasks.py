@@ -1,6 +1,7 @@
 import logging
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from apps.analysis_app.models import AnalysisRun
@@ -23,16 +24,18 @@ def cleanup_run_upload(run: AnalysisRun) -> None:
 
 @app.task(bind=True)
 def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> None:
-    run = AnalysisRun.objects.get(run_id=run_id)
-    run.celery_task_id = self.request.id
-    run.status = AnalysisRun.Status.QUEUED
-    run.queued_at = run.queued_at or timezone.now()
-    run.error_message = ""
-    run.save(update_fields=["celery_task_id", "status", "queued_at", "error_message"])
+    with transaction.atomic():
+        run = AnalysisRun.objects.select_for_update().get(run_id=run_id)
+        if run.status != AnalysisRun.Status.QUEUED or run.started_at is not None:
+            logger.info("skip run_id=%s status=%s", run_id, run.status)
+            return
 
-    run.status = AnalysisRun.Status.RUNNING
-    run.started_at = timezone.now()
-    run.save(update_fields=["status", "started_at"])
+        run.celery_task_id = self.request.id
+        run.queued_at = run.queued_at or timezone.now()
+        run.error_message = ""
+        run.status = AnalysisRun.Status.RUNNING
+        run.started_at = timezone.now()
+        run.save(update_fields=["celery_task_id", "queued_at", "error_message", "status", "started_at"])
 
     try:
         run_analysis_pipeline(run, selected_pu_id=selected_pu_id)

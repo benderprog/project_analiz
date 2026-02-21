@@ -3,9 +3,11 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from docx import Document
 
@@ -239,6 +241,95 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(run_a.selected_pu_id, str(pu.portal_pu_id))
         self.assertEqual(run_b.status, AnalysisRun.Status.CREATED)
         delay_mock.assert_called_once_with(str(run_a.run_id), str(pu.portal_pu_id))
+
+
+    def test_upload_queue_pagination_shows_second_page(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        for idx in range(21):
+            AnalysisRun.objects.create(
+                original_filename=f"queued-{idx}.docx",
+                file=f"uploads/queued-{idx}.docx",
+                status=AnalysisRun.Status.QUEUED,
+                created_session_key=session_key,
+            )
+
+        response_page_1 = self.client.get(reverse("analysis-upload"))
+        response_page_2 = self.client.get(reverse("analysis-upload"), {"queue_page": 2})
+
+        self.assertEqual(response_page_1.status_code, 200)
+        self.assertEqual(response_page_2.status_code, 200)
+        self.assertContains(response_page_1, "Страница 1 из 2")
+        self.assertContains(response_page_2, "Страница 2 из 2")
+        self.assertContains(response_page_2, "queued-0.docx")
+
+    def test_queue_reset_cancels_only_not_started_queued_runs(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        queued_not_started = AnalysisRun.objects.create(
+            original_filename="queued.docx",
+            file="uploads/queued.docx",
+            status=AnalysisRun.Status.QUEUED,
+            created_session_key=session_key,
+        )
+        running = AnalysisRun.objects.create(
+            original_filename="running.docx",
+            file="uploads/running.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=timezone.now(),
+            created_session_key=session_key,
+        )
+        queued_started = AnalysisRun.objects.create(
+            original_filename="queued-started.docx",
+            file="uploads/queued-started.docx",
+            status=AnalysisRun.Status.QUEUED,
+            started_at=timezone.now(),
+            created_session_key=session_key,
+        )
+
+        response = self.client.post(reverse("analysis-queue-reset"), {"queue_page": "1"})
+
+        self.assertEqual(response.status_code, 302)
+        queued_not_started.refresh_from_db()
+        running.refresh_from_db()
+        queued_started.refresh_from_db()
+
+        self.assertEqual(queued_not_started.status, AnalysisRun.Status.CANCELED)
+        self.assertEqual(queued_not_started.error_message, "Queue reset by operator")
+        self.assertIsNotNone(queued_not_started.finished_at)
+        self.assertEqual(running.status, AnalysisRun.Status.RUNNING)
+        self.assertEqual(queued_started.status, AnalysisRun.Status.QUEUED)
+
+    def test_queue_reset_is_scoped_to_current_authenticated_user(self):
+        User = get_user_model()
+        user_a = User.objects.create_user(username="user-a", password="test-pass")
+        user_b = User.objects.create_user(username="user-b", password="test-pass")
+
+        run_a = AnalysisRun.objects.create(
+            original_filename="a.docx",
+            file="uploads/a.docx",
+            status=AnalysisRun.Status.QUEUED,
+            uploaded_by=user_a,
+        )
+        run_b = AnalysisRun.objects.create(
+            original_filename="b.docx",
+            file="uploads/b.docx",
+            status=AnalysisRun.Status.QUEUED,
+            uploaded_by=user_b,
+        )
+
+        self.client.force_login(user_a)
+        response = self.client.post(reverse("analysis-queue-reset"), {"queue_page": "1"})
+        self.assertEqual(response.status_code, 302)
+
+        run_a.refresh_from_db()
+        run_b.refresh_from_db()
+        self.assertEqual(run_a.status, AnalysisRun.Status.CANCELED)
+        self.assertEqual(run_b.status, AnalysisRun.Status.QUEUED)
 
     def _make_docx_bytes(self) -> bytes:
         document = Document()
