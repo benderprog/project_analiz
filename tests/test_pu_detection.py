@@ -76,7 +76,8 @@ class UploadFlowPuSelectionTests(TestCase):
         document.save(buffer)
         return buffer.getvalue()
 
-    def test_upload_flow_preselects_detected_pu(self):
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_upload_flow_uses_explicit_selected_pu_without_detection(self):
         pu = CachedPU.objects.create(
             portal_pu_id=uuid.uuid4(),
             short_name="ПУ Восток",
@@ -93,20 +94,19 @@ class UploadFlowPuSelectionTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
-                response = self.client.post(reverse("analysis-upload"), {"file": upload})
-                self.assertEqual(response.status_code, 302)
-                page = self.client.get(reverse("analysis-upload"))
-                self.assertContains(page, f'value="{pu.portal_pu_id}" selected')
+                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+                    delay_mock.return_value = type("Task", (), {"id": "task-1"})()
+                    response = self.client.post(
+                        reverse("analysis-upload"),
+                        {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
+                    )
 
-                run = AnalysisRun.objects.first()
-                response = self.client.post(
-                    reverse("analysis-upload"),
-                    {"upload_id": run.run_id, "selected_pu_id": str(pu.portal_pu_id)},
-                )
-        self.assertIn(response.status_code, {200, 302})
-        run.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        run = AnalysisRun.objects.get()
         self.assertEqual(run.selected_pu_id, str(pu.portal_pu_id))
         self.assertEqual(run.selected_pu_name, "Пограничное управление Восток")
+        self.assertEqual(run.detected_pu_id, "")
+        self.assertEqual(run.detected_pu_name, "")
 
 
 class SubdivisionMatchPuFilterTests(TestCase):

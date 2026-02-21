@@ -12,12 +12,10 @@ from django.views import View
 
 from apps.analysis_app.forms import (
     GENERAL_SUMMARY_PU_LABEL,
-    PuSelectionForm,
-    UploadDocxForm,
+    UploadDocxWithPuForm,
     is_general_summary_pu,
 )
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
-from apps.analysis_app.pu_detection import detect_pu_from_docx
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
@@ -68,7 +66,7 @@ def _cached_pu_full_name_map(request) -> dict[str, str]:
     return pu_map
 
 
-def _resolve_selected_pu_name(request, selection_form: PuSelectionForm, selected_pu_id: str | None) -> str:
+def _resolve_selected_pu_name(request, selected_pu_id: str | None) -> str:
     if is_general_summary_pu(selected_pu_id):
         return GENERAL_SUMMARY_PU_LABEL
 
@@ -78,9 +76,6 @@ def _resolve_selected_pu_name(request, selection_form: PuSelectionForm, selected
     if resolved_name:
         return resolved_name
 
-    for value, label in selection_form.fields["selected_pu_id"].choices:
-        if str(value) == selected_value:
-            return str(label or "")
     return ""
 
 
@@ -871,40 +866,15 @@ class UploadView(View):
         request.session.create()
         return str(request.session.session_key or "")
 
-    def _pending_queryset(self, request):
-        qs = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED).exclude(file="")
-        if request.user.is_authenticated:
-            return qs.filter(uploaded_by=request.user)
-        session_key = self._ensure_session_key(request)
-        return qs.filter(created_session_key=session_key)
-
-    def _build_pending_runs(self, request):
-        pending_runs = []
-        for run in self._pending_queryset(request).order_by("created_at"):
-            initial_pu_id = run.detected_pu_id or ""
-            selection_form = PuSelectionForm(
-                initial={"upload_id": run.run_id, "selected_pu_id": initial_pu_id}
-            )
-            pending_runs.append(
-                {
-                    "run": run,
-                    "selection_form": selection_form,
-                    "detected_pu_name": run.detected_pu_name,
-                }
-            )
-        return pending_runs
-
     def _build_context(
         self,
         request,
         *,
         upload_form=None,
-        pending_runs=None,
         selected_run_id=None,
     ):
         return {
-            "upload_form": upload_form or UploadDocxForm(),
-            "pending_runs": pending_runs if pending_runs is not None else self._build_pending_runs(request),
+            "upload_form": upload_form or UploadDocxWithPuForm(),
             "queue_runs": self._recent_runs(),
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
@@ -919,99 +889,60 @@ class UploadView(View):
         )
 
     def post(self, request):
-        if request.FILES.getlist("file"):
-            upload_form = UploadDocxForm(request.POST, request.FILES)
-            if not upload_form.is_valid():
-                return render(request, self.template_name, self._build_context(request, upload_form=upload_form))
+        upload_form = UploadDocxWithPuForm(request.POST, request.FILES)
+        if not upload_form.is_valid():
+            return render(request, self.template_name, self._build_context(request, upload_form=upload_form))
 
-            from docx import Document
-
-            selected_run_id = None
-            created_session_key = self._ensure_session_key(request)
-            for uploaded_file in upload_form.cleaned_data["file"]:
-                run = AnalysisRun.objects.create(
-                    uploaded_by=request.user if request.user.is_authenticated else None,
-                    created_session_key=created_session_key,
-                    file=uploaded_file,
-                    original_filename=os.path.basename(uploaded_file.name or ""),
-                    status=AnalysisRun.Status.CREATED,
-                )
-                selected_run_id = selected_run_id or run.run_id
-
-                try:
-                    document = Document(run.file.path)
-                    detection = detect_pu_from_docx(document)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to detect PU for uploaded run %s", run.run_id)
-                    detection = None
-
-                if detection and detection.pu:
-                    run.detected_pu_id = str(detection.pu.portal_pu_id)
-                    run.detected_pu_name = str(detection.pu.full_name or detection.pu.short_name or "")
-                    run.save(update_fields=["detected_pu_id", "detected_pu_name"])
-
-            upload_url = redirect("analysis-upload").url
-            if selected_run_id:
-                return redirect(f"{upload_url}?run={selected_run_id}")
-            return redirect(upload_url)
-
-        selection_form = PuSelectionForm(request.POST)
-        if not selection_form.is_valid():
-            return render(
-                request,
-                self.template_name,
-                self._build_context(request),
-            )
-
-        run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
-        if request.user.is_authenticated:
-            if run.uploaded_by_id != request.user.id:
-                return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
-        else:
-            session_key = self._ensure_session_key(request)
-            if run.created_session_key != session_key:
-                return JsonResponse({"ok": False, "error": "forbidden"}, status=403)
-
-        selected_pu_id = selection_form.cleaned_data["selected_pu_id"]
-        run.selected_pu_id = str(selected_pu_id) if selected_pu_id else ""
-        run.selected_pu_name = _resolve_selected_pu_name(request, selection_form, run.selected_pu_id)
-        run.status = AnalysisRun.Status.QUEUED
-        run.queued_at = timezone.now()
-        run.error_message = ""
-        run.save(
-            update_fields=["selected_pu_id", "selected_pu_name", "status", "queued_at", "error_message"]
-        )
-
-        if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
-            from apps.analysis_app.services import run_analysis_pipeline
-            from apps.analysis_app.tasks import cleanup_run_upload
-
-            run.status = AnalysisRun.Status.RUNNING
-            run.started_at = timezone.now()
-            run.save(update_fields=["status", "started_at"])
-            try:
-                run_analysis_pipeline(run, selected_pu_id=selected_pu_id)
-                run.status = AnalysisRun.Status.DONE
-                run.finished_at = timezone.now()
-                run.save(update_fields=["status", "finished_at"])
-            except Exception as exc:  # noqa: BLE001
-                run.status = AnalysisRun.Status.FAILED
-                run.error_message = str(exc)
-                run.finished_at = timezone.now()
-                run.save(update_fields=["status", "error_message", "finished_at"])
-            cleanup_run_upload(run)
-            return redirect(f"{redirect('analysis-upload').url}?run={run.run_id}")
+        selected_pu_id = str(upload_form.cleaned_data.get("selected_pu_id") or "")
+        selected_pu_name = _resolve_selected_pu_name(request, selected_pu_id)
+        selected_run_id = None
+        created_session_key = self._ensure_session_key(request)
+        now = timezone.now()
 
         from apps.analysis_app.tasks import run_docx_analysis
 
-        task = run_docx_analysis.delay(str(run.run_id), str(selected_pu_id) if selected_pu_id else None)
-        run.celery_task_id = task.id
-        run.save(update_fields=["celery_task_id"])
+        for uploaded_file in upload_form.cleaned_data["file"]:
+            run = AnalysisRun.objects.create(
+                uploaded_by=request.user if request.user.is_authenticated else None,
+                created_session_key=created_session_key,
+                file=uploaded_file,
+                original_filename=os.path.basename(uploaded_file.name or ""),
+                selected_pu_id=selected_pu_id,
+                selected_pu_name=selected_pu_name,
+                status=AnalysisRun.Status.QUEUED,
+                queued_at=now,
+                error_message="",
+            )
+            selected_run_id = selected_run_id or run.run_id
 
-        wants_json = request.headers.get("x-requested-with") == "XMLHttpRequest" or "application/json" in request.headers.get("Accept", "")
-        if wants_json:
-            return JsonResponse({"ok": True, "run_id": str(run.run_id), "new_status": run.status})
-        return redirect(f"{redirect('analysis-upload').url}?run={run.run_id}")
+            if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
+                from apps.analysis_app.services import run_analysis_pipeline
+                from apps.analysis_app.tasks import cleanup_run_upload
+
+                run.status = AnalysisRun.Status.RUNNING
+                run.started_at = timezone.now()
+                run.save(update_fields=["status", "started_at"])
+                try:
+                    run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
+                    run.status = AnalysisRun.Status.DONE
+                    run.finished_at = timezone.now()
+                    run.save(update_fields=["status", "finished_at"])
+                except Exception as exc:  # noqa: BLE001
+                    run.status = AnalysisRun.Status.FAILED
+                    run.error_message = str(exc)
+                    run.finished_at = timezone.now()
+                    run.save(update_fields=["status", "error_message", "finished_at"])
+                cleanup_run_upload(run)
+                continue
+
+            task = run_docx_analysis.delay(str(run.run_id), selected_pu_id or None)
+            run.celery_task_id = task.id
+            run.save(update_fields=["celery_task_id"])
+
+        upload_url = redirect("analysis-upload").url
+        if selected_run_id:
+            return redirect(f"{upload_url}?run={selected_run_id}")
+        return redirect(upload_url)
 
 
 class AnalysisQueueStatusView(View):
