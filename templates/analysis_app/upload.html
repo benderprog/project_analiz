@@ -27,6 +27,31 @@
   </form>
 </section>
 
+<section class="card">
+  <h2>Ожидают запуска</h2>
+  {% if pending_selection_forms %}
+    <div style="display:grid; gap:12px;">
+      {% for item in pending_selection_forms %}
+        <form method="post" style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
+          {% csrf_token %}
+          {{ item.form.upload_id }}
+          <p><strong>{{ item.run.original_filename|default:item.run.file.name }}</strong></p>
+          <p>
+            {{ item.form.selected_pu_id.label_tag }}
+            {{ item.form.selected_pu_id }}
+          </p>
+          {% if item.form.errors %}
+            <p style="color:#b91c1c;">{{ item.form.errors }}</p>
+          {% endif %}
+          <button type="submit" class="primary">Запустить в очередь</button>
+        </form>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>Нет запусков в статусе ожидания.</p>
+  {% endif %}
+</section>
+
 <script>
 (function () {
   const root = document.getElementById('analysis-queue');

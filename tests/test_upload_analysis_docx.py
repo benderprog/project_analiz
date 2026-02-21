@@ -26,7 +26,7 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertNotContains(response, "Определено автоматически")
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_two_files_with_general_summary_enqueues_two_tasks(self):
+    def test_upload_two_files_with_general_summary_creates_pending_runs(self):
         docx_a = SimpleUploadedFile(
             "first.docx",
             self._make_docx_bytes(),
@@ -40,15 +40,10 @@ class UploadAnalysisDocxTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
-                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
-                    delay_mock.side_effect = [
-                        type("Task", (), {"id": "task-1"})(),
-                        type("Task", (), {"id": "task-2"})(),
-                    ]
-                    response = self.client.post(
-                        reverse("analysis-upload"),
-                        {"selected_pu_id": "", "file": [docx_a, docx_b]},
-                    )
+                response = self.client.post(
+                    reverse("analysis-upload"),
+                    {"selected_pu_id": "", "file": [docx_a, docx_b]},
+                )
 
         self.assertEqual(response.status_code, 302)
         runs = list(AnalysisRun.objects.order_by("original_filename"))
@@ -56,12 +51,12 @@ class UploadAnalysisDocxTests(TestCase):
         for run in runs:
             self.assertEqual(run.selected_pu_id, "")
             self.assertEqual(run.selected_pu_name, GENERAL_SUMMARY_PU_LABEL)
-            self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
-            self.assertIsNotNone(run.queued_at)
-        self.assertEqual(delay_mock.call_count, 2)
+            self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+            self.assertIsNone(run.queued_at)
+            self.assertFalse(run.celery_task_id)
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_with_selected_pu_saves_pu_name_and_id(self):
+    def test_upload_with_selected_pu_saves_pu_name_and_id_in_pending_run(self):
         from uuid import uuid4
 
         pu = CachedPU.objects.create(
@@ -77,21 +72,19 @@ class UploadAnalysisDocxTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
-                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
-                    delay_mock.return_value = type("Task", (), {"id": "task-1"})()
-                    response = self.client.post(
-                        reverse("analysis-upload"),
-                        {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
-                    )
+                response = self.client.post(
+                    reverse("analysis-upload"),
+                    {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
+                )
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.get()
         self.assertEqual(run.selected_pu_id, str(pu.portal_pu_id))
         self.assertEqual(run.selected_pu_name, "Пограничное управление Север")
-        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
-        delay_mock.assert_called_once_with(str(run.run_id), str(pu.portal_pu_id))
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+        self.assertFalse(run.celery_task_id)
 
-    def test_upload_docx_runs_analysis_in_sync_mode(self):
+    def test_upload_docx_creates_pending_run_in_sync_mode(self):
         upload = SimpleUploadedFile(
             "sample.docx",
             self._make_docx_bytes(),
@@ -107,7 +100,7 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.get()
-        self.assertEqual(run.status, AnalysisRun.Status.DONE)
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
         self.assertEqual(run.selected_pu_name, GENERAL_SUMMARY_PU_LABEL)
 
     def test_upload_stores_original_filename_basename(self):
@@ -129,7 +122,7 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertIsNotNone(run)
         self.assertEqual(run.original_filename, "test_big.docx")
 
-    def test_uploaded_file_is_deleted_after_sync_analysis(self):
+    def test_uploaded_file_is_not_deleted_before_enqueue(self):
         upload = SimpleUploadedFile(
             "sample.docx",
             self._make_docx_bytes(),
@@ -147,8 +140,8 @@ class UploadAnalysisDocxTests(TestCase):
                 run.refresh_from_db()
                 file_path = Path(tmp_dir) / saved_name
 
-        self.assertEqual(run.status, AnalysisRun.Status.DONE)
-        self.assertFalse(file_path.exists())
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+        self.assertTrue(file_path.exists())
 
     def test_queue_status_endpoint_returns_runs_with_positions(self):
         run_running = AnalysisRun.objects.create(
@@ -174,6 +167,78 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(runs[str(run_queued.run_id)]["position"], 1)
         self.assertEqual(runs[str(run_running.run_id)]["status"], AnalysisRun.Status.RUNNING)
         self.assertEqual(runs[str(run_queued.run_id)]["status"], AnalysisRun.Status.QUEUED)
+
+
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_pending_block_prefills_selected_pu(self):
+        from uuid import uuid4
+
+        pu = CachedPU.objects.create(
+            portal_pu_id=uuid4(),
+            short_name="ПУ Юг",
+            full_name="Пограничное управление Юг",
+        )
+        upload = SimpleUploadedFile(
+            "prefill.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                self.client.post(
+                    reverse("analysis-upload"),
+                    {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
+                )
+                response = self.client.get(reverse("analysis-upload"))
+
+        self.assertContains(response, 'value="%s" selected' % pu.portal_pu_id)
+        self.assertContains(response, "Запустить в очередь")
+
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_submitting_pending_selection_enqueues_only_selected_run(self):
+        from uuid import uuid4
+
+        pu = CachedPU.objects.create(
+            portal_pu_id=uuid4(),
+            short_name="ПУ Запад",
+            full_name="Пограничное управление Запад",
+        )
+        session = self.client.session
+        session.create()
+        session_key = session.session_key
+
+        run_a = AnalysisRun.objects.create(
+            original_filename="a.docx",
+            file="uploads/a.docx",
+            status=AnalysisRun.Status.CREATED,
+            selected_pu_id="",
+            selected_pu_name=GENERAL_SUMMARY_PU_LABEL,
+            created_session_key=session_key or "",
+        )
+        run_b = AnalysisRun.objects.create(
+            original_filename="b.docx",
+            file="uploads/b.docx",
+            status=AnalysisRun.Status.CREATED,
+            selected_pu_id="",
+            selected_pu_name=GENERAL_SUMMARY_PU_LABEL,
+            created_session_key=run_a.created_session_key,
+        )
+
+        with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+            delay_mock.return_value = type("Task", (), {"id": "task-1"})()
+            response = self.client.post(
+                reverse("analysis-upload"),
+                {"upload_id": str(run_a.run_id), "selected_pu_id": str(pu.portal_pu_id)},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        run_a.refresh_from_db()
+        run_b.refresh_from_db()
+        self.assertEqual(run_a.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(run_a.selected_pu_id, str(pu.portal_pu_id))
+        self.assertEqual(run_b.status, AnalysisRun.Status.CREATED)
+        delay_mock.assert_called_once_with(str(run_a.run_id), str(pu.portal_pu_id))
 
     def _make_docx_bytes(self) -> bytes:
         document = Document()
