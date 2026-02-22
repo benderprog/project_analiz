@@ -59,7 +59,7 @@ class UploadAnalysisDocxTests(TestCase):
             self.assertFalse(run.celery_task_id)
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_with_selected_pu_saves_pu_name_and_id_in_pending_run(self):
+    def test_upload_with_selected_pu_single_file_enqueues_run(self):
         from uuid import uuid4
 
         pu = CachedPU.objects.create(
@@ -75,19 +75,22 @@ class UploadAnalysisDocxTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
-                response = self.client.post(
-                    reverse("analysis-upload"),
-                    {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
-                )
+                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+                    delay_mock.return_value = type("Task", (), {"id": "task-single"})()
+                    response = self.client.post(
+                        reverse("analysis-upload"),
+                        {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
+                    )
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.get()
         self.assertEqual(run.selected_pu_id, str(pu.portal_pu_id))
         self.assertEqual(run.selected_pu_name, "Пограничное управление Север")
-        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
-        self.assertFalse(run.celery_task_id)
+        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
+        self.assertTrue(run.celery_task_id)
 
-    def test_upload_docx_creates_pending_run_in_sync_mode(self):
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_upload_docx_single_file_enqueues_with_general_summary(self):
         upload = SimpleUploadedFile(
             "sample.docx",
             self._make_docx_bytes(),
@@ -96,15 +99,18 @@ class UploadAnalysisDocxTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
-                response = self.client.post(
-                    reverse("analysis-upload"),
-                    {"selected_pu_id": "", "file": upload},
-                )
+                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+                    delay_mock.return_value = type("Task", (), {"id": "task-general"})()
+                    response = self.client.post(
+                        reverse("analysis-upload"),
+                        {"selected_pu_id": "", "file": upload},
+                    )
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.get()
-        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
         self.assertEqual(run.selected_pu_name, GENERAL_SUMMARY_PU_LABEL)
+        self.assertTrue(run.celery_task_id)
 
     def test_upload_stores_original_filename_basename(self):
         upload = SimpleUploadedFile(
@@ -115,10 +121,12 @@ class UploadAnalysisDocxTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
-                response = self.client.post(
-                    reverse("analysis-upload"),
-                    {"selected_pu_id": "", "file": upload},
-                )
+                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+                    delay_mock.return_value = type("Task", (), {"id": "task-name"})()
+                    response = self.client.post(
+                        reverse("analysis-upload"),
+                        {"selected_pu_id": "", "file": upload},
+                    )
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.first()
@@ -134,16 +142,18 @@ class UploadAnalysisDocxTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir, ANALYSIS_DELETE_UPLOADS=True):
-                self.client.post(
-                    reverse("analysis-upload"),
-                    {"selected_pu_id": "", "file": upload},
-                )
+                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+                    delay_mock.return_value = type("Task", (), {"id": "task-keep-file"})()
+                    self.client.post(
+                        reverse("analysis-upload"),
+                        {"selected_pu_id": "", "file": upload},
+                    )
                 run = AnalysisRun.objects.first()
                 saved_name = run.file.name
                 run.refresh_from_db()
                 file_path = Path(tmp_dir) / saved_name
 
-        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
         self.assertTrue(file_path.exists())
 
 
@@ -286,11 +296,17 @@ class UploadAnalysisDocxTests(TestCase):
             content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
+        upload_2 = SimpleUploadedFile(
+            "prefill-2.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
                 self.client.post(
                     reverse("analysis-upload"),
-                    {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
+                    {"selected_pu_id": str(pu.portal_pu_id), "file": [upload, upload_2]},
                 )
                 response = self.client.get(reverse("analysis-upload"))
 
