@@ -1016,18 +1016,74 @@ class UploadView(View):
         if "upload_id" in request.POST:
             return self._enqueue_pending_run(request)
 
-        return self._create_pending_runs(request)
+        return self._handle_upload(request)
 
-    def _create_pending_runs(self, request):
+    def _enqueue_run(self, run: AnalysisRun, *, selected_pu_id: str):
+        run.status = AnalysisRun.Status.QUEUED
+        run.queued_at = timezone.now()
+        run.error_message = ""
+        run.save(update_fields=["status", "queued_at", "error_message"])
+
+        if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
+            from apps.analysis_app.services import run_analysis_pipeline
+            from apps.analysis_app.tasks import cleanup_run_upload
+
+            run.status = AnalysisRun.Status.RUNNING
+            run.started_at = timezone.now()
+            run.progress_total = None
+            run.progress_done = 0
+            run.progress_updated_at = timezone.now()
+            run.save(update_fields=["status", "started_at", "progress_total", "progress_done", "progress_updated_at"])
+            try:
+                total_events = run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
+                run.status = AnalysisRun.Status.DONE
+                run.finished_at = timezone.now()
+                run.progress_done = run.progress_total if run.progress_total is not None else total_events
+                run.save(update_fields=["status", "finished_at", "progress_done"])
+            except Exception as exc:  # noqa: BLE001
+                run.status = AnalysisRun.Status.FAILED
+                run.error_message = str(exc)
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+            cleanup_run_upload(run)
+            return
+
+        from apps.analysis_app.tasks import run_docx_analysis
+
+        task = run_docx_analysis.delay(str(run.run_id), selected_pu_id or None)
+        run.celery_task_id = task.id
+        run.save(update_fields=["celery_task_id"])
+
+    def _handle_upload(self, request):
         upload_form = UploadDocxWithPuForm(request.POST, request.FILES)
         if not upload_form.is_valid():
             return render(request, self.template_name, self._build_context(request, upload_form=upload_form))
 
+        files = [uploaded_file for uploaded_file in request.FILES.getlist("file") if uploaded_file]
+        if not files:
+            files = [uploaded_file for uploaded_file in upload_form.cleaned_data["file"] if uploaded_file]
+
         selected_pu_id = str(upload_form.cleaned_data.get("selected_pu_id") or "")
         selected_pu_name = _resolve_selected_pu_name(request, selected_pu_id)
-        selected_run_id = None
         created_session_key = self._ensure_session_key(request)
-        for uploaded_file in upload_form.cleaned_data["file"]:
+
+        if len(files) == 1:
+            uploaded_file = files[0]
+            run = AnalysisRun.objects.create(
+                uploaded_by=request.user if request.user.is_authenticated else None,
+                created_session_key=created_session_key,
+                file=uploaded_file,
+                original_filename=os.path.basename(uploaded_file.name or ""),
+                selected_pu_id=selected_pu_id,
+                selected_pu_name=selected_pu_name,
+                status=AnalysisRun.Status.CREATED,
+                error_message="",
+            )
+            self._enqueue_run(run, selected_pu_id=selected_pu_id)
+            return redirect("analysis-upload")
+
+        selected_run_id = None
+        for uploaded_file in files:
             run = AnalysisRun.objects.create(
                 uploaded_by=request.user if request.user.is_authenticated else None,
                 created_session_key=created_session_key,
@@ -1069,39 +1125,8 @@ class UploadView(View):
 
         run.selected_pu_id = selected_pu_id
         run.selected_pu_name = selected_pu_name
-        run.status = AnalysisRun.Status.QUEUED
-        run.queued_at = timezone.now()
-        run.error_message = ""
-        run.save(update_fields=["selected_pu_id", "selected_pu_name", "status", "queued_at", "error_message"])
-
-        if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
-            from apps.analysis_app.services import run_analysis_pipeline
-            from apps.analysis_app.tasks import cleanup_run_upload
-
-            run.status = AnalysisRun.Status.RUNNING
-            run.started_at = timezone.now()
-            run.progress_total = None
-            run.progress_done = 0
-            run.progress_updated_at = timezone.now()
-            run.save(update_fields=["status", "started_at", "progress_total", "progress_done", "progress_updated_at"])
-            try:
-                total_events = run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
-                run.status = AnalysisRun.Status.DONE
-                run.finished_at = timezone.now()
-                run.progress_done = run.progress_total if run.progress_total is not None else total_events
-                run.save(update_fields=["status", "finished_at", "progress_done"])
-            except Exception as exc:  # noqa: BLE001
-                run.status = AnalysisRun.Status.FAILED
-                run.error_message = str(exc)
-                run.finished_at = timezone.now()
-                run.save(update_fields=["status", "error_message", "finished_at"])
-            cleanup_run_upload(run)
-        else:
-            from apps.analysis_app.tasks import run_docx_analysis
-
-            task = run_docx_analysis.delay(str(run.run_id), selected_pu_id or None)
-            run.celery_task_id = task.id
-            run.save(update_fields=["celery_task_id"])
+        run.save(update_fields=["selected_pu_id", "selected_pu_name"])
+        self._enqueue_run(run, selected_pu_id=selected_pu_id)
 
         upload_url = redirect("analysis-upload").url
         queue_page = request.GET.get("queue_page") or request.POST.get("queue_page")
