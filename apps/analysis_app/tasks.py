@@ -30,18 +30,51 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
             logger.info("skip run_id=%s status=%s", run_id, run.status)
             return
 
+        now = timezone.now()
         run.celery_task_id = self.request.id
-        run.queued_at = run.queued_at or timezone.now()
+        run.queued_at = run.queued_at or now
         run.error_message = ""
         run.status = AnalysisRun.Status.RUNNING
-        run.started_at = timezone.now()
-        run.save(update_fields=["celery_task_id", "queued_at", "error_message", "status", "started_at"])
+        run.started_at = now
+        run.progress_total = None
+        run.progress_done = 0
+        run.progress_updated_at = now
+        run.save(
+            update_fields=[
+                "celery_task_id",
+                "queued_at",
+                "error_message",
+                "status",
+                "started_at",
+                "progress_total",
+                "progress_done",
+                "progress_updated_at",
+            ]
+        )
+
+    last_db_update = timezone.now()
+
+    def progress_callback(processed: int, total: int, *, force: bool = False) -> None:
+        nonlocal last_db_update
+        now = timezone.now()
+        should_flush = force or processed % 5 == 0 or (now - last_db_update).total_seconds() >= 0.5
+        run.progress_total = total
+        run.progress_done = processed
+        run.progress_updated_at = now
+        if should_flush:
+            run.save(update_fields=["progress_total", "progress_done", "progress_updated_at"])
+            last_db_update = now
 
     try:
-        run_analysis_pipeline(run, selected_pu_id=selected_pu_id)
+        total_events = run_analysis_pipeline(
+            run,
+            selected_pu_id=selected_pu_id,
+            progress_callback=progress_callback,
+        )
         run.status = AnalysisRun.Status.DONE
         run.finished_at = timezone.now()
-        run.save(update_fields=["status", "finished_at"])
+        run.progress_done = run.progress_total if run.progress_total is not None else total_events
+        run.save(update_fields=["status", "finished_at", "progress_done"])
     except Exception as exc:  # noqa: BLE001
         logger.exception("DOCX analysis failed for run %s", run_id)
         run.status = AnalysisRun.Status.FAILED

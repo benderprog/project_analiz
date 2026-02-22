@@ -201,6 +201,8 @@ class UploadAnalysisDocxTests(TestCase):
             status=AnalysisRun.Status.DONE,
             started_at=now - timedelta(seconds=3605),
             finished_at=now,
+            progress_total=5,
+            progress_done=4,
         )
         run_failed = AnalysisRun.objects.create(
             original_filename="failed.docx",
@@ -220,7 +222,28 @@ class UploadAnalysisDocxTests(TestCase):
             runs[str(run_done.run_id)]["results_url"],
             reverse("analysis-detail", kwargs={"run_id": run_done.run_id}),
         )
+        self.assertEqual(runs[str(run_done.run_id)]["progress_percent"], 100)
+        self.assertEqual(runs[str(run_done.run_id)]["progress_label"], "5 / 5 (100%)")
         self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
+
+    def test_queue_status_progress_payload(self):
+        run = AnalysisRun.objects.create(
+            original_filename="progress.docx",
+            file="uploads/progress.docx",
+            status=AnalysisRun.Status.RUNNING,
+            progress_total=10,
+            progress_done=3,
+        )
+
+        response = self.client.get(reverse("analysis-queue-status"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = {item["run_id"]: item for item in response.json()["runs"]}
+        run_payload = payload[str(run.run_id)]
+        self.assertEqual(run_payload["progress_total"], 10)
+        self.assertEqual(run_payload["progress_done"], 3)
+        self.assertEqual(run_payload["progress_percent"], 30)
+        self.assertEqual(run_payload["progress_label"], "3 / 10 (30%)")
 
     def test_queue_status_endpoint_returns_runs_with_positions(self):
         run_running = AnalysisRun.objects.create(

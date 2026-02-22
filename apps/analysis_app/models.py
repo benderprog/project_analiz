@@ -36,6 +36,9 @@ class AnalysisRun(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)
+    progress_total = models.PositiveIntegerField(null=True, blank=True, default=None)
+    progress_done = models.PositiveIntegerField(null=True, blank=True, default=None)
+    progress_updated_at = models.DateTimeField(null=True, blank=True, default=None)
 
     def __str__(self) -> str:
         return f"Run {self.run_id}"

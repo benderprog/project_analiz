@@ -85,7 +85,7 @@ _EVENT_PATTERN_MAX_WINDOWS = 90
 
 
 
-def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
+def run_analysis_pipeline(run, *, selected_pu_id=None, progress_callback=None) -> int:
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
     events = parse_docx(
@@ -93,6 +93,10 @@ def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
         selected_pu_id=selected_pu_id or run.selected_pu_id,
         selected_pu_name=run.selected_pu_name,
     )
+    total_events = len(events)
+    if progress_callback:
+        progress_callback(0, total_events, force=True)
+
     for idx, event in enumerate(events, start=1):
         paragraph = AnalysisParagraph.objects.create(
             run=run,
@@ -121,6 +125,14 @@ def run_analysis_pipeline(run, *, selected_pu_id=None) -> None:
             },
             match_result=match_result,
         )
+
+        if progress_callback:
+            progress_callback(idx, total_events)
+
+    if progress_callback:
+        progress_callback(total_events, total_events, force=True)
+
+    return total_events
 
 def _normalize_surname(value: str | None) -> str:
     if not value:

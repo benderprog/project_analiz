@@ -1,6 +1,11 @@
 {% extends "analysis_app/base.html" %}
 
 {% block content %}
+<style>
+  .progress-wrap { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; }
+  .progress-bar { height: 100%; background: var(--color-primary, #4caf50); }
+  .progress-text { font-size: 12px; margin-top: 4px; }
+</style>
 <section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
     <h2 style="margin:0;">Очередь анализов</h2>
@@ -34,6 +39,9 @@
                 <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
               {% elif run.status == 'failed' %}
                 {{ run.error_message|default:"—" }}
+              {% elif run.status == 'queued' or run.status == 'running' %}
+                <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
+                <div class="progress-text">{{ run.progress_label }}</div>
               {% else %}
                 —
               {% endif %}
@@ -120,6 +128,13 @@
     return div.innerHTML;
   };
 
+
+  const renderProgress = (run) => {
+    const percent = Number(run.progress_percent || 0);
+    const label = escapeHtml(run.progress_label || "В очереди");
+    return `<div class="progress-wrap"><div class="progress-bar" style="width: ${percent}%"></div></div><div class="progress-text">${label}</div>`;
+  };
+
   const updateRows = (runs) => {
     const byId = new Map(runs.map((run) => [run.run_id, run]));
     body.querySelectorAll("tr[data-run-id]").forEach((row) => {
@@ -139,8 +154,10 @@
       if (actionCell) {
         if (run.status === "done" && run.results_url) {
           actionCell.innerHTML = `<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`;
-        } else if (run.status === "failed" && run.error_message) {
-          actionCell.innerHTML = escapeHtml(run.error_message);
+        } else if (run.status === "failed") {
+          actionCell.innerHTML = escapeHtml(run.error_message || "—");
+        } else if (run.status === "queued" || run.status === "running") {
+          actionCell.innerHTML = renderProgress(run);
         } else {
           actionCell.textContent = "—";
         }
