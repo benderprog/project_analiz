@@ -71,6 +71,40 @@ def _results_url(run: AnalysisRun) -> str:
     return ""
 
 
+
+
+def _compute_progress_percent(done: int | None, total: int | None) -> int:
+    if total is None or total <= 0:
+        return 0
+    safe_done = max(min(int(done or 0), int(total)), 0)
+    return int(round(100 * safe_done / int(total)))
+
+
+def _progress_payload(run: AnalysisRun) -> dict[str, int | str | None]:
+    total = run.progress_total
+    done = run.progress_done
+
+    if run.status == AnalysisRun.Status.DONE and total is not None:
+        done = total
+
+    percent = _compute_progress_percent(done, total)
+
+    if run.status == AnalysisRun.Status.QUEUED and total in [None, 0]:
+        label = "В очереди"
+    elif total is not None and total > 0:
+        label = f"{max(min(int(done or 0), int(total)), 0)} / {int(total)} ({percent}%)"
+    elif run.status in [AnalysisRun.Status.QUEUED, AnalysisRun.Status.RUNNING]:
+        label = "В очереди"
+    else:
+        label = ""
+
+    return {
+        "progress_total": total,
+        "progress_done": done,
+        "progress_percent": percent,
+        "progress_label": label,
+    }
+
 def _cached_pu_full_name_map(request) -> dict[str, str]:
     cached = getattr(request, "_pu_full_name_map", None)
     if cached is not None:
@@ -907,6 +941,11 @@ class UploadView(View):
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
             run.results_url = _results_url(run)
+            progress_payload = _progress_payload(run)
+            run.progress_total = progress_payload["progress_total"]
+            run.progress_done = progress_payload["progress_done"]
+            run.progress_percent = progress_payload["progress_percent"]
+            run.progress_label = progress_payload["progress_label"]
         return paginator, page_obj
 
     @staticmethod
@@ -1041,12 +1080,16 @@ class UploadView(View):
 
             run.status = AnalysisRun.Status.RUNNING
             run.started_at = timezone.now()
-            run.save(update_fields=["status", "started_at"])
+            run.progress_total = None
+            run.progress_done = 0
+            run.progress_updated_at = timezone.now()
+            run.save(update_fields=["status", "started_at", "progress_total", "progress_done", "progress_updated_at"])
             try:
-                run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
+                total_events = run_analysis_pipeline(run, selected_pu_id=selected_pu_id or None)
                 run.status = AnalysisRun.Status.DONE
                 run.finished_at = timezone.now()
-                run.save(update_fields=["status", "finished_at"])
+                run.progress_done = run.progress_total if run.progress_total is not None else total_events
+                run.save(update_fields=["status", "finished_at", "progress_done"])
             except Exception as exc:  # noqa: BLE001
                 run.status = AnalysisRun.Status.FAILED
                 run.error_message = str(exc)
@@ -1131,6 +1174,7 @@ class AnalysisQueueStatusView(View):
         payload_runs = []
         for run in runs:
             elapsed_seconds = compute_elapsed_seconds(run)
+            progress_payload = _progress_payload(run)
             payload = {
                 "run_id": str(run.run_id),
                 "original_filename": run.original_filename or _display_filename(run.file.name),
@@ -1144,6 +1188,10 @@ class AnalysisQueueStatusView(View):
                 "results_url": _results_url(run),
                 "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
                 "position": None,
+                "progress_total": progress_payload["progress_total"],
+                "progress_done": progress_payload["progress_done"],
+                "progress_percent": progress_payload["progress_percent"],
+                "progress_label": progress_payload["progress_label"],
             }
             if run.status == AnalysisRun.Status.RUNNING:
                 payload["position"] = 0
