@@ -1,5 +1,6 @@
 import tempfile
 from io import BytesIO
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -144,6 +145,82 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertEqual(run.status, AnalysisRun.Status.CREATED)
         self.assertTrue(file_path.exists())
+
+
+
+    def test_queue_status_excludes_canceled_runs(self):
+        queued = AnalysisRun.objects.create(
+            original_filename="queued.docx",
+            file="uploads/queued.docx",
+            status=AnalysisRun.Status.QUEUED,
+        )
+        AnalysisRun.objects.create(
+            original_filename="canceled.docx",
+            file="uploads/canceled.docx",
+            status=AnalysisRun.Status.CANCELED,
+        )
+
+        response = self.client.get(reverse("analysis-queue-status"))
+
+        self.assertEqual(response.status_code, 200)
+        run_ids = {item["run_id"] for item in response.json()["runs"]}
+        self.assertIn(str(queued.run_id), run_ids)
+        self.assertNotIn(
+            str(AnalysisRun.objects.get(original_filename="canceled.docx").run_id),
+            run_ids,
+        )
+
+    def test_upload_page_hides_canceled_runs(self):
+        AnalysisRun.objects.create(
+            original_filename="visible.docx",
+            file="uploads/visible.docx",
+            status=AnalysisRun.Status.QUEUED,
+        )
+        AnalysisRun.objects.create(
+            original_filename="hidden.docx",
+            file="uploads/hidden.docx",
+            status=AnalysisRun.Status.CANCELED,
+        )
+
+        response = self.client.get(reverse("analysis-upload"))
+
+        self.assertContains(response, "visible.docx")
+        self.assertNotContains(response, "hidden.docx")
+
+    def test_queue_status_elapsed_and_results_url(self):
+        now = timezone.now()
+        run_running = AnalysisRun.objects.create(
+            original_filename="running.docx",
+            file="uploads/running.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=now - timedelta(seconds=75),
+        )
+        run_done = AnalysisRun.objects.create(
+            original_filename="done.docx",
+            file="uploads/done.docx",
+            status=AnalysisRun.Status.DONE,
+            started_at=now - timedelta(seconds=3605),
+            finished_at=now,
+        )
+        run_failed = AnalysisRun.objects.create(
+            original_filename="failed.docx",
+            file="uploads/failed.docx",
+            status=AnalysisRun.Status.FAILED,
+            error_message="boom",
+        )
+
+        response = self.client.get(reverse("analysis-queue-status"))
+        runs = {item["run_id"]: item for item in response.json()["runs"]}
+
+        self.assertGreaterEqual(runs[str(run_running.run_id)]["elapsed_seconds"], 75)
+        self.assertTrue(runs[str(run_running.run_id)]["elapsed_display"].startswith("00:01:"))
+        self.assertEqual(runs[str(run_done.run_id)]["elapsed_seconds"], 3605)
+        self.assertEqual(runs[str(run_done.run_id)]["elapsed_display"], "01:00:05")
+        self.assertEqual(
+            runs[str(run_done.run_id)]["results_url"],
+            reverse("analysis-detail", kwargs={"run_id": run_done.run_id}),
+        )
+        self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
 
     def test_queue_status_endpoint_returns_runs_with_positions(self):
         run_running = AnalysisRun.objects.create(

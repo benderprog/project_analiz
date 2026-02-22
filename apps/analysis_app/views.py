@@ -6,6 +6,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
 from django.http import JsonResponse
+from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -46,6 +47,28 @@ def _display_filename(file_name: str | None) -> str:
         return ""
     normalized = str(file_name).replace("\\", "/")
     return PurePath(normalized).name
+
+
+def compute_elapsed_seconds(run: AnalysisRun) -> int | None:
+    if run.started_at:
+        end = run.finished_at or timezone.now()
+        return max(int((end - run.started_at).total_seconds()), 0)
+    return None
+
+
+def format_elapsed(seconds: int | None) -> str:
+    if seconds is None:
+        return "—"
+    total = max(int(seconds), 0)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _results_url(run: AnalysisRun) -> str:
+    if run.status == AnalysisRun.Status.DONE:
+        return reverse("analysis-detail", kwargs={"run_id": str(run.run_id)})
+    return ""
 
 
 def _cached_pu_full_name_map(request) -> dict[str, str]:
@@ -865,7 +888,6 @@ class UploadView(View):
                 AnalysisRun.Status.RUNNING,
                 AnalysisRun.Status.DONE,
                 AnalysisRun.Status.FAILED,
-                AnalysisRun.Status.CANCELED,
             ]
         )
         if request.user.is_authenticated:
@@ -881,6 +903,10 @@ class UploadView(View):
             page_obj = paginator.page(page_number)
         except EmptyPage:
             page_obj = paginator.page(paginator.num_pages or 1)
+        for run in page_obj.object_list:
+            run.elapsed_seconds = compute_elapsed_seconds(run)
+            run.elapsed_display = format_elapsed(run.elapsed_seconds)
+            run.results_url = _results_url(run)
         return paginator, page_obj
 
     @staticmethod
@@ -1102,12 +1128,9 @@ class PendingRunCancelView(View):
 class AnalysisQueueStatusView(View):
     def get(self, request):
         runs = list(UploadView._queue_queryset(request)[:10])
-        now = timezone.now()
         payload_runs = []
         for run in runs:
-            elapsed_base = run.started_at or run.queued_at or run.created_at
-            elapsed_end = run.finished_at or now
-            elapsed_seconds = int((elapsed_end - elapsed_base).total_seconds()) if elapsed_base else 0
+            elapsed_seconds = compute_elapsed_seconds(run)
             payload = {
                 "run_id": str(run.run_id),
                 "original_filename": run.original_filename or _display_filename(run.file.name),
@@ -1116,13 +1139,10 @@ class AnalysisQueueStatusView(View):
                 "queued_at": run.queued_at.isoformat() if run.queued_at else None,
                 "started_at": run.started_at.isoformat() if run.started_at else None,
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-                "elapsed_seconds": max(elapsed_seconds, 0) if run.status == AnalysisRun.Status.RUNNING else None,
-                "result_url": (
-                    redirect("analysis-detail", run_id=run.run_id).url
-                    if run.status == AnalysisRun.Status.DONE
-                    else None
-                ),
-                "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
+                "elapsed_seconds": elapsed_seconds,
+                "elapsed_display": format_elapsed(elapsed_seconds),
+                "results_url": _results_url(run),
+                "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
                 "position": None,
             }
             if run.status == AnalysisRun.Status.RUNNING:
@@ -1143,10 +1163,7 @@ class AnalysisStatusView(View):
     def get(self, request, run_id):
         run = get_object_or_404(AnalysisRun, run_id=run_id)
 
-        now = timezone.now()
-        elapsed_base = run.started_at or run.queued_at or run.created_at
-        elapsed_end = run.finished_at or now
-        elapsed_seconds = int((elapsed_end - elapsed_base).total_seconds()) if elapsed_base else 0
+        elapsed_seconds = compute_elapsed_seconds(run)
 
         if getattr(settings, "ANALYSIS_USE_SYNC_TASKS", False):
             worker_ok = True
@@ -1161,7 +1178,8 @@ class AnalysisStatusView(View):
             "queued_at": run.queued_at.isoformat() if run.queued_at else None,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            "elapsed_seconds": max(elapsed_seconds, 0),
+            "elapsed_seconds": elapsed_seconds,
+            "elapsed_display": format_elapsed(elapsed_seconds),
             "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
             "worker_ok": worker_ok,
             "uploaded_filename": run.original_filename or _display_filename(run.file.name),
@@ -1169,7 +1187,7 @@ class AnalysisStatusView(View):
             "selected_pu_id": run.selected_pu_id,
         }
         if run.status == AnalysisRun.Status.DONE:
-            payload["result_url"] = redirect("analysis-detail", run_id=run.run_id).url
+            payload["result_url"] = reverse("analysis-detail", kwargs={"run_id": str(run.run_id)})
         return JsonResponse(payload)
 
 
