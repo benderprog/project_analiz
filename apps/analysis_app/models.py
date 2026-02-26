@@ -39,6 +39,8 @@ class AnalysisRun(models.Model):
     progress_total = models.PositiveIntegerField(null=True, blank=True, default=None)
     progress_done = models.PositiveIntegerField(null=True, blank=True, default=None)
     progress_updated_at = models.DateTimeField(null=True, blank=True, default=None)
+    debug_package_file = models.FileField(upload_to="debug_packages/", null=True, blank=True)
+    debug_package_created_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Run {self.run_id}"

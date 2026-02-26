@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.analysis_app.models import AnalysisRun
+from apps.analysis_app.models import AnalysisRun, FeatureFlags
 from apps.analysis_app.tasks import run_docx_analysis
 
 
@@ -47,3 +47,25 @@ class AnalysisTasksTests(TestCase):
         self.assertEqual(run.progress_done, 10)
         self.assertIsNotNone(run.progress_updated_at)
 
+    def test_run_docx_analysis_does_not_build_debug_package_when_debug_mode_off(self):
+        run = AnalysisRun.objects.create(
+            original_filename="debug-off.docx",
+            file="uploads/debug-off.docx",
+            status=AnalysisRun.Status.QUEUED,
+            queued_at=timezone.now(),
+        )
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = False
+        flags.save(update_fields=["debug_mode", "updated_at"])
+
+        with (
+            patch("apps.analysis_app.tasks.run_analysis_pipeline", return_value=0),
+            patch("apps.analysis_app.tasks.build_debug_zip_bytes") as build_mock,
+        ):
+            run_docx_analysis.run(str(run.run_id), selected_pu_id=None)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisRun.Status.DONE)
+        self.assertFalse(run.debug_package_file)
+        self.assertIsNone(run.debug_package_created_at)
+        build_mock.assert_not_called()

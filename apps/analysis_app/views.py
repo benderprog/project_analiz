@@ -1,14 +1,11 @@
 import logging
 import os
-import json
-import zipfile
 from pathlib import PurePath
-from io import BytesIO
 from datetime import timedelta
 
 from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -21,6 +18,7 @@ from apps.analysis_app.forms import (
     UploadDocxWithPuForm,
     is_general_summary_pu,
 )
+from apps.analysis_app.debug_package import build_debug_zip_bytes
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
@@ -1341,53 +1339,14 @@ class AnalysisDebugZipView(View):
             if run.created_session_key != session_key:
                 raise Http404
 
-        results_qs = AnalysisResult.objects.filter(paragraph__run_id=run.run_id).select_related(
-            "paragraph"
-        ).order_by("paragraph__idx")
+        if run.debug_package_file:
+            return FileResponse(
+                run.debug_package_file.open("rb"),
+                as_attachment=True,
+                filename=f"debug_{run.run_id}.zip",
+            )
 
-        meta_payload = {
-            "run_id": str(run.run_id),
-            "created_at": run.created_at.isoformat() if run.created_at else None,
-            "status": run.status,
-            "selected_pu_id": run.selected_pu_id,
-            "selected_pu_name": run.selected_pu_name,
-            "original_filename": run.original_filename or _display_filename(run.file.name),
-            "debug_mode": True,
-            "app": _app_version_payload(),
-        }
-
-        slicing_payload = _build_slicing_payload(results_qs)
-
-        buffer = BytesIO()
-        with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("meta.json", json.dumps(meta_payload, ensure_ascii=False, indent=2))
-            archive.writestr("run.json", json.dumps(_safe_run_payload(run), ensure_ascii=False, indent=2))
-
-            if slicing_payload.get("template") or slicing_payload.get("items"):
-                archive.writestr(
-                    "slicing.json",
-                    json.dumps(slicing_payload, ensure_ascii=False, indent=2),
-                )
-
-            for event_idx, result in enumerate(results_qs, start=1):
-                paragraph = result.paragraph
-                payload = {
-                    "idx": paragraph.idx,
-                    "title": f"Событие {paragraph.idx}",
-                    "preview": (paragraph.text or "")[:200],
-                    "source_kind": paragraph.source_kind,
-                    "source_cells": paragraph.source_cells,
-                    "source_table_header_cells": paragraph.source_table_header_cells,
-                    "full_text": paragraph.text,
-                    "extracted_attributes": result.extracted_attributes or {},
-                    "match_result": result.match_result or {},
-                }
-                archive.writestr(
-                    f"events/event_{event_idx:04d}.json",
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                )
-
-        response = HttpResponse(buffer.getvalue(), content_type="application/zip")
+        response = HttpResponse(build_debug_zip_bytes(run), content_type="application/zip")
         response["Content-Disposition"] = f'attachment; filename="debug_{run.run_id}.zip"'
         return response
 

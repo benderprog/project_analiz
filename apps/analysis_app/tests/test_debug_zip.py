@@ -1,5 +1,6 @@
 from io import BytesIO
 import zipfile
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
@@ -81,3 +82,18 @@ class AnalysisDebugZipViewTests(TestCase):
         response = self.client.get(reverse("analysis-debug-zip", kwargs={"run_id": run.run_id}))
 
         self.assertIn(response.status_code, [403, 404])
+
+    def test_endpoint_uses_cached_debug_package_when_available(self):
+        run = self._create_run()
+        run.debug_package_file.save("debug_cached.zip", ContentFile(b"cached-data"), save=True)
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = True
+        flags.save(update_fields=["debug_mode", "updated_at"])
+
+        self.client.force_login(self.user)
+        with patch("apps.analysis_app.views.build_debug_zip_bytes") as build_mock:
+            response = self.client.get(reverse("analysis-debug-zip", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b"".join(response.streaming_content), b"cached-data")
+        build_mock.assert_not_called()
