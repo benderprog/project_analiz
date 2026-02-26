@@ -14,6 +14,9 @@
   {% if show_debug_zip_link and debug_zip_url %}
     <p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug-пакет</a></p>
   {% endif %}
+  {% if debug_mode and debug_pipeline and debug_pipeline.stage_line %}
+    <p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>
+  {% endif %}
 </section>
 
 {% if events %}

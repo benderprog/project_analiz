@@ -78,6 +78,54 @@ def _debug_zip_url(run: AnalysisRun) -> str:
     return ""
 
 
+def _stage_label(name: str) -> str:
+    labels = {
+        "parsing": "Парсинг",
+        "extraction": "Извлечение",
+        "matching": "Матчинг",
+        "classification": "Классификация",
+        "starting": "Подготовка",
+        "done": "Готово",
+        "failed": "Ошибка",
+    }
+    return labels.get(str(name or "").lower(), str(name or "—"))
+
+
+def _format_stage_ms(ms_value) -> str:
+    try:
+        ms_int = int(ms_value)
+    except (TypeError, ValueError):
+        return "—"
+    if ms_int >= 1000:
+        return f"{ms_int / 1000:.1f}с"
+    return f"{ms_int}мс"
+
+
+def _debug_pipeline_payload(run: AnalysisRun) -> dict:
+    data = run.debug_pipeline if isinstance(run.debug_pipeline, dict) else {}
+    stages = []
+    for item in data.get("stages") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        ms = int(item.get("ms") or 0)
+        stages.append({"name": name, "label": _stage_label(name), "ms": ms, "duration": _format_stage_ms(ms)})
+    current_stage = str(data.get("current_stage") or "")
+    stage_line = ""
+    if stages:
+        stage_line = " → ".join(f"{item['label']} {item['duration']}" for item in stages)
+    elif current_stage:
+        stage_line = f"Этап: {_stage_label(current_stage)}…"
+    return {
+        "current_stage": current_stage,
+        "current_stage_label": _stage_label(current_stage) if current_stage else "",
+        "stages": stages,
+        "total_ms": int(data.get("total_ms") or 0),
+        "stage_line": stage_line,
+        "updated_at": data.get("updated_at"),
+    }
+
+
 def _app_version_payload() -> dict[str, str]:
     settings_version = getattr(settings, "VERSION", "")
     git_sha = os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA") or os.getenv("SOURCE_VERSION") or ""
@@ -1004,6 +1052,7 @@ class UploadView(View):
             run.progress_done = progress_payload["progress_done"]
             run.progress_percent = progress_payload["progress_percent"]
             run.progress_label = progress_payload["progress_label"]
+            run.debug_pipeline_payload = _debug_pipeline_payload(run)
         return paginator, page_obj
 
     @staticmethod
@@ -1254,6 +1303,7 @@ class PendingRunCancelView(View):
 
 class AnalysisQueueStatusView(View):
     def get(self, request):
+        debug_mode = FeatureFlags.is_debug_enabled()
         runs = list(UploadView._queue_queryset(request)[:10])
         payload_runs = []
         for run in runs:
@@ -1270,7 +1320,7 @@ class AnalysisQueueStatusView(View):
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
-                "debug_zip_url": _debug_zip_url(run) if FeatureFlags.is_debug_enabled() else "",
+                "debug_zip_url": _debug_zip_url(run) if debug_mode else "",
                 "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
                 "position": None,
                 "progress_total": progress_payload["progress_total"],
@@ -1278,6 +1328,8 @@ class AnalysisQueueStatusView(View):
                 "progress_percent": progress_payload["progress_percent"],
                 "progress_label": progress_payload["progress_label"],
             }
+            if debug_mode:
+                payload["debug_pipeline"] = _debug_pipeline_payload(run)
             if run.status == AnalysisRun.Status.RUNNING:
                 payload["position"] = 0
             elif run.status == AnalysisRun.Status.QUEUED:
@@ -1394,5 +1446,6 @@ class AnalysisDetailView(View):
                 "debug_mode": FeatureFlags.is_debug_enabled(),
                 "debug_zip_url": _debug_zip_url(run),
                 "show_debug_zip_link": FeatureFlags.is_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
+                "debug_pipeline": _debug_pipeline_payload(run),
             },
         )

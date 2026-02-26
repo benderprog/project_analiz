@@ -13,7 +13,7 @@ from django.utils import timezone
 from docx import Document
 
 from apps.analysis_app.forms import GENERAL_SUMMARY_PU_LABEL
-from apps.analysis_app.models import AnalysisRun, CachedPU
+from apps.analysis_app.models import AnalysisRun, CachedPU, FeatureFlags
 
 
 class UploadAnalysisDocxTests(TestCase):
@@ -535,3 +535,26 @@ class UploadAnalysisDocxTests(TestCase):
         buffer = BytesIO()
         document.save(buffer)
         return buffer.getvalue()
+
+
+    def test_queue_status_includes_debug_pipeline_only_when_debug_on(self):
+        run = AnalysisRun.objects.create(
+            original_filename="debug-pipeline.docx",
+            file="uploads/debug-pipeline.docx",
+            status=AnalysisRun.Status.RUNNING,
+            debug_pipeline={"current_stage": "matching", "stages": [{"name": "parsing", "ms": 200}]},
+        )
+
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = False
+        flags.save(update_fields=["debug_mode", "updated_at"])
+        response_off = self.client.get(reverse("analysis-queue-status"))
+        payload_off = {item["run_id"]: item for item in response_off.json()["runs"]}[str(run.run_id)]
+        self.assertNotIn("debug_pipeline", payload_off)
+
+        flags.debug_mode = True
+        flags.save(update_fields=["debug_mode", "updated_at"])
+        response_on = self.client.get(reverse("analysis-queue-status"))
+        payload_on = {item["run_id"]: item for item in response_on.json()["runs"]}[str(run.run_id)]
+        self.assertIn("debug_pipeline", payload_on)
+        self.assertEqual(payload_on["debug_pipeline"]["current_stage"], "matching")
