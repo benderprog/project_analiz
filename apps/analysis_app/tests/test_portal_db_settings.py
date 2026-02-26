@@ -72,7 +72,7 @@ class PortalDbAdminTests(TestCase):
 
 
 
-    def test_admin_form_save_updates_feature_flags_debug_mode_enabled(self):
+    def test_admin_save_model_updates_feature_flags_debug_mode_enabled(self):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
         form = PortalDbConnectionSettingsAdminForm(
             data={
@@ -88,11 +88,15 @@ class PortalDbAdminTests(TestCase):
         )
 
         self.assertTrue(form.is_valid(), form.errors)
-        form.save()
+        request = self.factory.post("/")
+        request.user = self.user
+
+        with patch("apps.analysis_app.admin.apply_portal_db_settings"):
+            self.admin.save_model(request, settings_obj, form, change=True)
 
         self.assertTrue(FeatureFlags.get_solo().debug_mode)
 
-    def test_admin_form_save_updates_feature_flags_debug_mode_disabled(self):
+    def test_admin_save_model_updates_feature_flags_debug_mode_disabled(self):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
         flags = FeatureFlags.get_solo()
         flags.debug_mode = True
@@ -111,7 +115,11 @@ class PortalDbAdminTests(TestCase):
         )
 
         self.assertTrue(form.is_valid(), form.errors)
-        form.save()
+        request = self.factory.post("/")
+        request.user = self.user
+
+        with patch("apps.analysis_app.admin.apply_portal_db_settings"):
+            self.admin.save_model(request, settings_obj, form, change=True)
 
         self.assertFalse(FeatureFlags.get_solo().debug_mode)
 
