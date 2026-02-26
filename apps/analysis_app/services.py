@@ -23,6 +23,7 @@ from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventType, EventTypePattern
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_naive, to_local_naive
+from apps.analysis_app.event_payload import build_title_preview, compute_status_fields
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.analysis_app.utils.offender_format import portal_offender_fullname, svodka_offender_fullname
 from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
@@ -130,6 +131,12 @@ def run_analysis_pipeline(
         match_result = match_event(attributes, event.joined_text, debug_enabled=debug_enabled)
         matching_ms += int((pytime.monotonic() - matching_started) * 1000)
         classification_ms += int((match_result.get("debug") or {}).get("classification_ms") or 0)
+        matched = bool(match_result.get("matched"))
+        title, preview = build_title_preview(idx, event.joined_text, matched)
+        status_fields = compute_status_fields(
+            match_result,
+            time_error_minutes=int(getattr(settings, "TIME_ERROR_MINUTES", 30)),
+        )
         AnalysisResult.objects.create(
             paragraph=paragraph,
             extracted_attributes={
@@ -146,6 +153,16 @@ def run_analysis_pipeline(
                 "staff": attributes.staff,
             },
             match_result=match_result,
+            matched=matched,
+            title=title,
+            preview=preview,
+            status_timestamp=status_fields["timestamp"],
+            status_subdivision=status_fields["subdivision"],
+            status_offenders=status_fields["offenders"],
+            status_event_type=status_fields["event_type"],
+            status_article=status_fields["article"],
+            detail_payload_cache={},
+            detail_payload_cached_at=None,
         )
 
         if stage_callback and idx % 20 == 0:

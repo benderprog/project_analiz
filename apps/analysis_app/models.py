@@ -156,16 +156,39 @@ class AnalysisParagraph(models.Model):
     def __str__(self) -> str:
         return f"Paragraph {self.idx}"
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["run", "idx"], name="uniq_analysis_paragraph_run_idx"),
+        ]
+        indexes = [
+            models.Index(fields=["run", "idx"], name="analysis_paragraph_run_idx_idx"),
+        ]
+
 
 class AnalysisResult(models.Model):
     paragraph = models.OneToOneField(
-        AnalysisParagraph, on_delete=models.CASCADE, related_name="result"
+        AnalysisParagraph, on_delete=models.CASCADE, related_name="result", db_index=True
     )
     extracted_attributes = models.JSONField(default=dict)
     match_result = models.JSONField(default=dict)
+    matched = models.BooleanField(default=False)
+    title = models.CharField(max_length=255, blank=True, default="")
+    preview = models.CharField(max_length=120, blank=True, default="")
+    status_timestamp = models.CharField(max_length=16, blank=True, default="neutral")
+    status_subdivision = models.CharField(max_length=16, blank=True, default="neutral")
+    status_offenders = models.CharField(max_length=16, blank=True, default="neutral")
+    status_event_type = models.CharField(max_length=16, blank=True, default="neutral")
+    status_article = models.CharField(max_length=16, blank=True, default="neutral")
+    detail_payload_cache = models.JSONField(default=dict, blank=True)
+    detail_payload_cached_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Result for {self.paragraph_id}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["paragraph"], name="analysis_result_paragraph_idx"),
+        ]
 
 
 class CachedPU(models.Model):
