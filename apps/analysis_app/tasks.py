@@ -1,4 +1,5 @@
 import logging
+import time as pytime
 
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -55,6 +56,32 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         )
 
     last_db_update = timezone.now()
+    debug_enabled = FeatureFlags.is_debug_enabled()
+    pipeline_started = pytime.monotonic()
+    pipeline = {"current_stage": "starting", "stages": [], "total_ms": 0}
+
+    def _save_pipeline(stage_name=None, stage_ms=None, *, current_stage=None, force: bool = False) -> None:
+        nonlocal last_db_update
+        if not debug_enabled:
+            return
+        now = timezone.now()
+        if stage_name:
+            stages = [item for item in pipeline.get("stages", []) if item.get("name") != stage_name]
+            stages.append({"name": stage_name, "ms": int(stage_ms or 0)})
+            pipeline["stages"] = stages
+        if current_stage:
+            pipeline["current_stage"] = current_stage
+        pipeline["total_ms"] = int((pytime.monotonic() - pipeline_started) * 1000)
+        pipeline["updated_at"] = now.isoformat().replace("+00:00", "Z")
+        if not force and (now - last_db_update).total_seconds() < 2:
+            return
+        run.debug_pipeline = pipeline
+        run.debug_pipeline_updated_at = now
+        run.save(update_fields=["debug_pipeline", "debug_pipeline_updated_at"])
+        last_db_update = now
+
+    if debug_enabled:
+        _save_pipeline(current_stage="parsing", force=True)
 
     def progress_callback(processed: int, total: int, *, force: bool = False) -> None:
         nonlocal last_db_update
@@ -66,18 +93,24 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         if should_flush:
             run.save(update_fields=["progress_total", "progress_done", "progress_updated_at"])
             last_db_update = now
+        if debug_enabled and run.status == AnalysisRun.Status.RUNNING:
+            _save_pipeline(current_stage="matching", force=force or processed % 20 == 0)
 
     try:
         total_events = run_analysis_pipeline(
             run,
             selected_pu_id=selected_pu_id,
             progress_callback=progress_callback,
+            stage_callback=_save_pipeline,
+            debug_enabled=debug_enabled,
         )
         run.status = AnalysisRun.Status.DONE
         run.finished_at = timezone.now()
         run.progress_done = run.progress_total if run.progress_total is not None else total_events
         run.save(update_fields=["status", "finished_at", "progress_done"])
-        if FeatureFlags.is_debug_enabled():
+        if debug_enabled:
+            _save_pipeline(current_stage="done", force=True)
+        if debug_enabled:
             debug_bytes = build_debug_zip_bytes(run)
             filename = f"debug_{run.run_id}.zip"
             run.debug_package_file.save(filename, ContentFile(debug_bytes), save=False)
@@ -90,7 +123,9 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         run.error_message = str(exc)
         run.finished_at = timezone.now()
         run.save(update_fields=["status", "error_message", "finished_at"])
-        if FeatureFlags.is_debug_enabled():
+        if debug_enabled:
+            _save_pipeline(current_stage="failed", force=True)
+        if debug_enabled:
             debug_bytes = build_debug_zip_bytes(run)
             filename = f"debug_{run.run_id}.zip"
             run.debug_package_file.save(filename, ContentFile(debug_bytes), save=False)
