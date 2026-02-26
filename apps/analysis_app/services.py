@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from functools import lru_cache
+from time import monotonic
 from uuid import UUID
 
 from django.conf import settings
@@ -1906,7 +1907,9 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
+    classification_started = monotonic()
     predicted_type, predicted_article, predicted_event_pattern = _classify_event_type(text)
+    classification_duration = monotonic() - classification_started
     svodka_article = attributes.article_of_law
 
     scored_candidates, candidate_meta = get_event_candidates(attributes, text=text)
@@ -2216,5 +2219,5 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "svodka_article_of_law": svodka_article,
         "portal_article_of_law": best_event.event.article_of_law,
         "diffs": diffs,
-        "debug": debug_meta,
+        "debug": {**debug_meta, "pipeline_timing": {"classification": round(classification_duration, 6)}},
     }

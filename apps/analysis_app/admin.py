@@ -13,6 +13,7 @@ from apps.analysis_app.models import (
     CachedSubdivision,
     CachedSubdivisionAlias,
     PortalDbConnectionSettings,
+    FeatureFlags,
 )
 from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.portal_records import PortalPURecord
@@ -183,6 +184,27 @@ class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
             "admin:analysis_app_portaldbconnectionsettings_change",
             object_id,
         )
+
+
+@admin.register(FeatureFlags)
+class FeatureFlagsAdmin(admin.ModelAdmin):
+    list_display = ("debug_mode", "updated_at")
+    readonly_fields = ("created_at", "updated_at")
+    fields = ("debug_mode", "created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return not FeatureFlags.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        obj = FeatureFlags.objects.order_by("singleton_id").first()
+        if obj:
+            url = reverse("admin:analysis_app_featureflags_change", args=[obj.pk])
+            return redirect(url)
+        return super().changelist_view(request, extra_context=extra_context)
+
 
 
 @admin.register(CachedPU)
