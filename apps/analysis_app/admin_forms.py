@@ -27,7 +27,7 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
                 "Пароль сохранён. Оставьте пустым, чтобы не менять."
             )
         if not self.is_bound:
-            self.fields["debug_mode"].initial = FeatureFlags.get_solo().debug_mode
+            self.fields["debug_mode"].initial = FeatureFlags.is_debug_enabled()
 
     def save(self, commit=True):
         obj = super().save(commit=False)
