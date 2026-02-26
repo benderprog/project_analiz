@@ -12,6 +12,7 @@ from apps.analysis_app.models import (
     CachedPU,
     CachedSubdivision,
     CachedSubdivisionAlias,
+    FeatureFlags,
     PortalDbConnectionSettings,
     SvodkaTemplate,
 )
@@ -32,6 +33,7 @@ def rebuild_subdivision_embeddings(modeladmin, request, queryset):
 class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
     form = PortalDbConnectionSettingsAdminForm
     change_form_template = "admin/analysis_app/portaldbconnectionsettings/change_form.html"
+    save_on_top = True
     list_display = ("profile", "host", "db_name", "last_check_ok", "last_check_at")
     readonly_fields = (
         "state_display",
@@ -111,6 +113,11 @@ class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
             if existing:
                 obj.password_encrypted = existing.password_encrypted
         super().save_model(request, obj, form, change)
+
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = bool(form.cleaned_data.get("debug_mode", False))
+        flags.save(update_fields=["debug_mode", "updated_at"])
+
         apply_portal_db_settings()
 
     def _connect_to_db(self, obj):

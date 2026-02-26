@@ -29,16 +29,6 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
         if not self.is_bound:
             self.fields["debug_mode"].initial = FeatureFlags.is_debug_enabled()
 
-    def save(self, commit=True):
-        obj = super().save(commit=False)
-        if commit:
-            obj.save()
-            flags = FeatureFlags.get_solo()
-            flags.debug_mode = bool(self.cleaned_data.get("debug_mode", False))
-            flags.save(update_fields=["debug_mode", "updated_at"])
-        return obj
-
-
 class SvodkaTemplateAdminForm(forms.ModelForm):
     pu_select = forms.ChoiceField(label="Пограничное управление:", required=True)
 

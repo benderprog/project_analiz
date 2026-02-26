@@ -1,10 +1,19 @@
+from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
 
-from apps.analysis_app.admin_forms import PortalDbConnectionSettingsAdminForm
 from apps.analysis_app.models import FeatureFlags, PortalDbConnectionSettings
 
 
 class DebugModeToggleTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_superuser(
+            username="admin",
+            email="admin@example.com",
+            password="pass",
+        )
+        self.client.force_login(self.user)
+
     def _settings_instance(self):
         settings_obj, _ = PortalDbConnectionSettings.objects.get_or_create(
             id=1,
@@ -18,7 +27,7 @@ class DebugModeToggleTests(TestCase):
         )
         return settings_obj
 
-    def _form_data(self, settings_obj):
+    def _post_data(self, settings_obj):
         return {
             "profile": settings_obj.profile,
             "host": settings_obj.host,
@@ -26,38 +35,35 @@ class DebugModeToggleTests(TestCase):
             "db_name": settings_obj.db_name,
             "user": settings_obj.user,
             "password": "",
+            "_save": "Save",
         }
 
-    def test_toggle_false_persists(self):
+    def test_post_without_debug_mode_sets_false(self):
         flags = FeatureFlags.get_solo()
         flags.debug_mode = True
         flags.save(update_fields=["debug_mode", "updated_at"])
         settings_obj = self._settings_instance()
 
-        form = PortalDbConnectionSettingsAdminForm(
-            data=self._form_data(settings_obj),
-            instance=settings_obj,
+        self.client.post(
+            reverse("admin:analysis_app_portaldbconnectionsettings_change", args=[settings_obj.pk]),
+            data=self._post_data(settings_obj),
+            follow=True,
         )
 
-        self.assertTrue(form.is_valid(), form.errors)
-        form.save()
+        self.assertFalse(FeatureFlags.get_solo().debug_mode)
 
-        self.assertFalse(FeatureFlags.is_debug_enabled())
-
-    def test_toggle_true_persists(self):
+    def test_post_with_debug_mode_sets_true(self):
         flags = FeatureFlags.get_solo()
         flags.debug_mode = False
         flags.save(update_fields=["debug_mode", "updated_at"])
         settings_obj = self._settings_instance()
-        data = self._form_data(settings_obj)
+        data = self._post_data(settings_obj)
         data["debug_mode"] = "on"
 
-        form = PortalDbConnectionSettingsAdminForm(
+        self.client.post(
+            reverse("admin:analysis_app_portaldbconnectionsettings_change", args=[settings_obj.pk]),
             data=data,
-            instance=settings_obj,
+            follow=True,
         )
 
-        self.assertTrue(form.is_valid(), form.errors)
-        form.save()
-
-        self.assertTrue(FeatureFlags.is_debug_enabled())
+        self.assertTrue(FeatureFlags.get_solo().debug_mode)
