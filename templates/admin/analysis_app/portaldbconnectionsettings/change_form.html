@@ -12,6 +12,29 @@
         Тестовая БД
       </a>
     </li>
+    <li>
+      <label style="display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; height: 100%;">
+        {{ adminform.form.debug_mode }}
+        {{ adminform.form.debug_mode.label }}
+      </label>
+    </li>
   {% endif %}
   {{ block.super }}
+{% endblock %}
+
+{% block admin_change_form_document_ready %}
+  {{ block.super }}
+  <script>
+    (function() {
+      var checkbox = document.getElementById('id_debug_mode');
+      var mainForm = document.querySelector('form[action][method="post"]');
+      if (!checkbox || !mainForm) {
+        return;
+      }
+      if (!mainForm.id) {
+        mainForm.id = 'portaldbconnectionsettings_form';
+      }
+      checkbox.setAttribute('form', mainForm.id);
+    })();
+  </script>
 {% endblock %}
