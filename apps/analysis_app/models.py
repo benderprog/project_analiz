@@ -44,6 +44,28 @@ class AnalysisRun(models.Model):
         return f"Run {self.run_id}"
 
 
+class FeatureFlags(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    debug_mode = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Флаги"
+        verbose_name_plural = "Флаги"
+
+    @classmethod
+    def get_solo(cls):
+        return cls.objects.get_or_create(pk=1)[0]
+
+    @classmethod
+    def is_debug_enabled(cls) -> bool:
+        try:
+            obj = cls.objects.only("debug_mode").get(pk=1)
+            return bool(obj.debug_mode)
+        except cls.DoesNotExist:
+            return False
+
+
 class SvodkaTemplate(models.Model):
     class Scope(models.TextChoices):
         PU = "pu", "PU"
