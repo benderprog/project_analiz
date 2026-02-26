@@ -12,6 +12,7 @@ from apps.analysis_app.models import (
     CachedPU,
     CachedSubdivision,
     CachedSubdivisionAlias,
+    FeatureFlags,
     PortalDbConnectionSettings,
     SvodkaTemplate,
 )
@@ -260,6 +261,19 @@ class CachedSubdivisionAliasAdmin(admin.ModelAdmin):
     list_display = ("alias_text", "subdivision", "updated_at")
     search_fields = ("alias_text", "normalized_alias")
     list_select_related = ("subdivision",)
+
+
+@admin.register(FeatureFlags)
+class FeatureFlagsAdmin(admin.ModelAdmin):
+    list_display = ("debug_mode", "updated_at")
+    fieldsets = (("DEBUG режим", {"fields": ("debug_mode",)}),)
+
+    def has_add_permission(self, request):
+        return not FeatureFlags.objects.exists()
+
+    def save_model(self, request, obj, form, change):
+        obj.pk = 1
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(SvodkaTemplate)
