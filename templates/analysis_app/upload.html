@@ -37,8 +37,10 @@
             <td class="queue-action">
               {% if run.status == 'done' and run.results_url %}
                 <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
+                {% if debug_mode and run.debug_zip_url %}<br><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
               {% elif run.status == 'failed' %}
                 {{ run.error_message|default:"—" }}
+                {% if debug_mode and run.debug_zip_url %}<br><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
               {% elif run.status == 'queued' or run.status == 'running' %}
                 <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
                 <div class="progress-text">{{ run.progress_label }}</div>
@@ -120,6 +122,7 @@
 (function () {
   const statusUrl = "{{ queue_status_url }}";
   const body = document.getElementById("queue-table-body");
+  const debugMode = "{{ debug_mode|yesno:'true,false' }}" === "true";
   if (!statusUrl || !body) return;
 
   const escapeHtml = (value) => {
@@ -153,9 +156,11 @@
 
       if (actionCell) {
         if (run.status === "done" && run.results_url) {
-          actionCell.innerHTML = `<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`;
+          const debugLink = debugMode && run.debug_zip_url ? `<br><a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>` : "";
+          actionCell.innerHTML = `<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>${debugLink}`;
         } else if (run.status === "failed") {
-          actionCell.innerHTML = escapeHtml(run.error_message || "—");
+          const debugLink = debugMode && run.debug_zip_url ? `<br><a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>` : "";
+          actionCell.innerHTML = `${escapeHtml(run.error_message || "—")}${debugLink}`;
         } else if (run.status === "queued" || run.status === "running") {
           actionCell.innerHTML = renderProgress(run);
         } else {

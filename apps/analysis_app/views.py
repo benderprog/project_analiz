@@ -1,11 +1,14 @@
 import logging
 import os
+import json
+import zipfile
 from pathlib import PurePath
+from io import BytesIO
 from datetime import timedelta
 
 from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
-from django.http import JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -18,7 +21,7 @@ from apps.analysis_app.forms import (
     UploadDocxWithPuForm,
     is_general_summary_pu,
 )
-from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
@@ -69,6 +72,62 @@ def _results_url(run: AnalysisRun) -> str:
     if run.status == AnalysisRun.Status.DONE:
         return reverse("analysis-detail", kwargs={"run_id": str(run.run_id)})
     return ""
+
+
+def _debug_zip_url(run: AnalysisRun) -> str:
+    if run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED]:
+        return reverse("analysis-debug-zip", kwargs={"run_id": str(run.run_id)})
+    return ""
+
+
+def _app_version_payload() -> dict[str, str]:
+    settings_version = getattr(settings, "VERSION", "")
+    git_sha = os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA") or os.getenv("SOURCE_VERSION") or ""
+    return {
+        "version": str(settings_version or "unknown"),
+        "git_sha": str(git_sha or "unknown"),
+    }
+
+
+def _safe_run_payload(run: AnalysisRun) -> dict[str, object]:
+    return {
+        "run_id": str(run.run_id),
+        "uploaded_by_id": run.uploaded_by_id,
+        "original_filename": run.original_filename,
+        "created_session_key": run.created_session_key,
+        "detected_pu_id": run.detected_pu_id,
+        "detected_pu_name": run.detected_pu_name,
+        "selected_pu_id": run.selected_pu_id,
+        "selected_pu_name": run.selected_pu_name,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "status": run.status,
+        "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "error_message": run.error_message,
+        "progress_total": run.progress_total,
+        "progress_done": run.progress_done,
+        "progress_updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else None,
+    }
+
+
+def _build_slicing_payload(results_qs) -> dict[str, object]:
+    slicing: dict[str, object] = {"template": None, "items": []}
+    for result in results_qs:
+        match_result = result.match_result or {}
+        debug_data = match_result.get("debug") or {}
+        template_info = debug_data.get("template") or {}
+        if not slicing["template"] and template_info:
+            slicing["template"] = {
+                "template_id": template_info.get("template_id"),
+                "scope": template_info.get("scope"),
+                "pu_id": template_info.get("pu_id"),
+                "begin": template_info.get("begin"),
+                "end": template_info.get("end"),
+            }
+        if debug_data:
+            slicing["items"].append({"idx": result.paragraph.idx, "debug": debug_data})
+    return slicing
 
 
 
@@ -941,6 +1000,7 @@ class UploadView(View):
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
             run.results_url = _results_url(run)
+            run.debug_zip_url = _debug_zip_url(run)
             progress_payload = _progress_payload(run)
             run.progress_total = progress_payload["progress_total"]
             run.progress_done = progress_payload["progress_done"]
@@ -974,6 +1034,7 @@ class UploadView(View):
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
+            "debug_mode": FeatureFlags.is_debug_enabled(),
         }
 
     def _pending_runs(self, request, limit: int = 20):
@@ -1211,6 +1272,7 @@ class AnalysisQueueStatusView(View):
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
+                "debug_zip_url": _debug_zip_url(run) if FeatureFlags.is_debug_enabled() else "",
                 "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
                 "position": None,
                 "progress_total": progress_payload["progress_total"],
@@ -1264,6 +1326,72 @@ class AnalysisStatusView(View):
         return JsonResponse(payload)
 
 
+class AnalysisDebugZipView(View):
+    def get(self, request, run_id):
+        if not FeatureFlags.is_debug_enabled():
+            raise Http404
+
+        run = get_object_or_404(AnalysisRun, run_id=run_id)
+
+        if request.user.is_authenticated:
+            if run.uploaded_by_id != request.user.id:
+                raise Http404
+        else:
+            session_key = UploadView._ensure_session_key(request)
+            if run.created_session_key != session_key:
+                raise Http404
+
+        results_qs = AnalysisResult.objects.filter(paragraph__run_id=run.run_id).select_related(
+            "paragraph"
+        ).order_by("paragraph__idx")
+
+        meta_payload = {
+            "run_id": str(run.run_id),
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "status": run.status,
+            "selected_pu_id": run.selected_pu_id,
+            "selected_pu_name": run.selected_pu_name,
+            "original_filename": run.original_filename or _display_filename(run.file.name),
+            "debug_mode": True,
+            "app": _app_version_payload(),
+        }
+
+        slicing_payload = _build_slicing_payload(results_qs)
+
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("meta.json", json.dumps(meta_payload, ensure_ascii=False, indent=2))
+            archive.writestr("run.json", json.dumps(_safe_run_payload(run), ensure_ascii=False, indent=2))
+
+            if slicing_payload.get("template") or slicing_payload.get("items"):
+                archive.writestr(
+                    "slicing.json",
+                    json.dumps(slicing_payload, ensure_ascii=False, indent=2),
+                )
+
+            for event_idx, result in enumerate(results_qs, start=1):
+                paragraph = result.paragraph
+                payload = {
+                    "idx": paragraph.idx,
+                    "title": f"Событие {paragraph.idx}",
+                    "preview": (paragraph.text or "")[:200],
+                    "source_kind": paragraph.source_kind,
+                    "source_cells": paragraph.source_cells,
+                    "source_table_header_cells": paragraph.source_table_header_cells,
+                    "full_text": paragraph.text,
+                    "extracted_attributes": result.extracted_attributes or {},
+                    "match_result": result.match_result or {},
+                }
+                archive.writestr(
+                    f"events/event_{event_idx:04d}.json",
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                )
+
+        response = HttpResponse(buffer.getvalue(), content_type="application/zip")
+        response["Content-Disposition"] = f'attachment; filename="debug_{run.run_id}.zip"'
+        return response
+
+
 class AnalysisDetailView(View):
     template_name = "analysis_app/detail.html"
 
@@ -1304,5 +1432,8 @@ class AnalysisDetailView(View):
                 "events": events,
                 "selected_event": selected_event,
                 "selected_pu_label": pu_label,
+                "debug_mode": FeatureFlags.is_debug_enabled(),
+                "debug_zip_url": _debug_zip_url(run),
+                "show_debug_zip_link": FeatureFlags.is_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
             },
         )
