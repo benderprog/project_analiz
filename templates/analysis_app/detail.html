@@ -9,7 +9,21 @@
   <p>Run ID: {{ run.run_id }}</p>
   <p>Статус: {{ run.status }}</p>
   <p>ПУ: {{ selected_pu_label }}</p>
+  {% if debug_mode %}
+    <p><a class="button" href="{% url 'analysis-debug-zip' run_id=run.run_id %}">Скачать debug-пакет</a></p>
+  {% endif %}
 </section>
+
+{% if debug_mode and pipeline_stages %}
+  <section class="card">
+    <h3>Тайминги этапов</h3>
+    <ul>
+      {% for stage in pipeline_stages %}
+        <li>{{ stage.stage }} — {{ stage.duration_ms }} мс</li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
 
 {% if events %}
   <div class="analysis-layout">

@@ -22,6 +22,7 @@ class AnalysisRun(models.Model):
     file = models.FileField(upload_to="uploads/")
     selected_pu_id = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    debug_pipeline = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
     def __str__(self) -> str:
@@ -192,3 +193,22 @@ class PortalDbConnectionSettings(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_profile_display()}: {self.host}:{self.port}/{self.db_name}"
+
+
+class FeatureFlags(models.Model):
+    singleton_id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    debug_mode = models.BooleanField("DEBUG режим", default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Флаги приложения"
+        verbose_name_plural = "Флаги приложения"
+
+    def __str__(self) -> str:
+        return "Флаги приложения"
+
+    @classmethod
+    def is_debug_enabled(cls) -> bool:
+        flags = cls.objects.filter(pk=1).values_list("debug_mode", flat=True).first()
+        return bool(flags)
