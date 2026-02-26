@@ -1016,6 +1016,43 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     }
 
 
+
+
+def _empty_event_payload(idx: int) -> dict:
+    return {
+        "idx": idx,
+        "title": "",
+        "preview": "",
+        "source_kind": "paragraph",
+        "source_cells": [],
+        "source_table_header_cells": [],
+        "highlighted_cells": [],
+        "highlighted_html": "<p>—</p>",
+        "extracted_timestamp_display": "—",
+        "portal_timestamp_display": "—",
+        "extracted": {"subdivision_name": "—", "subdivision_candidates": [], "offenders": [], "staff": []},
+        "portal": {"subdivision_name": "—", "offenders": [], "event_type": "—", "article_of_law": "—"},
+        "predicted": {
+            "event_type": "—",
+            "article_of_law": "—",
+            "classifier_article_of_law": "—",
+            "best_pattern_text": "—",
+            "classifier_candidates": [],
+            "classifier_pattern_candidates": [],
+            "classifier_similar_candidates": [],
+            "pattern_event_types": [],
+        },
+        "match": {
+            "matched": False,
+            "time_delta_minutes": None,
+            "offenders_summary": None,
+            "offenders_details": [],
+            "subdivision_match_percent": None,
+        },
+        "status": {"timestamp": "neutral", "subdivision": "neutral", "offenders": "neutral", "event_type": "neutral", "article": "neutral"},
+        "comments": [],
+    }
+
 class UploadView(View):
     template_name = "analysis_app/upload.html"
 
@@ -1376,6 +1413,96 @@ class AnalysisStatusView(View):
         return JsonResponse(payload)
 
 
+def _get_run_for_request(run_id, request) -> AnalysisRun:
+    run = get_object_or_404(AnalysisRun, run_id=run_id)
+    if request.user.is_authenticated:
+        if run.uploaded_by_id != request.user.id:
+            raise Http404
+        return run
+
+    session_key = UploadView._ensure_session_key(request)
+    if run.created_session_key != session_key:
+        raise Http404
+    return run
+
+
+def paragraph_to_event_json(paragraph: AnalysisParagraph) -> dict:
+    return _build_event_card(paragraph)
+
+
+class AnalysisEventsListView(View):
+    def get(self, request, run_id):
+        run = _get_run_for_request(run_id, request)
+        try:
+            page = max(1, int(request.GET.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.GET.get("page_size", 50))
+        except (TypeError, ValueError):
+            page_size = 50
+        page_size = max(1, min(page_size, 100))
+
+        paragraphs = run.paragraphs.select_related("result").order_by("idx")
+        paginator = Paginator(paragraphs, page_size)
+        try:
+            page_obj = paginator.page(page)
+        except EmptyPage:
+            page_obj = paginator.page(paginator.num_pages or 1)
+
+        items = []
+        for paragraph in page_obj.object_list:
+            result = paragraph.result
+            match_result = result.match_result or {}
+            not_found = not bool(match_result.get("matched"))
+            title = f"Событие {paragraph.idx}" + (" — в базе данных не найдено" if not_found else "")
+            text = paragraph.text or ""
+            items.append(
+                {
+                    "idx": paragraph.idx,
+                    "title": title,
+                    "preview": text[:80] + ("…" if len(text) > 80 else ""),
+                    "not_found": not_found,
+                    "status": {
+                        "timestamp": _status_for_timestamp(match_result),
+                        "subdivision": _status_for_subdivision(match_result),
+                        "offenders": _status_for_offenders(match_result),
+                        "event_type": _status_from_flag(match_result.get("event_type_ok")),
+                        "article": match_result.get("article_status") or _status_from_flag(match_result.get("article_ok")),
+                    },
+                }
+            )
+
+        return JsonResponse(
+            {
+                "run_id": str(run.run_id),
+                "status": run.status,
+                "total": paginator.count,
+                "page": page_obj.number,
+                "page_size": page_size,
+                "has_next": page_obj.has_next(),
+                "items": items,
+            }
+        )
+
+
+class AnalysisEventDetailView(View):
+    def get(self, request, run_id, idx):
+        run = _get_run_for_request(run_id, request)
+        paragraph = get_object_or_404(
+            AnalysisParagraph.objects.select_related("result", "run"),
+            run=run,
+            idx=idx,
+        )
+        payload = paragraph_to_event_json(paragraph)
+        pattern_event_types_map = _build_pattern_event_types_map([payload])
+        predicted = payload.get("predicted") or {}
+        best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
+        predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
+        payload["predicted"] = predicted
+        return JsonResponse(payload)
+
+
 class AnalysisDebugZipView(View):
     def get(self, request, run_id):
         if not FeatureFlags.is_debug_enabled():
@@ -1407,25 +1534,21 @@ class AnalysisDetailView(View):
     template_name = "analysis_app/detail.html"
 
     def get(self, request, run_id):
-        run = get_object_or_404(AnalysisRun, run_id=run_id)
-        paragraphs = run.paragraphs.select_related("result").order_by("idx")
-        events = [_build_event_card(paragraph) for paragraph in paragraphs]
-        pattern_event_types_map = _build_pattern_event_types_map(events)
-        for event in events:
-            predicted = event.get("predicted") or {}
-            best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
-            predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
-            event["predicted"] = predicted
+        run = _get_run_for_request(run_id, request)
 
-        selected_idx = request.GET.get("event")
+        selected_idx_param = request.GET.get("event")
         try:
-            selected_idx = int(selected_idx)
+            selected_idx = max(1, int(selected_idx_param))
         except (TypeError, ValueError):
-            selected_idx = events[0]["idx"] if events else None
-        selected_event = next(
-            (event for event in events if event["idx"] == selected_idx),
-            events[0] if events else None,
-        )
+            selected_idx = run.paragraphs.order_by("idx").values_list("idx", flat=True).first() or 1
+        selected_paragraph = run.paragraphs.select_related("result", "run").filter(idx=selected_idx).first()
+        selected_event = paragraph_to_event_json(selected_paragraph) if selected_paragraph else _empty_event_payload(selected_idx)
+        pattern_event_types_map = _build_pattern_event_types_map([selected_event]) if selected_paragraph else {}
+        predicted = selected_event.get("predicted") or {}
+        best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
+        predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
+        selected_event["predicted"] = predicted
+
         selected_pu = None
         if run.selected_pu_id:
             selected_pu = CachedPU.objects.filter(
@@ -1439,9 +1562,23 @@ class AnalysisDetailView(View):
             self.template_name,
             {
                 "run": run,
-                "paragraphs": paragraphs,
-                "events": events,
+                "selected_idx": selected_idx,
                 "selected_event": selected_event,
+                "events_list_url": reverse("analysis-events-list", kwargs={"run_id": str(run.run_id)}),
+                "event_detail_url_template": reverse(
+                    "analysis-event-detail", kwargs={"run_id": str(run.run_id), "idx": 0}
+                ).replace("/0/", "/{idx}/"),
+                "run_status_url": reverse("analysis-status", kwargs={"run_id": str(run.run_id)}),
+                "detail_config": {
+                    "run_id": str(run.run_id),
+                    "selected_idx": selected_idx,
+                    "events_list_url": reverse("analysis-events-list", kwargs={"run_id": str(run.run_id)}),
+                    "event_detail_url_template": reverse(
+                        "analysis-event-detail", kwargs={"run_id": str(run.run_id), "idx": 0}
+                    ).replace("/0/", "/{idx}/"),
+                    "status_url": reverse("analysis-status", kwargs={"run_id": str(run.run_id)}),
+                    "run_status": run.status,
+                },
                 "selected_pu_label": pu_label,
                 "debug_mode": FeatureFlags.is_debug_enabled(),
                 "debug_zip_url": _debug_zip_url(run),
