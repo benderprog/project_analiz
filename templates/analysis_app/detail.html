@@ -19,24 +19,12 @@
   {% endif %}
 </section>
 
-{% if events %}
   <div class="analysis-layout">
     <aside class="analysis-list">
       <h3>События</h3>
-      <ul>
-        {% for event in events %}
-          <li>
-            <a
-              class="event-item{% if selected_event and event.idx == selected_event.idx %} is-active{% endif %}"
-              href="?event={{ event.idx }}"
-              data-index="{{ event.idx }}"
-            >
-              <span class="event-number">#{{ event.idx }}</span>
-              <span class="event-preview">{{ event.preview }}</span>
-            </a>
-          </li>
-        {% endfor %}
-      </ul>
+      <ul id="events-list"></ul>
+      <button type="button" id="load-more-events" class="secondary" hidden>Показать ещё</button>
+      <p id="events-load-error" hidden>Ошибка загрузки событий.</p>
     </aside>
 
     <section class="analysis-detail">
@@ -308,11 +296,11 @@
     </section>
   </div>
 
-  {{ events|json_script:"events-data" }}
+  {{ detail_config|json_script:"detail-config" }}
   <script>
-    const events = JSON.parse(document.getElementById("events-data").textContent);
+    const config = JSON.parse(document.getElementById("detail-config").textContent);
     const badgeIcons = { green: "✓", yellow: "!", red: "✕", neutral: "—" };
-    const listItems = document.querySelectorAll(".event-item");
+    const state = { page: 0, hasNext: false, loadedIdx: new Set(), selectedIdx: Number(config.selected_idx || 1) };
 
     const dom = {
       title: document.getElementById("event-title"),
@@ -348,6 +336,9 @@
         clsEventType: document.querySelector('[data-field="cls-event-type"]'),
         clsArticle: document.querySelector('[data-field="cls-article"]'),
       },
+      eventsList: document.getElementById("events-list"),
+      loadMoreEvents: document.getElementById("load-more-events"),
+      eventsLoadError: document.getElementById("events-load-error"),
       badges: {
         timestamp: document.querySelector('[data-badge="timestamp"]'),
         subdivision: document.querySelector('[data-badge="subdivision"]'),
@@ -576,23 +567,107 @@
       dom.commentsList.innerHTML = renderListItems(event.comments);
     };
 
-    listItems.forEach((item) => {
-      item.addEventListener("click", (event) => {
-        event.preventDefault();
-        const index = Number(item.dataset.index);
-        const selected = events.find((entry) => entry.idx === index);
-        if (!selected) {
+    const setActiveItem = (idx) => {
+      dom.eventsList.querySelectorAll(".event-item").forEach((entry) => {
+        entry.classList.toggle("is-active", Number(entry.dataset.index) === Number(idx));
+      });
+    };
+
+    const fetchEventDetail = async (idx) => {
+      const response = await fetch(config.event_detail_url_template.replace("{idx}", String(idx)));
+      if (!response.ok) throw new Error("detail");
+      return response.json();
+    };
+
+    const appendEventItems = (items) => {
+      items.forEach((item) => {
+        if (state.loadedIdx.has(item.idx)) return;
+        state.loadedIdx.add(item.idx);
+        const li = document.createElement("li");
+        li.innerHTML = `<a class="event-item" href="?event=${item.idx}" data-index="${item.idx}"><span class="event-number">#${item.idx}</span><span class="event-preview">${escapeHtml(item.preview || "")}</span></a>`;
+        const link = li.querySelector(".event-item");
+        link.addEventListener("click", async (event) => {
+          event.preventDefault();
+          const selected = Number(link.dataset.index);
+          state.selectedIdx = selected;
+          setActiveItem(selected);
+          history.replaceState({}, "", `?event=${selected}`);
+          try {
+            const detail = await fetchEventDetail(selected);
+            renderEvent(detail);
+          } catch (_err) {
+            dom.eventsLoadError.hidden = false;
+          }
+        });
+        dom.eventsList.appendChild(li);
+      });
+      setActiveItem(state.selectedIdx);
+    };
+
+    const fetchEventsPage = async (page) => {
+      const url = new URL(config.events_list_url, window.location.origin);
+      url.searchParams.set("page", String(page));
+      url.searchParams.set("page_size", "50");
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("list");
+      return response.json();
+    };
+
+    const loadNextPage = async () => {
+      const data = await fetchEventsPage(state.page + 1);
+      state.page = data.page;
+      state.hasNext = data.has_next;
+      appendEventItems(data.items || []);
+      dom.loadMoreEvents.hidden = !state.hasNext;
+      if (state.page === 1 && (data.items || []).length) {
+        const requestedIdx = Number(new URLSearchParams(window.location.search).get("event"));
+        const idxToLoad = Number.isFinite(requestedIdx) && requestedIdx > 0 ? requestedIdx : data.items[0].idx;
+        state.selectedIdx = idxToLoad;
+        const detail = await fetchEventDetail(idxToLoad);
+        renderEvent(detail);
+        setActiveItem(idxToLoad);
+      }
+    };
+
+    const waitUntilFinished = async () => {
+      while (true) {
+        const statusResponse = await fetch(config.status_url);
+        if (!statusResponse.ok) throw new Error("status");
+        const statusData = await statusResponse.json();
+        const currentStatus = String(statusData.status || "").toLowerCase();
+        if (["done", "failed", "canceled"].includes(currentStatus)) {
           return;
         }
-        listItems.forEach((entry) => entry.classList.remove("is-active"));
-        item.classList.add("is-active");
-        renderEvent(selected);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    };
+
+    const init = async () => {
+      try {
+        const initialStatus = String(config.run_status || "").toLowerCase();
+        if (!["done", "failed", "canceled"].includes(initialStatus)) {
+          dom.eventsLoadError.hidden = false;
+          dom.eventsLoadError.textContent = "Идет анализ";
+          await waitUntilFinished();
+          dom.eventsLoadError.hidden = true;
+          dom.eventsLoadError.textContent = "Ошибка загрузки событий.";
+        }
+        await loadNextPage();
+      } catch (_err) {
+        dom.eventsLoadError.hidden = false;
+      }
+    };
+
+    if (dom.loadMoreEvents) {
+      dom.loadMoreEvents.addEventListener("click", async () => {
+        try {
+          await loadNextPage();
+        } catch (_err) {
+          dom.eventsLoadError.hidden = false;
+        }
       });
-    });
+    }
+
+    init();
   </script>
-{% else %}
-  <section class="card">
-    <p>События не найдены.</p>
-  </section>
-{% endif %}
 {% endblock %}
