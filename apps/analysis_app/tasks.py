@@ -1,10 +1,12 @@
 import logging
 
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.utils import timezone
 
-from apps.analysis_app.models import AnalysisRun
+from apps.analysis_app.debug_package import build_debug_zip_bytes, prune_debug_packages_for_owner
+from apps.analysis_app.models import AnalysisRun, FeatureFlags
 from apps.analysis_app.services import run_analysis_pipeline
 from config.celery import app
 
@@ -75,12 +77,26 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         run.finished_at = timezone.now()
         run.progress_done = run.progress_total if run.progress_total is not None else total_events
         run.save(update_fields=["status", "finished_at", "progress_done"])
+        if FeatureFlags.is_debug_enabled():
+            debug_bytes = build_debug_zip_bytes(run)
+            filename = f"debug_{run.run_id}.zip"
+            run.debug_package_file.save(filename, ContentFile(debug_bytes), save=False)
+            run.debug_package_created_at = timezone.now()
+            run.save(update_fields=["debug_package_file", "debug_package_created_at"])
+            prune_debug_packages_for_owner(run)
     except Exception as exc:  # noqa: BLE001
         logger.exception("DOCX analysis failed for run %s", run_id)
         run.status = AnalysisRun.Status.FAILED
         run.error_message = str(exc)
         run.finished_at = timezone.now()
         run.save(update_fields=["status", "error_message", "finished_at"])
+        if FeatureFlags.is_debug_enabled():
+            debug_bytes = build_debug_zip_bytes(run)
+            filename = f"debug_{run.run_id}.zip"
+            run.debug_package_file.save(filename, ContentFile(debug_bytes), save=False)
+            run.debug_package_created_at = timezone.now()
+            run.save(update_fields=["debug_package_file", "debug_package_created_at"])
+            prune_debug_packages_for_owner(run)
         cleanup_run_upload(run)
         raise
     cleanup_run_upload(run)
