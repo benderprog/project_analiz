@@ -25,4 +25,39 @@
     </form>
   </section>
 {% endif %}
+
+{% if runs %}
+  <section class="card">
+    <h2>Мои загрузки</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Run ID</th>
+          <th>Статус</th>
+          <th>Создано</th>
+          <th>Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+          <tr>
+            <td>{{ run.run_id }}</td>
+            <td>{{ run.status }}</td>
+            <td>{{ run.created_at|date:"d.m.Y H:i" }}</td>
+            <td>
+              {% if run.status == "completed" or run.status == "failed" %}
+                <a href="{% url 'analysis-detail' run_id=run.run_id %}">Смотреть результаты</a>
+                {% if debug_mode %}
+                  · <a href="{% url 'analysis-debug-zip' run_id=run.run_id %}">Debug-пакет</a>
+                {% endif %}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endif %}
 {% endblock %}

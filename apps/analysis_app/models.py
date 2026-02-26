@@ -196,9 +196,8 @@ class PortalDbConnectionSettings(models.Model):
 
 
 class FeatureFlags(models.Model):
-    singleton_id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
-    debug_mode = models.BooleanField("DEBUG режим", default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    debug_mode = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -209,6 +208,5 @@ class FeatureFlags(models.Model):
         return "Флаги приложения"
 
     @classmethod
-    def is_debug_enabled(cls) -> bool:
-        flags = cls.objects.filter(pk=1).values_list("debug_mode", flat=True).first()
-        return bool(flags)
+    def is_enabled(cls) -> bool:
+        return cls.objects.filter(pk=1, debug_mode=True).exists()

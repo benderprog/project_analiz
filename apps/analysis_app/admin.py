@@ -189,8 +189,8 @@ class PortalDbConnectionSettingsAdmin(admin.ModelAdmin):
 @admin.register(FeatureFlags)
 class FeatureFlagsAdmin(admin.ModelAdmin):
     list_display = ("debug_mode", "updated_at")
-    readonly_fields = ("created_at", "updated_at")
-    fields = ("debug_mode", "created_at", "updated_at")
+    readonly_fields = ("updated_at",)
+    fields = ("debug_mode", "updated_at")
 
     def has_add_permission(self, request):
         return not FeatureFlags.objects.exists()
@@ -198,8 +198,13 @@ class FeatureFlagsAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+    def save_model(self, request, obj, form, change):
+        obj.pk = 1
+        FeatureFlags.objects.get_or_create(pk=1)
+        super().save_model(request, obj, form, change)
+
     def changelist_view(self, request, extra_context=None):
-        obj = FeatureFlags.objects.order_by("singleton_id").first()
+        obj = FeatureFlags.objects.order_by("id").first()
         if obj:
             url = reverse("admin:analysis_app_featureflags_change", args=[obj.pk])
             return redirect(url)

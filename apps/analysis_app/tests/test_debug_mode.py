@@ -26,7 +26,7 @@ class DebugModeTests(TestCase):
         return run
 
     def test_feature_flags_default_false_without_row(self):
-        self.assertFalse(FeatureFlags.is_debug_enabled())
+        self.assertFalse(FeatureFlags.is_enabled())
 
     def test_debug_zip_404_when_debug_mode_disabled(self):
         run = self._build_run()
@@ -40,7 +40,7 @@ class DebugModeTests(TestCase):
 
     def test_debug_zip_200_when_debug_mode_enabled(self):
         run = self._build_run()
-        FeatureFlags.objects.create(debug_mode=True)
+        FeatureFlags.objects.update_or_create(pk=1, defaults={"debug_mode": True})
         session = self.client.session
         session["analysis_run_ids"] = [str(run.run_id)]
         session.save()
@@ -50,6 +50,7 @@ class DebugModeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         archive = zipfile.ZipFile(io.BytesIO(response.content))
         self.assertIn("meta.json", archive.namelist())
+        self.assertIn("events/event_0001.json", archive.namelist())
 
     def test_upload_context_contains_debug_mode(self):
         response = self.client.get(reverse("analysis-upload"))

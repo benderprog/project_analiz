@@ -617,33 +617,53 @@ def _can_access_run(request, run: AnalysisRun) -> bool:
 
 def _build_debug_zip(run: AnalysisRun) -> bytes:
     buffer = io.BytesIO()
+    selected_pu = None
+    if run.selected_pu_id:
+        selected_pu = CachedPU.objects.filter(portal_pu_id=run.selected_pu_id).first()
+
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         meta = {
             "run_id": str(run.run_id),
             "status": run.status,
             "created_at": run.created_at.isoformat() if run.created_at else None,
-            "selected_pu_id": str(run.selected_pu_id) if run.selected_pu_id else None,
-            "version": "1",
-            "debug_pipeline": run.debug_pipeline or {},
+            "selected_pu": {
+                "id": str(run.selected_pu_id) if run.selected_pu_id else None,
+                "name": selected_pu.short_name if selected_pu else None,
+            },
+            "versions": {
+                "debug_zip": "1",
+            },
         }
         archive.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
-        template = {
-            "selected_pu_id": str(run.selected_pu_id) if run.selected_pu_id else None,
-        }
-        archive.writestr("template.json", json.dumps(template, ensure_ascii=False, indent=2))
+        first_result = (
+            AnalysisResult.objects.filter(paragraph__run=run)
+            .order_by("paragraph__idx")
+            .values_list("match_result", flat=True)
+            .first()
+            or {}
+        )
+        slicing_debug = first_result.get("slicing_debug")
+        if slicing_debug is not None:
+            archive.writestr("slicing_debug.json", json.dumps(slicing_debug, ensure_ascii=False, indent=2))
 
         for paragraph in run.paragraphs.select_related("result").order_by("idx"):
             if not hasattr(paragraph, "result"):
                 continue
+            extracted = paragraph.result.extracted_attributes or {}
+            source_cells = extracted.get("source_cells")
+            source_header = extracted.get("source_header")
+            source_kind = "table" if source_cells or source_header else "text"
             event_payload = {
-                "idx": paragraph.idx,
-                "text": paragraph.text,
-                "extracted_attributes": paragraph.result.extracted_attributes or {},
+                "source_kind": source_kind,
+                "source_cells": source_cells,
+                "source_header": source_header,
+                "full_text": paragraph.text,
+                "extracted_attributes": extracted,
                 "match_result": paragraph.result.match_result or {},
             }
             archive.writestr(
-                f"events/{paragraph.idx}.json",
+                f"events/event_{paragraph.idx:04d}.json",
                 json.dumps(event_payload, ensure_ascii=False, indent=2),
             )
 
@@ -652,7 +672,7 @@ def _build_debug_zip(run: AnalysisRun) -> bytes:
 
 class AnalysisDebugZipView(View):
     def get(self, request, run_id):
-        if not FeatureFlags.is_debug_enabled():
+        if not FeatureFlags.is_enabled():
             raise Http404
 
         run = get_object_or_404(AnalysisRun, run_id=run_id)
@@ -669,18 +689,25 @@ class AnalysisDebugZipView(View):
 class UploadView(View):
     template_name = "analysis_app/upload.html"
 
+    def _base_context(self, request, **extra):
+        run_ids = _session_run_ids(request)
+        runs = AnalysisRun.objects.filter(run_id__in=run_ids).order_by("-created_at")
+        context = {
+            "upload_form": UploadDocxForm(),
+            "debug_mode": FeatureFlags.is_enabled(),
+            "runs": runs,
+            **extra,
+        }
+        return context
+
     def get(self, request):
-        return render(
-            request,
-            self.template_name,
-            {"upload_form": UploadDocxForm(), "debug_mode": FeatureFlags.is_debug_enabled()},
-        )
+        return render(request, self.template_name, self._base_context(request))
 
     def post(self, request):
         if request.FILES.get("file"):
             upload_form = UploadDocxForm(request.POST, request.FILES)
             if not upload_form.is_valid():
-                return render(request, self.template_name, {"upload_form": upload_form, "debug_mode": FeatureFlags.is_debug_enabled()})
+                return render(request, self.template_name, self._base_context(request, upload_form=upload_form))
 
             run = AnalysisRun.objects.create(
                 uploaded_by=request.user if request.user.is_authenticated else None,
@@ -698,12 +725,7 @@ class UploadView(View):
             return render(
                 request,
                 self.template_name,
-                {
-                    "upload_form": UploadDocxForm(),
-                    "selection_form": selection_form,
-                    "detection": detection,
-                    "debug_mode": FeatureFlags.is_debug_enabled(),
-                },
+                self._base_context(request, selection_form=selection_form, detection=detection),
             )
 
         selection_form = PuSelectionForm(request.POST)
@@ -711,7 +733,7 @@ class UploadView(View):
             return render(
                 request,
                 self.template_name,
-                {"upload_form": UploadDocxForm(), "selection_form": selection_form, "debug_mode": FeatureFlags.is_debug_enabled()},
+                self._base_context(request, selection_form=selection_form),
             )
 
         run = get_object_or_404(AnalysisRun, run_id=selection_form.cleaned_data["upload_id"])
@@ -722,7 +744,7 @@ class UploadView(View):
         try:
             from time import monotonic
 
-            debug_mode = FeatureFlags.is_debug_enabled()
+            debug_mode = FeatureFlags.is_enabled()
             parse_started = monotonic()
             paragraphs = parse_docx(run.file.path)
             parse_duration = monotonic() - parse_started
@@ -817,7 +839,7 @@ class AnalysisDetailView(View):
                 "events": events,
                 "selected_event": selected_event,
                 "selected_pu_label": pu_label,
-                "debug_mode": FeatureFlags.is_debug_enabled(),
+                "debug_mode": FeatureFlags.is_enabled(),
                 "pipeline_stages": (run.debug_pipeline or {}).get("stages") or [],
             },
         )
