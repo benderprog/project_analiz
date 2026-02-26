@@ -3,6 +3,10 @@
 {% block extrahead %}
   {{ block.super }}
   <style>
+    .debug-toggle-wrap {
+      margin: 8px 0;
+    }
+
     .debug-toggle {
       float: right;
       display: inline-flex;
@@ -37,10 +41,12 @@
   {{ block.super }}
 {% endblock %}
 
-{% block submit_buttons_top %}
-  <div class="debug-toggle">
-    {{ adminform.form.debug_mode }}
-    {{ adminform.form.debug_mode.label_tag }}
+{% block after_field_sets %}
+  <div class="debug-toggle-wrap">
+    <div class="debug-toggle">
+      {{ adminform.form.debug_mode }}
+      {{ adminform.form.debug_mode.label_tag }}
+    </div>
   </div>
   {{ block.super }}
 {% endblock %}
