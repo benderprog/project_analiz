@@ -5,6 +5,8 @@
   .progress-wrap { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; }
   .progress-bar { height: 100%; background: var(--color-primary, #4caf50); }
   .progress-text { font-size: 12px; margin-top: 4px; }
+  .queue-action-links { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .queue-error-text { margin-top: 4px; }
 </style>
 <section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
@@ -36,11 +38,13 @@
             <td class="queue-elapsed">{{ run.elapsed_display }}</td>
             <td class="queue-action">
               {% if run.status == 'done' and run.results_url %}
-                <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
-                {% if debug_mode and run.debug_zip_url %}<br><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
+                <div class="queue-action-links">
+                  <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
+                  {% if debug_mode and run.debug_zip_url %}<a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
+                </div>
               {% elif run.status == 'failed' %}
-                {{ run.error_message|default:"—" }}
-                {% if debug_mode and run.debug_zip_url %}<br><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
+                {% if debug_mode and run.debug_zip_url %}<div class="queue-action-links"><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a></div>{% endif %}
+                <div class="queue-error-text">{{ run.error_message|default:"—" }}</div>
               {% elif run.status == 'queued' or run.status == 'running' %}
                 <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
                 <div class="progress-text">{{ run.progress_label }}</div>
@@ -138,6 +142,8 @@
     return `<div class="progress-wrap"><div class="progress-bar" style="width: ${percent}%"></div></div><div class="progress-text">${label}</div>`;
   };
 
+  const renderActionLinks = (links) => `<div class="queue-action-links">${links.join("")}</div>`;
+
   const updateRows = (runs) => {
     const byId = new Map(runs.map((run) => [run.run_id, run]));
     body.querySelectorAll("tr[data-run-id]").forEach((row) => {
@@ -156,11 +162,16 @@
 
       if (actionCell) {
         if (run.status === "done" && run.results_url) {
-          const debugLink = debugMode && run.debug_zip_url ? `<br><a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>` : "";
-          actionCell.innerHTML = `<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>${debugLink}`;
+          const links = [`<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`];
+          if (debugMode && run.debug_zip_url) {
+            links.push(`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`);
+          }
+          actionCell.innerHTML = renderActionLinks(links);
         } else if (run.status === "failed") {
-          const debugLink = debugMode && run.debug_zip_url ? `<br><a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>` : "";
-          actionCell.innerHTML = `${escapeHtml(run.error_message || "—")}${debugLink}`;
+          const debugLink = debugMode && run.debug_zip_url
+            ? renderActionLinks([`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`])
+            : "";
+          actionCell.innerHTML = `${debugLink}<div class="queue-error-text">${escapeHtml(run.error_message || "—")}</div>`;
         } else if (run.status === "queued" || run.status === "running") {
           actionCell.innerHTML = renderProgress(run);
         } else {
