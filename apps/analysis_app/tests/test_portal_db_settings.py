@@ -8,7 +8,7 @@ from django.test import RequestFactory, TestCase
 
 from apps.analysis_app.admin import PortalDbConnectionSettingsAdmin
 from apps.analysis_app.admin_forms import PortalDbConnectionSettingsAdminForm
-from apps.analysis_app.models import PortalDbConnectionSettings
+from apps.analysis_app.models import FeatureFlags, PortalDbConnectionSettings
 from apps.analysis_app.portal_db_runtime import _reset_django_connection, apply_portal_db_settings
 from apps.analysis_app.utils import portal_db_crypto
 
@@ -70,6 +70,50 @@ class PortalDbAdminTests(TestCase):
         self.assertEqual(settings_obj.password_encrypted, "existing-token")
 
 
+
+
+    def test_admin_form_save_updates_feature_flags_debug_mode_enabled(self):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        form = PortalDbConnectionSettingsAdminForm(
+            data={
+                "profile": "TEST",
+                "host": "localhost",
+                "port": 5432,
+                "db_name": "portal",
+                "user": "portal",
+                "password": "",
+                "debug_mode": "on",
+            },
+            instance=settings_obj,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.assertTrue(FeatureFlags.get_solo().debug_mode)
+
+    def test_admin_form_save_updates_feature_flags_debug_mode_disabled(self):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = True
+        flags.save(update_fields=["debug_mode", "updated_at"])
+
+        form = PortalDbConnectionSettingsAdminForm(
+            data={
+                "profile": "TEST",
+                "host": "localhost",
+                "port": 5432,
+                "db_name": "portal",
+                "user": "portal",
+                "password": "",
+            },
+            instance=settings_obj,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.assertFalse(FeatureFlags.get_solo().debug_mode)
 
     def test_admin_form_save_with_commit_false_does_not_raise(self):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()

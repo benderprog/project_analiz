@@ -1,7 +1,7 @@
 from django import forms
 
 from apps.analysis_app.forms import GENERAL_SUMMARY_PU_LABEL
-from apps.analysis_app.models import PortalDbConnectionSettings, SvodkaTemplate
+from apps.analysis_app.models import FeatureFlags, PortalDbConnectionSettings, SvodkaTemplate
 from apps.portaldb.gateway import get_portal_gateway
 
 
@@ -14,6 +14,7 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
         label="Пароль",
         widget=forms.PasswordInput(render_value=False, attrs={"placeholder": "********"}),
     )
+    debug_mode = forms.BooleanField(required=False, label="DEBUG mode")
 
     class Meta:
         model = PortalDbConnectionSettings
@@ -25,11 +26,16 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
             self.fields["password"].help_text = (
                 "Пароль сохранён. Оставьте пустым, чтобы не менять."
             )
+        self.fields["debug_mode"].initial = FeatureFlags.get_solo().debug_mode
+        self.fields["debug_mode"].widget.attrs["form"] = "portaldbconnectionsettings_form"
 
     def save(self, commit=True):
         obj = super().save(commit=False)
         if commit:
             obj.save()
+            flags = FeatureFlags.get_solo()
+            flags.debug_mode = self.cleaned_data["debug_mode"]
+            flags.save(update_fields=["debug_mode", "updated_at"])
         return obj
 
 
