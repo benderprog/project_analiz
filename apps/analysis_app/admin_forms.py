@@ -26,15 +26,15 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
             self.fields["password"].help_text = (
                 "Пароль сохранён. Оставьте пустым, чтобы не менять."
             )
-        self.fields["debug_mode"].initial = FeatureFlags.get_solo().debug_mode
-        self.fields["debug_mode"].widget.attrs["form"] = "portaldbconnectionsettings_form"
+        if not self.is_bound:
+            self.fields["debug_mode"].initial = FeatureFlags.get_solo().debug_mode
 
     def save(self, commit=True):
         obj = super().save(commit=False)
         if commit:
             obj.save()
             flags = FeatureFlags.get_solo()
-            flags.debug_mode = self.cleaned_data["debug_mode"]
+            flags.debug_mode = bool(self.cleaned_data.get("debug_mode", False))
             flags.save(update_fields=["debug_mode", "updated_at"])
         return obj
 
