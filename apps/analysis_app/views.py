@@ -19,6 +19,15 @@ from apps.analysis_app.forms import (
     is_general_summary_pu,
 )
 from apps.analysis_app.debug_package import build_debug_zip_bytes
+from apps.analysis_app.event_payload import (
+    build_event_detail_payload,
+    build_title_preview,
+    compute_status_fields,
+    status_for_offenders,
+    status_for_subdivision,
+    status_for_timestamp,
+    status_from_flag,
+)
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
@@ -28,10 +37,6 @@ from apps.analysis_app.services import (
     extract_attributes,
     highlight_text,
     match_event,
-)
-from apps.analysis_app.subdivision_matcher import (
-    SUBDIVISION_GREEN_THRESHOLD,
-    SUBDIVISION_YELLOW_THRESHOLD,
 )
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
@@ -356,52 +361,15 @@ def _build_pattern_event_types_map(events: list[dict]) -> dict[str, list[dict]]:
 
 
 def _status_for_timestamp(match_result: dict) -> str:
-    if not match_result.get("matched"):
-        return "red"
-    delta = match_result.get("time_delta_minutes")
-    if delta is None:
-        return "red"
-    delta_abs = abs(delta)
-    if delta_abs == 0:
-        return "green"
-    if delta_abs <= TIME_ERROR_MINUTES:
-        return "yellow"
-    return "red"
+    return status_for_timestamp(match_result, time_error_minutes=TIME_ERROR_MINUTES)
 
 
 def _status_for_subdivision(match_result: dict) -> str:
-    score = match_result.get("subdivision_match_percent")
-    if score is None:
-        return "red"
-    if match_result.get("subdivision_locality_mismatch") or match_result.get(
-        "subdivision_unit_type_conflict"
-    ):
-        return "yellow" if score >= SUBDIVISION_YELLOW_THRESHOLD * 100 else "red"
-    if score >= SUBDIVISION_GREEN_THRESHOLD * 100:
-        return "green"
-    if score >= SUBDIVISION_YELLOW_THRESHOLD * 100:
-        return "yellow"
-    return "red"
+    return status_for_subdivision(match_result)
 
 
 def _status_for_offenders(match_result: dict) -> str:
-    if not match_result.get("matched"):
-        return "red"
-    counts = match_result.get("offenders_counts") or {}
-    matched = counts.get("matched", 0)
-    portal_total = counts.get("portal_total", 0)
-    has_issues = any(
-        (
-            counts.get("dob_mismatch", 0),
-            counts.get("missing_in_portal", 0),
-            counts.get("missing_in_svodka", 0),
-        )
-    )
-    if matched == portal_total and not has_issues:
-        return "green"
-    if matched == 0 and (portal_total > 0 or has_issues):
-        return "red"
-    return "yellow"
+    return status_for_offenders(match_result)
 
 
 def _build_offender_report(match_result: dict) -> dict:
@@ -748,12 +716,7 @@ def _build_comments(match_result: dict) -> list[str]:
 
 
 def _status_from_flag(flag: bool | None) -> str:
-    if flag is True:
-        return "green"
-    if flag is False:
-        return "red"
-    return "neutral"
-
+    return status_from_flag(flag)
 
 
 
@@ -819,10 +782,24 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             match_result = new_match_result
             result.extracted_attributes = extracted
             result.match_result = new_match_result
-            result.save(update_fields=["extracted_attributes", "match_result"])
+            refreshed_matched = bool(new_match_result.get("matched"))
+            refreshed_title, refreshed_preview = build_title_preview(paragraph.idx, text, refreshed_matched)
+            refreshed_status = compute_status_fields(new_match_result, time_error_minutes=TIME_ERROR_MINUTES)
+            result.matched = refreshed_matched
+            result.title = refreshed_title
+            result.preview = refreshed_preview
+            result.status_timestamp = refreshed_status["timestamp"]
+            result.status_subdivision = refreshed_status["subdivision"]
+            result.status_offenders = refreshed_status["offenders"]
+            result.status_event_type = refreshed_status["event_type"]
+            result.status_article = refreshed_status["article"]
+            result.detail_payload_cache = {}
+            result.detail_payload_cached_at = None
+            result.save(update_fields=["extracted_attributes", "match_result", "matched", "title", "preview", "status_timestamp", "status_subdivision", "status_offenders", "status_event_type", "status_article", "detail_payload_cache", "detail_payload_cached_at"])
         except Exception:  # noqa: BLE001 - page should remain renderable
             match_result = result.match_result or match_result
-    preview = text[:80] + ("…" if len(text) > 80 else "")
+    matched = bool(match_result.get("matched"))
+    title, preview = build_title_preview(paragraph.idx, text, matched)
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}
     best_pattern_text = predicted.get("best_pattern_text")
@@ -849,7 +826,9 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
                 if predicted_article:
                     match_result["classifier_article_of_law"] = predicted_article
                 result.match_result = match_result
-                result.save(update_fields=["match_result"])
+                result.detail_payload_cache = {}
+                result.detail_payload_cached_at = None
+                result.save(update_fields=["match_result", "detail_payload_cache", "detail_payload_cached_at"])
         except Exception:  # noqa: BLE001 - detail page should remain renderable
             classifier_candidates = []
 
@@ -889,8 +868,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         )
 
     offender_report = _build_offender_report(match_result)
-    not_found = not bool(match_result.get("matched"))
-    title = f"Событие {paragraph.idx}" + (" — в базе данных не найдено" if not_found else "")
+    not_found = not matched
 
     source_kind = getattr(paragraph, "source_kind", "paragraph") or "paragraph"
     source_cells = getattr(paragraph, "source_cells", None)
@@ -1005,13 +983,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "classifier_similar_limit_used": predicted.get("classifier_similar_limit_used"),
             "classifier_min_score_used": predicted.get("classifier_min_score_used"),
         },
-        "status": {
-            "timestamp": _status_for_timestamp(match_result),
-            "subdivision": _status_for_subdivision(match_result),
-            "offenders": _status_for_offenders(match_result),
-            "event_type": _status_from_flag(match_result.get("event_type_ok")),
-            "article": (match_result.get("article_status") or _status_from_flag(match_result.get("article_ok"))),
-        },
+        "status": compute_status_fields(match_result, time_error_minutes=TIME_ERROR_MINUTES),
         "comments": _build_comments(match_result),
     }
 
@@ -1427,7 +1399,7 @@ def _get_run_for_request(run_id, request) -> AnalysisRun:
 
 
 def paragraph_to_event_json(paragraph: AnalysisParagraph) -> dict:
-    return _build_event_card(paragraph)
+    return build_event_detail_payload(paragraph, builder=_build_event_card)
 
 
 class AnalysisEventsListView(View):
@@ -1443,32 +1415,27 @@ class AnalysisEventsListView(View):
             page_size = 50
         page_size = max(1, min(page_size, 100))
 
-        paragraphs = run.paragraphs.select_related("result").order_by("idx")
-        paginator = Paginator(paragraphs, page_size)
+        results = AnalysisResult.objects.filter(paragraph__run=run).select_related("paragraph").order_by("paragraph__idx")
+        paginator = Paginator(results, page_size)
         try:
             page_obj = paginator.page(page)
         except EmptyPage:
             page_obj = paginator.page(paginator.num_pages or 1)
 
         items = []
-        for paragraph in page_obj.object_list:
-            result = paragraph.result
-            match_result = result.match_result or {}
-            not_found = not bool(match_result.get("matched"))
-            title = f"Событие {paragraph.idx}" + (" — в базе данных не найдено" if not_found else "")
-            text = paragraph.text or ""
+        for result in page_obj.object_list:
             items.append(
                 {
-                    "idx": paragraph.idx,
-                    "title": title,
-                    "preview": text[:80] + ("…" if len(text) > 80 else ""),
-                    "not_found": not_found,
+                    "idx": result.paragraph.idx,
+                    "title": result.title,
+                    "preview": result.preview,
+                    "not_found": not result.matched,
                     "status": {
-                        "timestamp": _status_for_timestamp(match_result),
-                        "subdivision": _status_for_subdivision(match_result),
-                        "offenders": _status_for_offenders(match_result),
-                        "event_type": _status_from_flag(match_result.get("event_type_ok")),
-                        "article": match_result.get("article_status") or _status_from_flag(match_result.get("article_ok")),
+                        "timestamp": result.status_timestamp,
+                        "subdivision": result.status_subdivision,
+                        "offenders": result.status_offenders,
+                        "event_type": result.status_event_type,
+                        "article": result.status_article,
                     },
                 }
             )
@@ -1494,7 +1461,15 @@ class AnalysisEventDetailView(View):
             run=run,
             idx=idx,
         )
-        payload = paragraph_to_event_json(paragraph)
+        result = paragraph.result
+        cached_payload = result.detail_payload_cache if isinstance(result.detail_payload_cache, dict) else {}
+        if cached_payload:
+            payload = cached_payload
+        else:
+            payload = paragraph_to_event_json(paragraph)
+            result.detail_payload_cache = payload
+            result.detail_payload_cached_at = timezone.now()
+            result.save(update_fields=["detail_payload_cache", "detail_payload_cached_at"])
         pattern_event_types_map = _build_pattern_event_types_map([payload])
         predicted = payload.get("predicted") or {}
         best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
