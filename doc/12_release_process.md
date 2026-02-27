@@ -1,12 +1,65 @@
-# Release process
+# Release process (1.9+)
 
-## Tagging conventions
+## 1) Build release Docker image
 
-* Git tags cannot contain spaces. Use tags like `ver-1.1` (or `ver.1.1`).
-* GitHub Release titles can include spaces, for example **"ver. 1.1"**.
-* Release bundle version arguments use the dotted version (for example, `1.1`), and the bundle folder is named `release_ver_1_1`.
+Build the runtime image with release tag `project_analiz:web-ver-<version>`:
 
-## Offline / closed-contour release docs
+```bash
+bash scripts/release/build_image.sh 1.9
+```
 
-* Dump-first workflow (pg15-in-docker): [`doc/16_offline_dump_first_bundle.md`](./16_offline_dump_first_bundle.md).
-* Bundle runbook entrypoint: [`doc/offline/README.md`](./offline/README.md).
+Alternative via Makefile:
+
+```bash
+make release-image VERSION=1.9
+```
+
+The command builds `docker/Dockerfile.web` and tags the image as:
+
+- `project_analiz:web-ver-1.9`
+
+## 2) Prepare PostgreSQL dumps (strictly with postgres:15 tools)
+
+Dumps for offline bundle must be `pg_dump -Fc` and produced by `postgres:15` tools.
+
+```bash
+# app_db
+docker run --rm --network host -v "$PWD:/work" -e PGPASSWORD='<app_pwd>' postgres:15 \
+  sh -lc "pg_dump -Fc -h 127.0.0.1 -p 5432 -U app -d app_db -f /work/app_db.dump"
+
+# portal_db_test (or PROD RO source if agreed)
+docker run --rm --network host -v "$PWD:/work" -e PGPASSWORD='<portal_pwd>' postgres:15 \
+  sh -lc "pg_dump -Fc -h 127.0.0.1 -p 5432 -U portal -d portal_db_test -f /work/portal_db_test.dump"
+```
+
+Validate dumps before bundling:
+
+```bash
+docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/app_db.dump >/dev/null"
+docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_db_test.dump >/dev/null"
+```
+
+## 3) Build offline bundle
+
+```bash
+./scripts/offline/offline.sh bundle \
+  --version 1.9 \
+  --db-app-dump /absolute/path/app_db.dump \
+  --db-portal-dump /absolute/path/portal_db_test.dump \
+  --archive
+```
+
+Bundle includes all images declared in `docker/offline/compose.yml` (web/worker image, `postgres:15`, redis, etc.).
+
+## 4) Closed contour deployment
+
+```bash
+tar -xzf dist/offline_bundle_1_9.tar.gz
+cd offline_bundle_1_9
+bash scripts/offline/offline.sh import
+bash scripts/offline/offline.sh up
+```
+
+Runtime services: `web`, `worker`, `db_app`, `portal_db_test` (for local portal mode).
+
+For remote PROD portal read-only mode, see: `doc/offline/README_REMOTE_PORTAL_RO.md`.

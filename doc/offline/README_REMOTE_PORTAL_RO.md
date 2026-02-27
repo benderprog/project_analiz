@@ -1,43 +1,56 @@
-# Remote portal DB (read-only) mode
+# Remote portal DB (PROD read-only) in closed contour
 
-Use this mode when app DB stays local in offline bundle, but portal DB points to an external read-only host.
+Use this mode when `app_db` stays local in offline compose, while portal data is read from external PROD DB with RO credentials.
 
-## Steps
+## Required connection data
 
-1. Edit `compose/.env` inside extracted bundle:
+- `host`
+- `port`
+- `db_name`
+- `user`
+- `password`
+- target schema/table mapping (for SQL overrides if PROD schema differs)
 
-   ```env
-   PORTAL_MODE=remote
+## Where to configure
 
-   # app DB remains local container
-   APP_DB_HOST=db_app
-   APP_DB_PORT=5432
-   APP_DB_NAME=app_db
-   APP_DB_USER=app
-   APP_DB_PASSWORD=app
+### A) Runtime env (`compose/.env`)
 
-   # portal DB points to remote read-only source
-   PORTAL_DB_HOST=<portal-db-host>
-   PORTAL_DB_PORT=5432
-   PORTAL_DB_NAME=<portal_db_or_portal_db_test>
-   PORTAL_DB_USER=<ro_user>
-   PORTAL_DB_PASSWORD=<ro_password>
-   ```
+```env
+PORTAL_MODE=remote
 
-2. Keep `PORTAL_CONFIG_PATH=/app/configs/portal.yml`.
-3. Use **read-only credentials** only.
-4. Start stack:
+APP_DB_HOST=db_app
+APP_DB_PORT=5432
+APP_DB_NAME=app_db
+APP_DB_USER=app
+APP_DB_PASSWORD=app
 
-   ```bash
-   bash scripts/offline/offline.sh up
-   ```
+PORTAL_DB_HOST=<prod-portal-db-host>
+PORTAL_DB_PORT=5432
+PORTAL_DB_NAME=portal_db
+PORTAL_DB_USER=<ro_user>
+PORTAL_DB_PASSWORD=<ro_password>
+```
 
-5. Verify portal data is readable in UI/API.
+### B) Django admin (`PortalDbConnectionSettings`)
 
-## Safety behavior in `PORTAL_MODE=remote`
+Admin page: `.../admin/analysis_app/portaldbconnectionsettings/`
 
-- `portal_db_test` container is **not started**.
-- `restore_portal` is **not executed**.
-- `migrate_portal` is **not executed**.
+Fill:
+- `profile=PROD`
+- `host`, `port`, `db_name`, `user`, `password`
 
-This protects remote portal DB from accidental restore/migration writes.
+Then use **"Проверить подключение"** (`check-connection`) to verify access.
+
+## Start
+
+```bash
+bash scripts/offline/offline.sh up
+```
+
+## Safety behavior in remote mode
+
+- `portal_db_test` is skipped
+- portal dump restore is skipped
+- `migrate_portal` is skipped
+
+This prevents write operations against PROD portal DB.
