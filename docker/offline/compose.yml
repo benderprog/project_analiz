@@ -1,6 +1,16 @@
 version: "3.9"
 
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   db_app:
     image: postgres:15
     command: ["postgres", "-c", "timezone=UTC"]
@@ -97,13 +107,28 @@ services:
       - ../configs:/app/configs:ro
       - ./models:/opt/models:ro
     depends_on:
-      db_app:
+      redis:
         condition: service_healthy
-      portal_db_test:
+      db_app:
         condition: service_healthy
     command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
     ports:
       - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    image: project_analiz:web-ver-${VERSION}
+    env_file:
+      - .env
+    volumes:
+      - ../configs:/app/configs:ro
+      - ./models:/opt/models:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      db_app:
+        condition: service_healthy
+    command: ["celery", "-A", "config", "worker", "-l", "INFO", "-Q", "analysis"]
     restart: unless-stopped
 
 volumes:

@@ -1,81 +1,61 @@
-# Offline release bundle (single archive)
+# Offline release bundle (closed contour)
 
-This guide is for closed-network deployment where build/run must not require internet access.
+## Prerequisites on online host
 
-## 0) Prerequisites (online preparation host)
-
-Before building the bundle, prepare local artifacts:
-
-- Docker images available locally:
-  - `project_analiz:web-ver-<version>`
-  - `postgres:15` (load from tar if registry is unavailable)
-- PostgreSQL dumps in `pg_dump -Fc` format:
+- Local image: `project_analiz:web-ver-<version>`
+- Local image: `postgres:15`
+- Local image: `redis:7-alpine`
+- Dumps in custom format (`-Fc`):
   - `app_db.dump`
   - `portal_db_test.dump`
-- Optional local semantic model directory for offline inference:
-  - `models/paraphrase-multilingual-MiniLM-L12-v2`
 
-No internet access is required during offline host runtime if all items above are included in the bundle.
-
-## 1) Build bundle on connected machine
-
-1. Build web image and tag by release version:
-
-   ```bash
-   docker compose build web
-   docker tag project_analiz_web:latest project_analiz:web-ver-1.5_test
-   ```
-
-2. Create PostgreSQL dumps with `postgres:15` toolchain (avoids `pg_restore: unsupported version`):
-
-   ```bash
-   docker run --rm --network host -v "$PWD:/work" -e PGPASSWORD='<app_pwd>' postgres:15 \
-     sh -lc "pg_dump -Fc -h 127.0.0.1 -p 5432 -U app -d app_db -f /work/app_db.dump"
-
-   docker run --rm --network host -v "$PWD:/work" -e PGPASSWORD='<portal_pwd>' postgres:15 \
-     sh -lc "pg_dump -Fc -h 127.0.0.1 -p 5432 -U portal -d portal_db_test -f /work/portal_db_test.dump"
-   ```
-
-3. (Optional) prefetch semantic model:
-
-   ```bash
-   ./scripts/prefetch_model.sh --model paraphrase-multilingual-MiniLM-L12-v2
-   ```
-
-4. Build bundle and archive:
-
-   ```bash
-   ./scripts/offline/offline.sh bundle \
-     --version 1.5_test \
-     --db-app-dump /absolute/path/app_db.dump \
-     --db-portal-dump /absolute/path/portal_db_test.dump \
-     --with-model \
-     --archive
-   ```
-
-5. Expected outputs:
-
-   - `dist/offline_bundle_1_5_test/`
-   - `dist/offline_bundle_1_5_test.tar.gz`
-   - `dist/README_OFFLINE_1_5_test.md`
-
-## 2) Deploy in closed contour
+## 1. Build release image
 
 ```bash
-tar -xzf offline_bundle_1_5_test.tar.gz
-cd offline_bundle_1_5_test
+bash scripts/release/build_image.sh 1.9
+```
+
+## 2. Build dumps with postgres:15 toolchain
+
+```bash
+# app_db
+docker run --rm --network host -v "$PWD:/work" -e PGPASSWORD='<app_pwd>' postgres:15 \
+  sh -lc "pg_dump -Fc -h 127.0.0.1 -p 5432 -U app -d app_db -f /work/app_db.dump"
+
+# portal_db_test
+docker run --rm --network host -v "$PWD:/work" -e PGPASSWORD='<portal_pwd>' postgres:15 \
+  sh -lc "pg_dump -Fc -h 127.0.0.1 -p 5432 -U portal -d portal_db_test -f /work/portal_db_test.dump"
+```
+
+Validate dumps:
+
+```bash
+docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/app_db.dump >/dev/null"
+docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_db_test.dump >/dev/null"
+```
+
+## 3. Build bundle
+
+```bash
+./scripts/offline/offline.sh bundle \
+  --version 1.9 \
+  --db-app-dump /absolute/path/app_db.dump \
+  --db-portal-dump /absolute/path/portal_db_test.dump \
+  --archive
+```
+
+## 4. Import and run in closed contour
+
+```bash
+tar -xzf offline_bundle_1_9.tar.gz
+cd offline_bundle_1_9
 bash scripts/offline/offline.sh import
 bash scripts/offline/offline.sh up
 ```
 
-`up` restores DB dumps only for first initialization (empty volumes). On subsequent runs it keeps current data and prints `restore skipped, DB already initialized: ...`.
+`up` performs restore via `postgres:15` tooling and starts runtime services: `web`, `worker`, `db_app`, `portal_db_test`, `redis`.
 
-Open:
-
-- <http://127.0.0.1:8000/admin>
-- <http://127.0.0.1:8000/upload>
-
-Runtime helper commands:
+## 5. Operations
 
 ```bash
 bash scripts/offline/offline.sh ps
@@ -83,89 +63,6 @@ bash scripts/offline/offline.sh logs
 bash scripts/offline/offline.sh stop
 bash scripts/offline/offline.sh start
 bash scripts/offline/offline.sh down
-# optional: force dump restore on next up
-OFFLINE_RESTORE=1 bash scripts/offline/offline.sh up
-# factory reset (drop DB volumes + restore dumps + migrations + web)
-bash scripts/offline/offline.sh reset-db
 ```
 
-Operational lifecycle:
-
-- First deployment in closed contour: `import -> up`
-- Routine restart without teardown: `stop -> start`
-- `start` is operational only: it does **not** run DB restore and does **not** run migrations.
-
-## 3a) DB persistence and restore policy
-
-- `db_app` and `portal_db_test` store Postgres data in named Docker volumes mounted to `/var/lib/postgresql/data`.
-- First `up` on empty volumes performs restore from bundled dumps.
-- Later `up`/`down`/`up` cycles do **not** overwrite DB data.
-- `stop`/`start` preserves containers, networks, and volumes by design.
-- `restore` command now means explicit re-restore from dumps (force mode).
-- For full factory reset use `reset-db` (removes volumes and recreates DBs from dumps).
-
-## 3) Bundle structure
-
-- `artifacts/` docker image tar files
-- `compose/` compose.yml + .env
-- `scripts/offline/` offline CLI
-- `configs/portal.yml` and `configs/portal/portal.yml` + `configs/portal/sql/*.sql`
-- `db_dumps/app_db.dump`, `db_dumps/portal_db_test.dump`
-- `models/` (if built with `--with-model`)
-- `doc/` copied documentation set
-- `manifest.json` + `checksums.sha256`
-
-## 4) Environment variables used in offline runtime
-
-`compose/.env` generated by `offline.sh bundle` includes:
-
-- Django/base:
-  - `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`
-- app DB:
-  - `APP_DB_NAME`, `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_HOST`, `APP_DB_PORT`
-- portal DB (local container mode):
-  - `PORTAL_DB_NAME=portal_db_test`
-  - `PORTAL_DB_USER`, `PORTAL_DB_PASSWORD`, `PORTAL_DB_HOST=portal_db_test`, `PORTAL_DB_PORT`
-- portal config/gateway:
-  - `PORTAL_CONFIG_PATH=/app/configs/portal.yml`
-  - `PORTAL_PROFILE=dev`
-  - `PORTAL_GATEWAY_BACKEND=sql`
-- semantic model offline flags:
-  - `HF_HUB_OFFLINE=1`
-  - `TRANSFORMERS_OFFLINE=1`
-  - `SENTENCE_TRANSFORMERS_HOME=/opt/models`
-  - `HF_HOME=/opt/models/hf_home`
-  - `SEMANTIC_MODEL_PATH=/opt/models/paraphrase-multilingual-MiniLM-L12-v2`
-
-For remote portal read-only mode, see [README_REMOTE_PORTAL_RO.md](./README_REMOTE_PORTAL_RO.md).
-
-## 5) Semantic model in offline mode
-
-Recommended layout:
-
-```text
-./models/paraphrase-multilingual-MiniLM-L12-v2
-```
-
-Model resolution order:
-
-1. `SEMANTIC_MODEL_PATH`, if path exists.
-2. `./models/<SEMANTIC_MODEL_NAME>`, if directory exists.
-3. Otherwise fallback to `SEMANTIC_MODEL_NAME` (online/development only).
-
-If offline mode is enabled (`HF_HUB_OFFLINE=1` or `TRANSFORMERS_OFFLINE=1`) and local model is missing, app fails fast with a clear error and no network calls.
-
-
-## 6) Администрирование PROD portal_db (RO) и SQL override
-
-Для эксплуатации в режиме удалённой production БД портала (только чтение), а также для безопасного переопределения SQL и полного каталога возможностей запросов, используйте отдельный runbook:
-
-- [ADMIN_PORTAL_RO_RUNBOOK.md](./ADMIN_PORTAL_RO_RUNBOOK.md)
-
-Документ покрывает:
-
-- `PORTAL_MODE=remote` и необходимые env-переменные в `compose/.env`;
-- какие сервисы/шаги не должны выполняться в remote-режиме;
-- стратегию override SQL через профили и правила контракта параметров/alias;
-- troubleshooting (`candidates=0`, диагностика без интернета) и smoke-check.
-
+For PROD RO portal mode: `doc/offline/README_REMOTE_PORTAL_RO.md` and `doc/offline/ADMIN_PORTAL_RO_RUNBOOK.md`.
