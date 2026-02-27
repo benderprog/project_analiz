@@ -153,7 +153,7 @@ VERSION=${version}
 PORTAL_MODE=local
 
 DJANGO_SECRET_KEY=offline-secret-key
-DJANGO_DEBUG=false
+DJANGO_DEBUG=true
 DJANGO_ALLOWED_HOSTS=*
 
 APP_DB_NAME=app_db
@@ -182,7 +182,7 @@ HF_HOME=/opt/models/hf_home
 SEMANTIC_MODEL_PATH=/opt/models/paraphrase-multilingual-MiniLM-L12-v2
 ENV
 
-  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps"
+  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps" "${compose_dir}/media"
 
   if [[ "${with_model}" == "1" ]]; then
     [[ -d "${REPO_ROOT}/models/paraphrase-multilingual-MiniLM-L12-v2" ]] || die "Model directory not found at models/paraphrase-multilingual-MiniLM-L12-v2. Prefetch model before bundling."
@@ -431,6 +431,7 @@ import_cmd() {
 
 up_cmd() {
   load_compose_env
+  mkdir -p "${compose_dir}/media"
   restore_cmd "0"
 
   local portal_mode="${PORTAL_MODE:-local}"
@@ -447,6 +448,7 @@ up_cmd() {
 
 reset_db_cmd() {
   load_compose_env
+  mkdir -p "${compose_dir}/media"
   log "Factory reset: dropping DB volumes and restoring dumps"
   compose_cmd down -v --remove-orphans
   restore_cmd "1"
@@ -540,6 +542,8 @@ stop_cmd() {
 }
 
 start_cmd() {
+  load_compose_env
+  mkdir -p "${compose_dir}/media"
   local services=()
   mapfile -t services < <(runtime_services)
 

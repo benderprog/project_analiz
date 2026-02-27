@@ -28,6 +28,28 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertNotContains(response, "Ожидают выбора ПУ")
         self.assertNotContains(response, "Определено автоматически")
 
+
+    def test_multiple_file_field_clean_handles_list_without_super_typeerror(self):
+        from apps.analysis_app.forms import MultipleFileField
+
+        field = MultipleFileField(required=True)
+        docx_a = SimpleUploadedFile(
+            "first.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        docx_b = SimpleUploadedFile(
+            "second.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        cleaned = field.clean([docx_a, docx_b])
+
+        self.assertEqual(len(cleaned), 2)
+        self.assertEqual(cleaned[0].name, "first.docx")
+        self.assertEqual(cleaned[1].name, "second.docx")
+
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
     def test_upload_two_files_with_general_summary_creates_pending_runs(self):
         docx_a = SimpleUploadedFile(
@@ -111,6 +133,26 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
         self.assertEqual(run.selected_pu_name, GENERAL_SUMMARY_PU_LABEL)
         self.assertTrue(run.celery_task_id)
+
+
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_upload_post_docx_does_not_return_500(self):
+        upload = SimpleUploadedFile(
+            "smoke.docx",
+            self._make_docx_bytes(),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+                    delay_mock.return_value = type("Task", (), {"id": "task-smoke"})()
+                    response = self.client.post(
+                        reverse("analysis-upload"),
+                        {"selected_pu_id": "", "file": upload},
+                    )
+
+        self.assertEqual(response.status_code, 302)
 
     def test_upload_stores_original_filename_basename(self):
         upload = SimpleUploadedFile(

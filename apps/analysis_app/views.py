@@ -1090,7 +1090,7 @@ class UploadView(View):
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
-            "debug_mode": FeatureFlags.is_debug_enabled(),
+            "debug_mode": FeatureFlags.is_effective_debug_enabled(),
         }
 
     def _pending_runs(self, request, limit: int = 20):
@@ -1168,10 +1168,16 @@ class UploadView(View):
         from apps.analysis_app.tasks import run_docx_analysis
 
         task = run_docx_analysis.delay(str(run.run_id), selected_pu_id or None)
+        logger.debug("Enqueued analysis task run_id=%s task_id=%s", run.run_id, task.id)
         run.celery_task_id = task.id
         run.save(update_fields=["celery_task_id"])
 
     def _handle_upload(self, request):
+        logger.debug(
+            "Upload request started user_id=%s files_in_request=%s",
+            request.user.id if request.user.is_authenticated else None,
+            len(request.FILES.getlist("file")),
+        )
         upload_form = UploadDocxWithPuForm(request.POST, request.FILES)
         if not upload_form.is_valid():
             return render(request, self.template_name, self._build_context(request, upload_form=upload_form))
@@ -1196,6 +1202,7 @@ class UploadView(View):
                 status=AnalysisRun.Status.CREATED,
                 error_message="",
             )
+            logger.debug("Upload created analysis run run_id=%s", run.run_id)
             self._enqueue_run(run, selected_pu_id=selected_pu_id)
             return redirect("analysis-upload")
 
@@ -1211,6 +1218,7 @@ class UploadView(View):
                 status=AnalysisRun.Status.CREATED,
                 error_message="",
             )
+            logger.debug("Upload created pending analysis run run_id=%s", run.run_id)
             selected_run_id = selected_run_id or run.run_id
 
         upload_url = redirect("analysis-upload").url
@@ -1312,7 +1320,7 @@ class PendingRunCancelView(View):
 
 class AnalysisQueueStatusView(View):
     def get(self, request):
-        debug_mode = FeatureFlags.is_debug_enabled()
+        debug_mode = FeatureFlags.is_effective_debug_enabled()
         runs = list(UploadView._queue_queryset(request)[:10])
         payload_runs = []
         for run in runs:
@@ -1480,7 +1488,7 @@ class AnalysisEventDetailView(View):
 
 class AnalysisDebugZipView(View):
     def get(self, request, run_id):
-        if not FeatureFlags.is_debug_enabled():
+        if not FeatureFlags.is_effective_debug_enabled():
             raise Http404
 
         run = get_object_or_404(AnalysisRun, run_id=run_id)
@@ -1555,9 +1563,9 @@ class AnalysisDetailView(View):
                     "run_status": run.status,
                 },
                 "selected_pu_label": pu_label,
-                "debug_mode": FeatureFlags.is_debug_enabled(),
+                "debug_mode": FeatureFlags.is_effective_debug_enabled(),
                 "debug_zip_url": _debug_zip_url(run),
-                "show_debug_zip_link": FeatureFlags.is_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
+                "show_debug_zip_link": FeatureFlags.is_effective_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
                 "debug_pipeline": _debug_pipeline_payload(run),
             },
         )

@@ -27,7 +27,7 @@ class PortalDbConnectionSettingsAdminForm(forms.ModelForm):
                 "Пароль сохранён. Оставьте пустым, чтобы не менять."
             )
         if not self.is_bound:
-            self.fields["debug_mode"].initial = FeatureFlags.is_debug_enabled()
+            self.fields["debug_mode"].initial = FeatureFlags.is_effective_debug_enabled()
 
 class SvodkaTemplateAdminForm(forms.ModelForm):
     pu_select = forms.ChoiceField(label="Пограничное управление:", required=True)
