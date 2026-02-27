@@ -5,6 +5,9 @@
   .progress-wrap { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; }
   .progress-bar { height: 100%; background: var(--color-primary, #4caf50); }
   .progress-text { font-size: 12px; margin-top: 4px; }
+  .queue-action-links { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .queue-error-text { margin-top: 4px; }
+  .stage-debug { margin-top: 4px; font-size: 12px; color: #475569; }
 </style>
 <section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
@@ -36,12 +39,19 @@
             <td class="queue-elapsed">{{ run.elapsed_display }}</td>
             <td class="queue-action">
               {% if run.status == 'done' and run.results_url %}
-                <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
+                <div class="queue-action-links">
+                  <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
+                  {% if debug_mode and run.debug_zip_url %}<a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
+                </div>
+                {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
               {% elif run.status == 'failed' %}
-                {{ run.error_message|default:"—" }}
+                {% if debug_mode and run.debug_zip_url %}<div class="queue-action-links"><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a></div>{% endif %}
+                <div class="queue-error-text">{{ run.error_message|default:"—" }}</div>
+                {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
               {% elif run.status == 'queued' or run.status == 'running' %}
                 <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
                 <div class="progress-text">{{ run.progress_label }}</div>
+                {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
               {% else %}
                 —
               {% endif %}
@@ -120,6 +130,7 @@
 (function () {
   const statusUrl = "{{ queue_status_url }}";
   const body = document.getElementById("queue-table-body");
+  const debugMode = "{{ debug_mode|yesno:'true,false' }}" === "true";
   if (!statusUrl || !body) return;
 
   const escapeHtml = (value) => {
@@ -129,11 +140,20 @@
   };
 
 
+  const renderStageDebug = (run) => {
+    if (!debugMode) return "";
+    const stageLine = run?.debug_pipeline?.stage_line || "";
+    if (!stageLine) return "";
+    return `<div class="stage-debug">${escapeHtml(stageLine)}</div>`;
+  };
+
   const renderProgress = (run) => {
     const percent = Number(run.progress_percent || 0);
     const label = escapeHtml(run.progress_label || "В очереди");
-    return `<div class="progress-wrap"><div class="progress-bar" style="width: ${percent}%"></div></div><div class="progress-text">${label}</div>`;
+    return `<div class="progress-wrap"><div class="progress-bar" style="width: ${percent}%"></div></div><div class="progress-text">${label}</div>${renderStageDebug(run)}`;
   };
+
+  const renderActionLinks = (links) => `<div class="queue-action-links">${links.join("")}</div>`;
 
   const updateRows = (runs) => {
     const byId = new Map(runs.map((run) => [run.run_id, run]));
@@ -153,9 +173,16 @@
 
       if (actionCell) {
         if (run.status === "done" && run.results_url) {
-          actionCell.innerHTML = `<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`;
+          const links = [`<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`];
+          if (debugMode && run.debug_zip_url) {
+            links.push(`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`);
+          }
+          actionCell.innerHTML = `${renderActionLinks(links)}${renderStageDebug(run)}`;
         } else if (run.status === "failed") {
-          actionCell.innerHTML = escapeHtml(run.error_message || "—");
+          const debugLink = debugMode && run.debug_zip_url
+            ? renderActionLinks([`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`])
+            : "";
+          actionCell.innerHTML = `${debugLink}<div class="queue-error-text">${escapeHtml(run.error_message || "—")}</div>${renderStageDebug(run)}`;
         } else if (run.status === "queued" || run.status === "running") {
           actionCell.innerHTML = renderProgress(run);
         } else {

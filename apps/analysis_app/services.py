@@ -4,6 +4,7 @@ import logging
 import math
 import re
 import uuid
+import time as pytime
 from difflib import SequenceMatcher
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from django.utils.safestring import SafeString, mark_safe
 
 from apps.classifier.models import EventType, EventTypePattern
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_local_naive, to_local_naive
+from apps.analysis_app.event_payload import build_title_preview, compute_status_fields
 from apps.analysis_app.utils.json_safe import date_to_str, offender_to_json
 from apps.analysis_app.utils.offender_format import portal_offender_fullname, svodka_offender_fullname
 from apps.portaldb.gateway.dtos import EventDTO, OffenderDTO
@@ -85,17 +87,32 @@ _EVENT_PATTERN_MAX_WINDOWS = 90
 
 
 
-def run_analysis_pipeline(run, *, selected_pu_id=None, progress_callback=None) -> int:
+def run_analysis_pipeline(
+    run,
+    *,
+    selected_pu_id=None,
+    progress_callback=None,
+    stage_callback=None,
+    debug_enabled: bool = False,
+) -> int:
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
+    parse_started = pytime.monotonic()
     events = parse_docx(
         run.file.path,
         selected_pu_id=selected_pu_id or run.selected_pu_id,
         selected_pu_name=run.selected_pu_name,
     )
+    parse_ms = int((pytime.monotonic() - parse_started) * 1000)
     total_events = len(events)
+    if stage_callback:
+        stage_callback(stage_name="parsing", stage_ms=parse_ms, current_stage="extraction")
     if progress_callback:
         progress_callback(0, total_events, force=True)
+
+    extraction_ms = 0
+    matching_ms = 0
+    classification_ms = 0
 
     for idx, event in enumerate(events, start=1):
         paragraph = AnalysisParagraph.objects.create(
@@ -106,8 +123,20 @@ def run_analysis_pipeline(run, *, selected_pu_id=None, progress_callback=None) -
             source_cells=event.cells,
             source_table_header_cells=event.table_header_cells,
         )
+        extraction_started = pytime.monotonic()
         attributes = extract_attributes(event.joined_text, selected_pu_id=selected_pu_id)
-        match_result = match_event(attributes, event.joined_text)
+        extraction_ms += int((pytime.monotonic() - extraction_started) * 1000)
+
+        matching_started = pytime.monotonic()
+        match_result = match_event(attributes, event.joined_text, debug_enabled=debug_enabled)
+        matching_ms += int((pytime.monotonic() - matching_started) * 1000)
+        classification_ms += int((match_result.get("debug") or {}).get("classification_ms") or 0)
+        matched = bool(match_result.get("matched"))
+        title, preview = build_title_preview(idx, event.joined_text, matched)
+        status_fields = compute_status_fields(
+            match_result,
+            time_error_minutes=int(getattr(settings, "TIME_ERROR_MINUTES", 30)),
+        )
         AnalysisResult.objects.create(
             paragraph=paragraph,
             extracted_attributes={
@@ -124,10 +153,28 @@ def run_analysis_pipeline(run, *, selected_pu_id=None, progress_callback=None) -
                 "staff": attributes.staff,
             },
             match_result=match_result,
+            matched=matched,
+            title=title,
+            preview=preview,
+            status_timestamp=status_fields["timestamp"],
+            status_subdivision=status_fields["subdivision"],
+            status_offenders=status_fields["offenders"],
+            status_event_type=status_fields["event_type"],
+            status_article=status_fields["article"],
+            detail_payload_cache={},
+            detail_payload_cached_at=None,
         )
+
+        if stage_callback and idx % 20 == 0:
+            stage_callback(current_stage="matching")
 
         if progress_callback:
             progress_callback(idx, total_events)
+
+    if stage_callback:
+        stage_callback(stage_name="extraction", stage_ms=extraction_ms, current_stage="matching")
+        stage_callback(stage_name="matching", stage_ms=matching_ms, current_stage="classification")
+        stage_callback(stage_name="classification", stage_ms=classification_ms, current_stage="done")
 
     if progress_callback:
         progress_callback(total_events, total_events, force=True)
@@ -2431,7 +2478,7 @@ def get_event_candidates(attributes: ExtractedAttributes, text: str = "", config
     }
 
 
-def match_event(attributes: ExtractedAttributes, text: str) -> dict:
+def match_event(attributes: ExtractedAttributes, text: str, *, debug_enabled: bool = False) -> dict:
     """Match extracted attributes to portal events and build comparison result."""
     subdivision_confidence_percent = 0.0
     subdivision_candidate = (
@@ -2441,7 +2488,13 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         subdivision_confidence_percent = round(
             attributes.subdivision_candidates[0]["score"] * 100, 2
         )
-    predicted_type, predicted_article, predicted_event_pattern, classifier_candidates = _classify_event_type(text)
+    classification_ms = None
+    if debug_enabled:
+        classify_started = pytime.monotonic()
+        predicted_type, predicted_article, predicted_event_pattern, classifier_candidates = _classify_event_type(text)
+        classification_ms = int((pytime.monotonic() - classify_started) * 1000)
+    else:
+        predicted_type, predicted_article, predicted_event_pattern, classifier_candidates = _classify_event_type(text)
     similar_min_score = float(getattr(settings, "CLASSIFIER_SIMILAR_PATTERN_MIN_SCORE", 0.5))
     similar_limit = int(getattr(settings, "CLASSIFIER_SIMILAR_PATTERN_LIMIT", 20))
     similar_candidates = _build_similar_pattern_candidates(
@@ -2593,7 +2646,7 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
             "svodka_article_of_law": svodka_article,
             "portal_article_of_law": None,
             "diffs": {"message": "Событие не найдено по правилу 2 из 3."},
-            "debug": debug_meta,
+            "debug": {**debug_meta, **({"classification_ms": classification_ms} if debug_enabled and classification_ms is not None else {})},
         }
 
     portal_subdivision_name = None
@@ -2781,5 +2834,5 @@ def match_event(attributes: ExtractedAttributes, text: str) -> dict:
         "svodka_article_of_law": svodka_article,
         "portal_article_of_law": best_event.event.article_of_law,
         "diffs": diffs,
-        "debug": debug_meta,
+        "debug": {**debug_meta, **({"classification_ms": classification_ms} if debug_enabled and classification_ms is not None else {})},
     }

@@ -39,9 +39,35 @@ class AnalysisRun(models.Model):
     progress_total = models.PositiveIntegerField(null=True, blank=True, default=None)
     progress_done = models.PositiveIntegerField(null=True, blank=True, default=None)
     progress_updated_at = models.DateTimeField(null=True, blank=True, default=None)
+    debug_pipeline = models.JSONField(default=dict, blank=True)
+    debug_pipeline_updated_at = models.DateTimeField(null=True, blank=True)
+    debug_package_file = models.FileField(upload_to="debug_packages/", null=True, blank=True)
+    debug_package_created_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Run {self.run_id}"
+
+
+class FeatureFlags(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    debug_mode = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Флаги"
+        verbose_name_plural = "Флаги"
+
+    @classmethod
+    def get_solo(cls):
+        return cls.objects.get_or_create(pk=1)[0]
+
+    @classmethod
+    def is_debug_enabled(cls) -> bool:
+        try:
+            obj = cls.objects.only("debug_mode").get(pk=1)
+            return bool(obj.debug_mode)
+        except cls.DoesNotExist:
+            return False
 
 
 class SvodkaTemplate(models.Model):
@@ -130,16 +156,39 @@ class AnalysisParagraph(models.Model):
     def __str__(self) -> str:
         return f"Paragraph {self.idx}"
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["run", "idx"], name="uniq_analysis_paragraph_run_idx"),
+        ]
+        indexes = [
+            models.Index(fields=["run", "idx"], name="analysis_paragraph_run_idx_idx"),
+        ]
+
 
 class AnalysisResult(models.Model):
     paragraph = models.OneToOneField(
-        AnalysisParagraph, on_delete=models.CASCADE, related_name="result"
+        AnalysisParagraph, on_delete=models.CASCADE, related_name="result", db_index=True
     )
     extracted_attributes = models.JSONField(default=dict)
     match_result = models.JSONField(default=dict)
+    matched = models.BooleanField(default=False)
+    title = models.CharField(max_length=255, blank=True, default="")
+    preview = models.CharField(max_length=120, blank=True, default="")
+    status_timestamp = models.CharField(max_length=16, blank=True, default="neutral")
+    status_subdivision = models.CharField(max_length=16, blank=True, default="neutral")
+    status_offenders = models.CharField(max_length=16, blank=True, default="neutral")
+    status_event_type = models.CharField(max_length=16, blank=True, default="neutral")
+    status_article = models.CharField(max_length=16, blank=True, default="neutral")
+    detail_payload_cache = models.JSONField(default=dict, blank=True)
+    detail_payload_cached_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"Result for {self.paragraph_id}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["paragraph"], name="analysis_result_paragraph_idx"),
+        ]
 
 
 class CachedPU(models.Model):

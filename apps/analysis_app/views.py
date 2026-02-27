@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
-from django.http import JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -18,7 +18,17 @@ from apps.analysis_app.forms import (
     UploadDocxWithPuForm,
     is_general_summary_pu,
 )
-from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU
+from apps.analysis_app.debug_package import build_debug_zip_bytes
+from apps.analysis_app.event_payload import (
+    build_event_detail_payload,
+    build_title_preview,
+    compute_status_fields,
+    status_for_offenders,
+    status_for_subdivision,
+    status_for_timestamp,
+    status_from_flag,
+)
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
@@ -27,10 +37,6 @@ from apps.analysis_app.services import (
     extract_attributes,
     highlight_text,
     match_event,
-)
-from apps.analysis_app.subdivision_matcher import (
-    SUBDIVISION_GREEN_THRESHOLD,
-    SUBDIVISION_YELLOW_THRESHOLD,
 )
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
@@ -69,6 +75,110 @@ def _results_url(run: AnalysisRun) -> str:
     if run.status == AnalysisRun.Status.DONE:
         return reverse("analysis-detail", kwargs={"run_id": str(run.run_id)})
     return ""
+
+
+def _debug_zip_url(run: AnalysisRun) -> str:
+    if run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED]:
+        return reverse("analysis-debug-zip", kwargs={"run_id": str(run.run_id)})
+    return ""
+
+
+def _stage_label(name: str) -> str:
+    labels = {
+        "parsing": "Парсинг",
+        "extraction": "Извлечение",
+        "matching": "Матчинг",
+        "classification": "Классификация",
+        "starting": "Подготовка",
+        "done": "Готово",
+        "failed": "Ошибка",
+    }
+    return labels.get(str(name or "").lower(), str(name or "—"))
+
+
+def _format_stage_ms(ms_value) -> str:
+    try:
+        ms_int = int(ms_value)
+    except (TypeError, ValueError):
+        return "—"
+    if ms_int >= 1000:
+        return f"{ms_int / 1000:.1f}с"
+    return f"{ms_int}мс"
+
+
+def _debug_pipeline_payload(run: AnalysisRun) -> dict:
+    data = run.debug_pipeline if isinstance(run.debug_pipeline, dict) else {}
+    stages = []
+    for item in data.get("stages") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        ms = int(item.get("ms") or 0)
+        stages.append({"name": name, "label": _stage_label(name), "ms": ms, "duration": _format_stage_ms(ms)})
+    current_stage = str(data.get("current_stage") or "")
+    stage_line = ""
+    if stages:
+        stage_line = " → ".join(f"{item['label']} {item['duration']}" for item in stages)
+    elif current_stage:
+        stage_line = f"Этап: {_stage_label(current_stage)}…"
+    return {
+        "current_stage": current_stage,
+        "current_stage_label": _stage_label(current_stage) if current_stage else "",
+        "stages": stages,
+        "total_ms": int(data.get("total_ms") or 0),
+        "stage_line": stage_line,
+        "updated_at": data.get("updated_at"),
+    }
+
+
+def _app_version_payload() -> dict[str, str]:
+    settings_version = getattr(settings, "VERSION", "")
+    git_sha = os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA") or os.getenv("SOURCE_VERSION") or ""
+    return {
+        "version": str(settings_version or "unknown"),
+        "git_sha": str(git_sha or "unknown"),
+    }
+
+
+def _safe_run_payload(run: AnalysisRun) -> dict[str, object]:
+    return {
+        "run_id": str(run.run_id),
+        "uploaded_by_id": run.uploaded_by_id,
+        "original_filename": run.original_filename,
+        "created_session_key": run.created_session_key,
+        "detected_pu_id": run.detected_pu_id,
+        "detected_pu_name": run.detected_pu_name,
+        "selected_pu_id": run.selected_pu_id,
+        "selected_pu_name": run.selected_pu_name,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "status": run.status,
+        "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "error_message": run.error_message,
+        "progress_total": run.progress_total,
+        "progress_done": run.progress_done,
+        "progress_updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else None,
+    }
+
+
+def _build_slicing_payload(results_qs) -> dict[str, object]:
+    slicing: dict[str, object] = {"template": None, "items": []}
+    for result in results_qs:
+        match_result = result.match_result or {}
+        debug_data = match_result.get("debug") or {}
+        template_info = debug_data.get("template") or {}
+        if not slicing["template"] and template_info:
+            slicing["template"] = {
+                "template_id": template_info.get("template_id"),
+                "scope": template_info.get("scope"),
+                "pu_id": template_info.get("pu_id"),
+                "begin": template_info.get("begin"),
+                "end": template_info.get("end"),
+            }
+        if debug_data:
+            slicing["items"].append({"idx": result.paragraph.idx, "debug": debug_data})
+    return slicing
 
 
 
@@ -251,52 +361,15 @@ def _build_pattern_event_types_map(events: list[dict]) -> dict[str, list[dict]]:
 
 
 def _status_for_timestamp(match_result: dict) -> str:
-    if not match_result.get("matched"):
-        return "red"
-    delta = match_result.get("time_delta_minutes")
-    if delta is None:
-        return "red"
-    delta_abs = abs(delta)
-    if delta_abs == 0:
-        return "green"
-    if delta_abs <= TIME_ERROR_MINUTES:
-        return "yellow"
-    return "red"
+    return status_for_timestamp(match_result, time_error_minutes=TIME_ERROR_MINUTES)
 
 
 def _status_for_subdivision(match_result: dict) -> str:
-    score = match_result.get("subdivision_match_percent")
-    if score is None:
-        return "red"
-    if match_result.get("subdivision_locality_mismatch") or match_result.get(
-        "subdivision_unit_type_conflict"
-    ):
-        return "yellow" if score >= SUBDIVISION_YELLOW_THRESHOLD * 100 else "red"
-    if score >= SUBDIVISION_GREEN_THRESHOLD * 100:
-        return "green"
-    if score >= SUBDIVISION_YELLOW_THRESHOLD * 100:
-        return "yellow"
-    return "red"
+    return status_for_subdivision(match_result)
 
 
 def _status_for_offenders(match_result: dict) -> str:
-    if not match_result.get("matched"):
-        return "red"
-    counts = match_result.get("offenders_counts") or {}
-    matched = counts.get("matched", 0)
-    portal_total = counts.get("portal_total", 0)
-    has_issues = any(
-        (
-            counts.get("dob_mismatch", 0),
-            counts.get("missing_in_portal", 0),
-            counts.get("missing_in_svodka", 0),
-        )
-    )
-    if matched == portal_total and not has_issues:
-        return "green"
-    if matched == 0 and (portal_total > 0 or has_issues):
-        return "red"
-    return "yellow"
+    return status_for_offenders(match_result)
 
 
 def _build_offender_report(match_result: dict) -> dict:
@@ -643,12 +716,7 @@ def _build_comments(match_result: dict) -> list[str]:
 
 
 def _status_from_flag(flag: bool | None) -> str:
-    if flag is True:
-        return "green"
-    if flag is False:
-        return "red"
-    return "neutral"
-
+    return status_from_flag(flag)
 
 
 
@@ -714,10 +782,24 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             match_result = new_match_result
             result.extracted_attributes = extracted
             result.match_result = new_match_result
-            result.save(update_fields=["extracted_attributes", "match_result"])
+            refreshed_matched = bool(new_match_result.get("matched"))
+            refreshed_title, refreshed_preview = build_title_preview(paragraph.idx, text, refreshed_matched)
+            refreshed_status = compute_status_fields(new_match_result, time_error_minutes=TIME_ERROR_MINUTES)
+            result.matched = refreshed_matched
+            result.title = refreshed_title
+            result.preview = refreshed_preview
+            result.status_timestamp = refreshed_status["timestamp"]
+            result.status_subdivision = refreshed_status["subdivision"]
+            result.status_offenders = refreshed_status["offenders"]
+            result.status_event_type = refreshed_status["event_type"]
+            result.status_article = refreshed_status["article"]
+            result.detail_payload_cache = {}
+            result.detail_payload_cached_at = None
+            result.save(update_fields=["extracted_attributes", "match_result", "matched", "title", "preview", "status_timestamp", "status_subdivision", "status_offenders", "status_event_type", "status_article", "detail_payload_cache", "detail_payload_cached_at"])
         except Exception:  # noqa: BLE001 - page should remain renderable
             match_result = result.match_result or match_result
-    preview = text[:80] + ("…" if len(text) > 80 else "")
+    matched = bool(match_result.get("matched"))
+    title, preview = build_title_preview(paragraph.idx, text, matched)
     portal = match_result.get("portal") or {}
     predicted = match_result.get("predicted") or {}
     best_pattern_text = predicted.get("best_pattern_text")
@@ -744,7 +826,9 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
                 if predicted_article:
                     match_result["classifier_article_of_law"] = predicted_article
                 result.match_result = match_result
-                result.save(update_fields=["match_result"])
+                result.detail_payload_cache = {}
+                result.detail_payload_cached_at = None
+                result.save(update_fields=["match_result", "detail_payload_cache", "detail_payload_cached_at"])
         except Exception:  # noqa: BLE001 - detail page should remain renderable
             classifier_candidates = []
 
@@ -784,8 +868,7 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         )
 
     offender_report = _build_offender_report(match_result)
-    not_found = not bool(match_result.get("matched"))
-    title = f"Событие {paragraph.idx}" + (" — в базе данных не найдено" if not_found else "")
+    not_found = not matched
 
     source_kind = getattr(paragraph, "source_kind", "paragraph") or "paragraph"
     source_cells = getattr(paragraph, "source_cells", None)
@@ -900,16 +983,47 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
             "classifier_similar_limit_used": predicted.get("classifier_similar_limit_used"),
             "classifier_min_score_used": predicted.get("classifier_min_score_used"),
         },
-        "status": {
-            "timestamp": _status_for_timestamp(match_result),
-            "subdivision": _status_for_subdivision(match_result),
-            "offenders": _status_for_offenders(match_result),
-            "event_type": _status_from_flag(match_result.get("event_type_ok")),
-            "article": (match_result.get("article_status") or _status_from_flag(match_result.get("article_ok"))),
-        },
+        "status": compute_status_fields(match_result, time_error_minutes=TIME_ERROR_MINUTES),
         "comments": _build_comments(match_result),
     }
 
+
+
+
+def _empty_event_payload(idx: int) -> dict:
+    return {
+        "idx": idx,
+        "title": "",
+        "preview": "",
+        "source_kind": "paragraph",
+        "source_cells": [],
+        "source_table_header_cells": [],
+        "highlighted_cells": [],
+        "highlighted_html": "<p>—</p>",
+        "extracted_timestamp_display": "—",
+        "portal_timestamp_display": "—",
+        "extracted": {"subdivision_name": "—", "subdivision_candidates": [], "offenders": [], "staff": []},
+        "portal": {"subdivision_name": "—", "offenders": [], "event_type": "—", "article_of_law": "—"},
+        "predicted": {
+            "event_type": "—",
+            "article_of_law": "—",
+            "classifier_article_of_law": "—",
+            "best_pattern_text": "—",
+            "classifier_candidates": [],
+            "classifier_pattern_candidates": [],
+            "classifier_similar_candidates": [],
+            "pattern_event_types": [],
+        },
+        "match": {
+            "matched": False,
+            "time_delta_minutes": None,
+            "offenders_summary": None,
+            "offenders_details": [],
+            "subdivision_match_percent": None,
+        },
+        "status": {"timestamp": "neutral", "subdivision": "neutral", "offenders": "neutral", "event_type": "neutral", "article": "neutral"},
+        "comments": [],
+    }
 
 class UploadView(View):
     template_name = "analysis_app/upload.html"
@@ -941,11 +1055,13 @@ class UploadView(View):
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
             run.results_url = _results_url(run)
+            run.debug_zip_url = _debug_zip_url(run)
             progress_payload = _progress_payload(run)
             run.progress_total = progress_payload["progress_total"]
             run.progress_done = progress_payload["progress_done"]
             run.progress_percent = progress_payload["progress_percent"]
             run.progress_label = progress_payload["progress_label"]
+            run.debug_pipeline_payload = _debug_pipeline_payload(run)
         return paginator, page_obj
 
     @staticmethod
@@ -974,6 +1090,7 @@ class UploadView(View):
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
+            "debug_mode": FeatureFlags.is_debug_enabled(),
         }
 
     def _pending_runs(self, request, limit: int = 20):
@@ -1195,6 +1312,7 @@ class PendingRunCancelView(View):
 
 class AnalysisQueueStatusView(View):
     def get(self, request):
+        debug_mode = FeatureFlags.is_debug_enabled()
         runs = list(UploadView._queue_queryset(request)[:10])
         payload_runs = []
         for run in runs:
@@ -1211,6 +1329,7 @@ class AnalysisQueueStatusView(View):
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
+                "debug_zip_url": _debug_zip_url(run) if debug_mode else "",
                 "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
                 "position": None,
                 "progress_total": progress_payload["progress_total"],
@@ -1218,6 +1337,8 @@ class AnalysisQueueStatusView(View):
                 "progress_percent": progress_payload["progress_percent"],
                 "progress_label": progress_payload["progress_label"],
             }
+            if debug_mode:
+                payload["debug_pipeline"] = _debug_pipeline_payload(run)
             if run.status == AnalysisRun.Status.RUNNING:
                 payload["position"] = 0
             elif run.status == AnalysisRun.Status.QUEUED:
@@ -1264,29 +1385,145 @@ class AnalysisStatusView(View):
         return JsonResponse(payload)
 
 
+def _get_run_for_request(run_id, request) -> AnalysisRun:
+    run = get_object_or_404(AnalysisRun, run_id=run_id)
+    if request.user.is_authenticated:
+        if run.uploaded_by_id != request.user.id:
+            raise Http404
+        return run
+
+    session_key = UploadView._ensure_session_key(request)
+    if run.created_session_key != session_key:
+        raise Http404
+    return run
+
+
+def paragraph_to_event_json(paragraph: AnalysisParagraph) -> dict:
+    return build_event_detail_payload(paragraph, builder=_build_event_card)
+
+
+class AnalysisEventsListView(View):
+    def get(self, request, run_id):
+        run = _get_run_for_request(run_id, request)
+        try:
+            page = max(1, int(request.GET.get("page", 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.GET.get("page_size", 50))
+        except (TypeError, ValueError):
+            page_size = 50
+        page_size = max(1, min(page_size, 100))
+
+        results = AnalysisResult.objects.filter(paragraph__run=run).select_related("paragraph").order_by("paragraph__idx")
+        paginator = Paginator(results, page_size)
+        try:
+            page_obj = paginator.page(page)
+        except EmptyPage:
+            page_obj = paginator.page(paginator.num_pages or 1)
+
+        items = []
+        for result in page_obj.object_list:
+            items.append(
+                {
+                    "idx": result.paragraph.idx,
+                    "title": result.title,
+                    "preview": result.preview,
+                    "not_found": not result.matched,
+                    "status": {
+                        "timestamp": result.status_timestamp,
+                        "subdivision": result.status_subdivision,
+                        "offenders": result.status_offenders,
+                        "event_type": result.status_event_type,
+                        "article": result.status_article,
+                    },
+                }
+            )
+
+        return JsonResponse(
+            {
+                "run_id": str(run.run_id),
+                "status": run.status,
+                "total": paginator.count,
+                "page": page_obj.number,
+                "page_size": page_size,
+                "has_next": page_obj.has_next(),
+                "items": items,
+            }
+        )
+
+
+class AnalysisEventDetailView(View):
+    def get(self, request, run_id, idx):
+        run = _get_run_for_request(run_id, request)
+        paragraph = get_object_or_404(
+            AnalysisParagraph.objects.select_related("result", "run"),
+            run=run,
+            idx=idx,
+        )
+        result = paragraph.result
+        cached_payload = result.detail_payload_cache if isinstance(result.detail_payload_cache, dict) else {}
+        if cached_payload:
+            payload = cached_payload
+        else:
+            payload = paragraph_to_event_json(paragraph)
+            result.detail_payload_cache = payload
+            result.detail_payload_cached_at = timezone.now()
+            result.save(update_fields=["detail_payload_cache", "detail_payload_cached_at"])
+        pattern_event_types_map = _build_pattern_event_types_map([payload])
+        predicted = payload.get("predicted") or {}
+        best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
+        predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
+        payload["predicted"] = predicted
+        return JsonResponse(payload)
+
+
+class AnalysisDebugZipView(View):
+    def get(self, request, run_id):
+        if not FeatureFlags.is_debug_enabled():
+            raise Http404
+
+        run = get_object_or_404(AnalysisRun, run_id=run_id)
+
+        if request.user.is_authenticated:
+            if run.uploaded_by_id != request.user.id:
+                raise Http404
+        else:
+            session_key = UploadView._ensure_session_key(request)
+            if run.created_session_key != session_key:
+                raise Http404
+
+        if run.debug_package_file:
+            return FileResponse(
+                run.debug_package_file.open("rb"),
+                as_attachment=True,
+                filename=f"debug_{run.run_id}.zip",
+            )
+
+        response = HttpResponse(build_debug_zip_bytes(run), content_type="application/zip")
+        response["Content-Disposition"] = f'attachment; filename="debug_{run.run_id}.zip"'
+        return response
+
+
 class AnalysisDetailView(View):
     template_name = "analysis_app/detail.html"
 
     def get(self, request, run_id):
-        run = get_object_or_404(AnalysisRun, run_id=run_id)
-        paragraphs = run.paragraphs.select_related("result").order_by("idx")
-        events = [_build_event_card(paragraph) for paragraph in paragraphs]
-        pattern_event_types_map = _build_pattern_event_types_map(events)
-        for event in events:
-            predicted = event.get("predicted") or {}
-            best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
-            predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
-            event["predicted"] = predicted
+        run = _get_run_for_request(run_id, request)
 
-        selected_idx = request.GET.get("event")
+        selected_idx_param = request.GET.get("event")
         try:
-            selected_idx = int(selected_idx)
+            selected_idx = max(1, int(selected_idx_param))
         except (TypeError, ValueError):
-            selected_idx = events[0]["idx"] if events else None
-        selected_event = next(
-            (event for event in events if event["idx"] == selected_idx),
-            events[0] if events else None,
-        )
+            selected_idx = run.paragraphs.order_by("idx").values_list("idx", flat=True).first() or 1
+        selected_paragraph = run.paragraphs.select_related("result", "run").filter(idx=selected_idx).first()
+        selected_event = paragraph_to_event_json(selected_paragraph) if selected_paragraph else _empty_event_payload(selected_idx)
+        pattern_event_types_map = _build_pattern_event_types_map([selected_event]) if selected_paragraph else {}
+        predicted = selected_event.get("predicted") or {}
+        best_pattern_text = str(predicted.get("best_pattern_text") or "").strip()
+        predicted["pattern_event_types"] = pattern_event_types_map.get(best_pattern_text, [])
+        selected_event["predicted"] = predicted
+
         selected_pu = None
         if run.selected_pu_id:
             selected_pu = CachedPU.objects.filter(
@@ -1300,9 +1537,27 @@ class AnalysisDetailView(View):
             self.template_name,
             {
                 "run": run,
-                "paragraphs": paragraphs,
-                "events": events,
+                "selected_idx": selected_idx,
                 "selected_event": selected_event,
+                "events_list_url": reverse("analysis-events-list", kwargs={"run_id": str(run.run_id)}),
+                "event_detail_url_template": reverse(
+                    "analysis-event-detail", kwargs={"run_id": str(run.run_id), "idx": 0}
+                ).replace("/0/", "/{idx}/"),
+                "run_status_url": reverse("analysis-status", kwargs={"run_id": str(run.run_id)}),
+                "detail_config": {
+                    "run_id": str(run.run_id),
+                    "selected_idx": selected_idx,
+                    "events_list_url": reverse("analysis-events-list", kwargs={"run_id": str(run.run_id)}),
+                    "event_detail_url_template": reverse(
+                        "analysis-event-detail", kwargs={"run_id": str(run.run_id), "idx": 0}
+                    ).replace("/0/", "/{idx}/"),
+                    "status_url": reverse("analysis-status", kwargs={"run_id": str(run.run_id)}),
+                    "run_status": run.status,
+                },
                 "selected_pu_label": pu_label,
+                "debug_mode": FeatureFlags.is_debug_enabled(),
+                "debug_zip_url": _debug_zip_url(run),
+                "show_debug_zip_link": FeatureFlags.is_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
+                "debug_pipeline": _debug_pipeline_payload(run),
             },
         )

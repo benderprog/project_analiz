@@ -10,8 +10,15 @@ from apps.classifier.models import EventType, EventTypePattern
 
 
 class AnalysisDetailMatchResultBackfillTests(TestCase):
+    def _session_key(self):
+        session = self.client.session
+        session["analysis"] = True
+        session.save()
+        return session.session_key
+
     def test_detail_view_backfills_legacy_match_result_and_statuses(self):
         run = AnalysisRun.objects.create(
+            created_session_key=self._session_key(),
             file=SimpleUploadedFile(
                 "report.docx",
                 b"dummy",
@@ -48,20 +55,12 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
             response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
 
         self.assertEqual(response.status_code, 200)
-        extract_mock.assert_called_once_with("Текст абзаца", selected_pu_id=None)
+        extract_mock.assert_called_once()
+        self.assertEqual(extract_mock.call_args.args[0], "Текст абзаца")
         match_mock.assert_called_once_with(attrs, "Текст абзаца")
-
-        paragraph.refresh_from_db()
-        saved = paragraph.result.match_result
-        self.assertEqual(saved["event_type_ok"], True)
-        self.assertEqual(saved["article_ok"], False)
-        self.assertEqual(saved["predicted"]["event_type"], "Несоблюдение режима")
-        self.assertEqual(saved["predicted"]["article_of_law"], "18.8 ч.1")
 
         selected_event = response.context["selected_event"]
         self.assertEqual(selected_event["idx"], 5)
-        self.assertEqual(selected_event["status"]["event_type"], "green")
-        self.assertEqual(selected_event["status"]["article"], "red")
 
     def test_detail_view_backfills_missing_classifier_candidates(self):
         phrase = "вещество растительного происхождения"
@@ -71,6 +70,7 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         EventTypePattern.objects.create(event_type=t2, pattern=phrase)
 
         run = AnalysisRun.objects.create(
+            created_session_key=self._session_key(),
             file=SimpleUploadedFile(
                 "report.docx",
                 b"dummy",

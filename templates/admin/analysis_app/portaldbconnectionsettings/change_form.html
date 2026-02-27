@@ -1,5 +1,30 @@
 {% extends "admin/change_form.html" %}
 
+{% block extrahead %}
+  {{ block.super }}
+  <style>
+    .debug-toggle-wrap {
+      margin: 8px 0;
+    }
+
+    .debug-toggle {
+      float: right;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 12px;
+      font-weight: 600;
+    }
+
+    .debug-toggle label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+    }
+  </style>
+{% endblock %}
+
 {% block object-tools-items %}
   {% if change and original %}
     <li>
@@ -13,5 +38,15 @@
       </a>
     </li>
   {% endif %}
+  {{ block.super }}
+{% endblock %}
+
+{% block submit_buttons_top %}
+  <div class="debug-toggle-wrap">
+    <div class="debug-toggle">
+      {{ adminform.form.debug_mode }}
+      {{ adminform.form.debug_mode.label_tag }}
+    </div>
+  </div>
   {{ block.super }}
 {% endblock %}
