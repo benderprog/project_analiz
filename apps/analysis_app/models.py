@@ -62,12 +62,20 @@ class FeatureFlags(models.Model):
         return cls.objects.get_or_create(pk=1)[0]
 
     @classmethod
-    def is_debug_enabled(cls) -> bool:
+    def is_application_debug_enabled(cls) -> bool:
         try:
             obj = cls.objects.only("debug_mode").get(pk=1)
             return bool(obj.debug_mode)
         except cls.DoesNotExist:
             return False
+
+    @classmethod
+    def is_effective_debug_enabled(cls) -> bool:
+        return cls.is_application_debug_enabled()
+
+    @classmethod
+    def is_debug_enabled(cls) -> bool:
+        return cls.is_effective_debug_enabled()
 
 
 class SvodkaTemplate(models.Model):
