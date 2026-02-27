@@ -56,7 +56,7 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         )
 
     last_db_update = timezone.now()
-    debug_enabled = FeatureFlags.is_debug_enabled()
+    debug_enabled = FeatureFlags.is_effective_debug_enabled()
     pipeline_started = pytime.monotonic()
     pipeline = {"current_stage": "starting", "stages": [], "total_ms": 0}
 

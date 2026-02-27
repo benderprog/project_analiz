@@ -81,3 +81,37 @@ def test_offline_script_has_idempotent_restore_and_reset_db_command():
     assert "OFFLINE_RESTORE" in content
     assert "reset-db" in content
     assert "compose_cmd down --remove-orphans" in content
+
+
+def test_offline_compose_web_worker_share_media_mount_and_no_version_key():
+    compose_path = REPO_ROOT / "docker" / "offline" / "compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+
+    assert "version:" not in content
+    assert "- ./media:/app/media" in content
+
+
+def test_offline_compose_web_has_explicit_gunicorn_runtime_flags():
+    compose_path = REPO_ROOT / "docker" / "offline" / "compose.yml"
+    content = compose_path.read_text(encoding="utf-8")
+
+    assert '"--timeout", "300"' in content
+    assert '"--graceful-timeout", "30"' in content
+    assert '"--access-logfile", "-"' in content
+    assert '"--error-logfile", "-"' in content
+    assert '"--log-level", "debug"' in content
+    assert '"--capture-output"' in content
+
+
+def test_offline_bundle_env_uses_django_debug_true_for_test_release():
+    script_path = REPO_ROOT / "scripts" / "offline" / "offline.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "DJANGO_DEBUG=true" in content
+
+
+def test_offline_script_prepares_shared_media_directory():
+    script_path = REPO_ROOT / "scripts" / "offline" / "offline.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert '"${compose_dir}/media"' in content

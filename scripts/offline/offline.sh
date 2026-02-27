@@ -12,7 +12,7 @@ usage() {
 Offline bundle / runtime helper
 
 Usage:
-  ./scripts/offline/offline.sh bundle --version 1.5_test --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db_test.dump [--with-model] [--archive]
+  ./scripts/offline/offline.sh bundle --version 1.9 --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db_test.dump [--with-model] [--archive]
   ./scripts/offline/offline.sh import
   ./scripts/offline/offline.sh restore
   ./scripts/offline/offline.sh reset-db
@@ -153,7 +153,7 @@ VERSION=${version}
 PORTAL_MODE=local
 
 DJANGO_SECRET_KEY=offline-secret-key
-DJANGO_DEBUG=false
+DJANGO_DEBUG=true
 DJANGO_ALLOWED_HOSTS=*
 
 APP_DB_NAME=app_db
@@ -172,6 +172,9 @@ PORTAL_CONFIG_PATH=/app/configs/portal.yml
 PORTAL_PROFILE=dev
 PORTAL_GATEWAY_BACKEND=sql
 
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/1
+
 HF_HUB_OFFLINE=1
 TRANSFORMERS_OFFLINE=1
 SENTENCE_TRANSFORMERS_HOME=/opt/models
@@ -179,7 +182,7 @@ HF_HOME=/opt/models/hf_home
 SEMANTIC_MODEL_PATH=/opt/models/paraphrase-multilingual-MiniLM-L12-v2
 ENV
 
-  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps"
+  mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps" "${compose_dir}/media"
 
   if [[ "${with_model}" == "1" ]]; then
     [[ -d "${REPO_ROOT}/models/paraphrase-multilingual-MiniLM-L12-v2" ]] || die "Model directory not found at models/paraphrase-multilingual-MiniLM-L12-v2. Prefetch model before bundling."
@@ -195,15 +198,27 @@ ENV
   cp "${dumps_dir}/app_db.dump" "${compose_dir}/db_dumps/app_db.dump"
   cp "${dumps_dir}/portal_db_test.dump" "${compose_dir}/db_dumps/portal_db_test.dump"
 
-  log "Saving docker images"
-  docker image inspect "project_analiz:web-ver-${version}" >/dev/null
-  docker image inspect "postgres:15" >/dev/null
-  docker save "project_analiz:web-ver-${version}" -o "${artifacts_dir}/project_analiz_web-ver-${version}.tar"
-  docker save "postgres:15" -o "${artifacts_dir}/postgres_15.tar"
+  log "Saving docker images required by docker/offline/compose.yml"
+  local image
+  mapfile -t images < <(awk '$1 == "image:" {print $2}' "${REPO_ROOT}/docker/offline/compose.yml" | tr -d '"' | sort -u)
+
+  if [[ "${#images[@]}" -eq 0 ]]; then
+    die "No images found in docker/offline/compose.yml"
+  fi
+
+  for image in "${images[@]}"; do
+    local resolved_image safe_image
+    resolved_image="${image//\$\{VERSION\}/${version}}"
+    docker image inspect "${resolved_image}" >/dev/null
+    safe_image="${resolved_image//\//_}"
+    safe_image="${safe_image//:/_}"
+    log "Saving image ${resolved_image}"
+    docker save "${resolved_image}" -o "${artifacts_dir}/${safe_image}.tar"
+  done
 
   cp "${REPO_ROOT}/README.md" "${doc_dir}/README_MAIN.md"
   cp "${REPO_ROOT}/doc/offline/README.md" "${doc_dir}/README.md"
-  cp "${REPO_ROOT}/doc/offline/closed_contour_1_5_test.md" "${doc_dir}/closed_contour_1_5_test.md"
+  cp "${REPO_ROOT}/doc/offline/closed_contour_release.md" "${doc_dir}/closed_contour_release.md"
   cp "${REPO_ROOT}/doc/16_offline_dump_first_bundle.md" "${doc_dir}/16_offline_dump_first_bundle.md"
   cp "${REPO_ROOT}/doc/12_release_process.md" "${doc_dir}/12_release_process.md"
   cp "${REPO_ROOT}/doc/22_portal_config.md" "${doc_dir}/22_portal_config.md"
@@ -416,22 +431,24 @@ import_cmd() {
 
 up_cmd() {
   load_compose_env
+  mkdir -p "${compose_dir}/media"
   restore_cmd "0"
 
   local portal_mode="${PORTAL_MODE:-local}"
   if [[ "${portal_mode}" == "remote" ]]; then
     compose_cmd run --rm migrate_app
-    compose_cmd up -d --remove-orphans --no-build web
+    compose_cmd up -d --remove-orphans --no-build web worker
     return
   fi
 
   compose_cmd run --rm migrate_app
   compose_cmd run --rm migrate_portal
-  compose_cmd up -d --remove-orphans --no-build web
+  compose_cmd up -d --remove-orphans --no-build web worker
 }
 
 reset_db_cmd() {
   load_compose_env
+  mkdir -p "${compose_dir}/media"
   log "Factory reset: dropping DB volumes and restoring dumps"
   compose_cmd down -v --remove-orphans
   restore_cmd "1"
@@ -441,17 +458,17 @@ reset_db_cmd() {
   if [[ "${portal_mode}" != "remote" ]]; then
     compose_cmd run --rm migrate_portal
   fi
-  compose_cmd up -d --remove-orphans --no-build web
+  compose_cmd up -d --remove-orphans --no-build web worker
 }
 
 logs_cmd() {
   load_compose_env
   local portal_mode="${PORTAL_MODE:-local}"
   if [[ "${portal_mode}" == "remote" ]]; then
-    compose_cmd logs -f --tail=200 web db_app
+    compose_cmd logs -f --tail=200 web worker db_app
     return
   fi
-  compose_cmd logs -f --tail=200 web db_app portal_db_test
+  compose_cmd logs -f --tail=200 web worker db_app portal_db_test
 }
 
 runtime_services() {
@@ -525,6 +542,8 @@ stop_cmd() {
 }
 
 start_cmd() {
+  load_compose_env
+  mkdir -p "${compose_dir}/media"
   local services=()
   mapfile -t services < <(runtime_services)
 

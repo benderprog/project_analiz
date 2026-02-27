@@ -8,7 +8,7 @@ HOST ?= 127.0.0.1
 PORT ?= 8000
 CONCURRENCY ?= 1
 
-.PHONY: test dev web worker migrate redis-docker redis-stop
+.PHONY: test dev web worker migrate redis-docker redis-stop release-image
 
 test:
 	./scripts/test.sh
@@ -44,3 +44,7 @@ redis-docker:
 redis-stop:
 	@docker stop project_analiz_redis >/dev/null 2>&1 || true
 	@docker rm project_analiz_redis >/dev/null 2>&1 || true
+
+
+release-image:
+	bash scripts/release/build_image.sh $(VERSION)

@@ -25,11 +25,15 @@ class MultipleFileInput(forms.ClearableFileInput):
 
 class MultipleFileField(forms.FileField):
     def clean(self, data, initial=None):
+        parent_clean = super().clean
         if data is None:
             return []
         if isinstance(data, (list, tuple)):
-            return [super().clean(item, initial) for item in data]
-        return [super().clean(data, initial)]
+            cleaned_files = []
+            for item in data:
+                cleaned_files.append(parent_clean(item, initial))
+            return cleaned_files
+        return [parent_clean(data, initial)]
 
 
 class UploadDocxForm(forms.Form):

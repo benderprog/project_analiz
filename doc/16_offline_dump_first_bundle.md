@@ -1,10 +1,10 @@
 # Dump-first offline bundle workflow (pg15-in-docker)
 
-This guide is a full **from-zero** flow for release `1.5_test`.
+This guide is a full **from-zero** flow for release `1.9`.
 
 > Why this flow: dumps must be produced with `pg_dump` from `postgres:15` (containerized), so offline restore uses a compatible `pg_restore` and avoids errors like `unsupported version (1.15)`.
 
-See also: [doc/offline/closed_contour_1_5_test.md](./offline/closed_contour_1_5_test.md).
+See also: [doc/offline/closed_contour_release.md](./offline/closed_contour_release.md).
 
 ## A) Clean previous offline stack (containers / volumes / network)
 
@@ -70,7 +70,7 @@ portal DB dump:
 
 ```bash
 docker run --rm --network host -v "$DUMP_DIR:/out" -e PGPASSWORD="$PORTAL_DB_PASSWORD" postgres:15 \
-  pg_dump -Fc --no-owner --no-privileges -h "$PORTAL_DB_HOST" -p "$PORTAL_DB_PORT" -U "$PORTAL_DB_USER" -d "$PORTAL_DB_NAME" -f /out/portal_db.dump
+  pg_dump -Fc --no-owner --no-privileges -h "$PORTAL_DB_HOST" -p "$PORTAL_DB_PORT" -U "$PORTAL_DB_USER" -d "$PORTAL_DB_NAME" -f /out/portal_db_test.dump
 ```
 
 Quick dump validation:
@@ -86,7 +86,7 @@ docker compose build web
 ```
 
 ```bash
-VERSION="1.5_test"
+VERSION="1.9"
 docker tag project_analiz_web:latest "project_analiz:web-ver-${VERSION}"
 ```
 
@@ -106,9 +106,9 @@ bash scripts/prefetch_model.sh --model "${MODEL}" --out "${OUT}"
 
 ```bash
 rm -rf dist
-bash scripts/offline/offline.sh bundle --version 1.5_test --with-model \
+bash scripts/offline/offline.sh bundle --version 1.9 --with-model \
   --db-app-dump "$DUMP_DIR/app_db.dump" \
-  --db-portal-dump "$DUMP_DIR/portal_db.dump"
+  --db-portal-dump "$DUMP_DIR/portal_db_test.dump"
 ```
 
 ## G) Import images + start
@@ -135,7 +135,7 @@ bash scripts/offline/offline.sh status
 Direct docker compose fallback for bundle compose dir:
 
 ```bash
-BUNDLE="$PWD/dist/offline_bundle_1_5_test"
+BUNDLE="$PWD/dist/offline_bundle_1_9"
 docker compose -f "$BUNDLE/compose/compose.yml" --env-file "$BUNDLE/compose/.env" ps -a
 docker compose -f "$BUNDLE/compose/compose.yml" --env-file "$BUNDLE/compose/.env" logs --tail 200
 ```
