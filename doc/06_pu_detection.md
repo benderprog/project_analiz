@@ -79,28 +79,32 @@ python manage.py runserver
 4. Confirm subdivision matching uses only subdivisions from the selected PU (unless “Общая сводка”).
 5. If the debug output reports an empty filtered pool, verify the fallback to the full pool.
 
-## Template preview with marker highlighting
+## Template anchors and preview
 
-The summary template (`SvodkaTemplate`) supports marker anchors `[BEGIN]` and `[END]`.
-Preview rendering now uses the same marker detection logic used by slicing and shows exactly
-those anchors that affect segmentation.
+`[BEGIN]`/`[END]` in template files are now treated as **context anchors**, not only as literal markers.
 
-### In admin edit form
+- Start anchor = nearest non-empty line before `[BEGIN]`.
+- End anchor = nearest non-empty line after `[END]`.
+- Multiple segments are supported.
+- Open-ended segment is supported (`[BEGIN]` without `[END]`): slice until the end of report.
+- If report contains literal `[BEGIN]`/`[END]`, strict marker slicing still has priority.
+- If semantic model is unavailable, anchor search degrades to lexical matching (no crash).
 
-When editing/uploading a template in Django admin, the change form includes **"Предпросмотр шаблона"**:
+Anchor matching uses configurable thresholds (`TEMPLATE_ANCHOR_START_MIN_SIM`,
+`TEMPLATE_ANCHOR_END_MIN_SIM`, `TEMPLATE_ANCHOR_WEAK_MIN_SIM`) and logs per-segment
+scores/indexes in debug logs.
 
-- segment count (`Сегментов: N`),
-- warnings for missing/unbalanced markers,
-- highlighted source preview where `[BEGIN]` and `[END]` are visually distinct.
+### In admin edit form and dedicated preview page
 
-If markers are missing, the warning explains fallback behavior: the whole summary is analyzed.
+Preview includes:
 
-### Dedicated template preview page
+- `Segments detected: N` summary,
+- per-segment anchor start/end text and open-ended state,
+- warnings for missing/unbalanced anchors,
+- marker highlighting (`[BEGIN]`/`[END]`) and anchor line highlighting
+  (`ANCHOR START` / `ANCHOR END` semantics).
 
-A separate staff-only page is available for saved templates:
+Dedicated staff-only pages:
 
 - `/analysis/templates/<id>/preview/`
 - `/analysis/pu/<pu_id>/template/preview/`
-
-The page shows PU/template metadata, marker warnings, and highlighted preview.
-This is also linked from admin (`Посмотреть предпросмотр`) and from upload page (`Посмотреть шаблон`).

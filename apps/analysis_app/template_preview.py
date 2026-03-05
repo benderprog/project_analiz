@@ -8,7 +8,7 @@ from typing import Any
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 
-from apps.analysis_app.svodka_templates import iter_doc_elements
+from apps.analysis_app.svodka_templates import iter_doc_elements, parse_template_marker_blocks
 
 
 @dataclass(frozen=True)
@@ -21,9 +21,14 @@ class TemplateMarker:
 @dataclass(frozen=True)
 class TemplateSegment:
     begin_span: tuple[int, int]
-    end_span: tuple[int, int]
+    end_span: tuple[int, int] | None
     begin_line: int
-    end_line: int
+    end_line: int | None
+    start_anchor_line: int | None = None
+    end_anchor_line: int | None = None
+    start_anchor_text: str | None = None
+    end_anchor_text: str | None = None
+    open_ended: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,7 +53,7 @@ def _line_for_offset(starts: list[int], offset: int) -> int:
 
 
 def detect_template_anchors(text: str, begin: str = "[BEGIN]", end: str = "[END]") -> TemplateAnchorDetection:
-    if not text or not begin or not end:
+    if not text or not begin:
         return TemplateAnchorDetection(has_markers=False, segments=[], markers=[])
 
     line_starts = _line_starts(text)
@@ -69,31 +74,27 @@ def detect_template_anchors(text: str, begin: str = "[BEGIN]", end: str = "[END]
         for start, finish, kind in raw_markers
     ]
 
+    blocks, block_warnings = parse_template_marker_blocks(text, begin_marker=begin, end_marker=end)
     segments: list[TemplateSegment] = []
-    active_begin: TemplateMarker | None = None
-    unmatched_end = 0
-
-    for marker in markers:
-        if marker.kind == "BEGIN":
-            if active_begin is None:
-                active_begin = marker
-            continue
-
-        if active_begin is None:
-            unmatched_end += 1
-            continue
-
+    for block in blocks:
+        begin_line = _line_for_offset(line_starts, block.begin_marker_span[0])
+        end_line = _line_for_offset(line_starts, block.end_marker_span[0]) if block.end_marker_span else None
         segments.append(
             TemplateSegment(
-                begin_span=active_begin.span,
-                end_span=marker.span,
-                begin_line=active_begin.line,
-                end_line=marker.line,
+                begin_span=block.begin_marker_span,
+                end_span=block.end_marker_span,
+                begin_line=begin_line,
+                end_line=end_line,
+                start_anchor_line=max(begin_line - 1, 1) if block.pre_anchor_text else None,
+                end_anchor_line=(end_line + 1) if (end_line and block.post_anchor_text) else None,
+                start_anchor_text=block.pre_anchor_text,
+                end_anchor_text=block.post_anchor_text,
+                open_ended=block.end_marker_span is None,
             )
         )
-        active_begin = None
 
-    unmatched_begin = 1 if active_begin is not None else 0
+    unmatched_begin = sum(1 for w in block_warnings if "BEGIN without END" in w)
+    unmatched_end = sum(1 for w in block_warnings if "END without BEGIN" in w)
     return TemplateAnchorDetection(
         has_markers=True,
         segments=segments,
@@ -103,26 +104,53 @@ def detect_template_anchors(text: str, begin: str = "[BEGIN]", end: str = "[END]
     )
 
 
-def render_template_preview_html(text: str, markers: list[TemplateMarker]) -> str:
+def render_template_preview_html(text: str, markers: list[TemplateMarker], segments: list[TemplateSegment]) -> str:
     if not text:
         return ""
 
     chunks: list[str] = []
     cursor = 0
+    anchor_line_classes: dict[int, str] = {}
+    for segment in segments:
+        if segment.start_anchor_line:
+            anchor_line_classes[segment.start_anchor_line] = "template-anchor-start"
+        if segment.end_anchor_line:
+            anchor_line_classes[segment.end_anchor_line] = "template-anchor-end"
+
+    line_starts = _line_starts(text)
 
     for marker in sorted(markers, key=lambda item: item.span[0]):
         start, finish = marker.span
         if start < cursor:
             continue
 
-        chunks.append(escape(text[cursor:start]))
+        before = escape(text[cursor:start])
+        chunks.append(before)
         marker_text = escape(text[start:finish])
         css_class = "template-marker-begin" if marker.kind == "BEGIN" else "template-marker-end"
-        chunks.append(f'<mark class="{css_class}">{marker_text}</mark>')
+        line = _line_for_offset(line_starts, start)
+        extra_anchor_class = f" {anchor_line_classes.get(line, '')}" if line in anchor_line_classes else ""
+        chunks.append(f'<mark class="{css_class}{extra_anchor_class}">{marker_text}</mark>')
         cursor = finish
 
     chunks.append(escape(text[cursor:]))
-    return mark_safe("".join(chunks))
+    html = "".join(chunks)
+
+    for line_no, css in anchor_line_classes.items():
+        pattern = re.compile(rf"(^|\n)([^\n]*)", flags=re.MULTILINE)
+        current = 0
+        replaced = []
+        for match in pattern.finditer(html):
+            current += 1
+            line_prefix, line_text = match.group(1), match.group(2)
+            if current == line_no:
+                replaced.append(f"{line_prefix}<mark class=\"{css}\">{line_text}</mark>")
+            else:
+                replaced.append(match.group(0))
+        if replaced:
+            html = "".join(replaced)
+
+    return mark_safe(html)
 
 
 def extract_template_text(file_obj: Any) -> str:
@@ -158,11 +186,24 @@ def build_template_preview_context(text: str, begin_marker: str, end_marker: str
     if detection.unmatched_end:
         warnings.append("Обнаружен END без открывающего BEGIN.")
 
+    for segment in detection.segments:
+        if not segment.start_anchor_text:
+            warnings.append("Нет строки перед [BEGIN], якорь начала не задан.")
+
     return {
         "has_text": bool(text),
         "segments_count": len(detection.segments),
         "markers_count": len(detection.markers),
         "warnings": warnings,
-        "html": render_template_preview_html(text, detection.markers),
+        "html": render_template_preview_html(text, detection.markers, detection.segments),
         "detection": detection,
+        "segments": [
+            {
+                "index": idx + 1,
+                "start_anchor": (segment.start_anchor_text or "").strip(),
+                "end_anchor": (segment.end_anchor_text or "").strip(),
+                "open_ended": segment.open_ended,
+            }
+            for idx, segment in enumerate(detection.segments)
+        ],
     }
