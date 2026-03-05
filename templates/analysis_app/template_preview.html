@@ -6,6 +6,7 @@
   <p><strong>ПУ:</strong> {% if svodka_template.scope == "general" %}Общая сводка{% else %}{{ svodka_template.pu_name|default:svodka_template.pu_id }}{% endif %}</p>
   <p><strong>Обновлён:</strong> {{ svodka_template.updated_at|date:"d.m.Y H:i" }}</p>
   <p><strong>Segments detected:</strong> {{ preview.segments_count }}</p>
+  <p><strong>Порог совпадения якоря:</strong> {{ svodka_template.anchor_match_threshold|floatformat:2 }}</p>
 
   {% if preview.warnings %}
     <ul>

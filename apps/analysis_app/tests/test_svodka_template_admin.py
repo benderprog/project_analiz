@@ -19,6 +19,7 @@ class SvodkaTemplateAdminFormTests(TestCase):
                 "pu_select": GENERAL_PU_CHOICE_VALUE,
                 "begin_marker": "[BEGIN]",
                 "end_marker": "[END]",
+                "anchor_match_threshold": "0.60",
                 "is_active": "on",
             }
         )
@@ -38,6 +39,7 @@ class SvodkaTemplateAdminFormTests(TestCase):
                     "pu_select": "pu-123",
                     "begin_marker": "[BEGIN]",
                     "end_marker": "[END]",
+                    "anchor_match_threshold": "0.60",
                     "is_active": "on",
                 }
             )
@@ -46,6 +48,34 @@ class SvodkaTemplateAdminFormTests(TestCase):
         self.assertEqual(form.cleaned_data["scope"], SvodkaTemplate.Scope.PU)
         self.assertEqual(form.cleaned_data["pu_id"], "pu-123")
         self.assertEqual(form.cleaned_data["pu_name"], "Тестовое ПУ")
+
+    def test_rejects_threshold_below_zero(self):
+        form = SvodkaTemplateAdminForm(
+            data={
+                "pu_select": GENERAL_PU_CHOICE_VALUE,
+                "begin_marker": "[BEGIN]",
+                "end_marker": "[END]",
+                "anchor_match_threshold": "-0.01",
+                "is_active": "on",
+            }
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("anchor_match_threshold", form.errors)
+
+    def test_rejects_threshold_above_one(self):
+        form = SvodkaTemplateAdminForm(
+            data={
+                "pu_select": GENERAL_PU_CHOICE_VALUE,
+                "begin_marker": "[BEGIN]",
+                "end_marker": "[END]",
+                "anchor_match_threshold": "1.01",
+                "is_active": "on",
+            }
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("anchor_match_threshold", form.errors)
 
     def test_choices_keep_general_when_portal_db_unavailable(self):
         with patch("apps.analysis_app.admin_forms.get_portal_gateway", side_effect=RuntimeError("db down")):

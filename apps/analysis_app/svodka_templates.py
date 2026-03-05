@@ -59,6 +59,7 @@ class SlicingDebugInfo:
     slicing_strategy: str = "none"
     segment_matches: list[dict[str, Any]] | None = None
     warnings: list[str] | None = None
+    template_anchor_threshold: float | None = None
 
 
 _TABLE_HEADER_KEYWORDS = (
@@ -83,20 +84,20 @@ def _normalize_ws(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
-def _normalize_anchor_text(text: str | None, begin_marker: str = "[BEGIN]", end_marker: str = "[END]") -> str:
-    normalized = _normalize_ws(text)
-    if begin_marker:
-        normalized = re.sub(re.escape(begin_marker), " ", normalized, flags=re.IGNORECASE)
-    if end_marker:
-        normalized = re.sub(re.escape(end_marker), " ", normalized, flags=re.IGNORECASE)
-    normalized = normalized.lower().replace("ё", "е")
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    normalized = re.sub(r"^[^\wа-яА-Я]+|[^\wа-яА-Я]+$", "", normalized)
-    return normalized
+def normalize_anchor_text(text: str) -> str:
+    normalized = (text or "").lower().replace("ё", "е")
+    normalized = re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE)
+    normalized = re.sub(r"_", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _anchor_details(text: str | None, begin_marker: str, end_marker: str) -> tuple[str | None, bool]:
-    normalized = _normalize_anchor_text(text, begin_marker=begin_marker, end_marker=end_marker)
+    cleaned = _normalize_ws(text)
+    if begin_marker:
+        cleaned = re.sub(re.escape(begin_marker), " ", cleaned, flags=re.IGNORECASE)
+    if end_marker:
+        cleaned = re.sub(re.escape(end_marker), " ", cleaned, flags=re.IGNORECASE)
+    normalized = normalize_anchor_text(cleaned)
     if not normalized:
         return None, True
     return normalized, len(normalized) < ANCHOR_MIN_CHARS
@@ -368,8 +369,8 @@ def build_template_segments(template_doc, begin_marker: str, end_marker: str) ->
 
 
 def _lexical_similarity(anchor: str, text: str) -> float:
-    a = _normalize_anchor_text(anchor)
-    b = _normalize_anchor_text(text)
+    a = normalize_anchor_text(anchor)
+    b = normalize_anchor_text(text)
     if not a or not b:
         return 0.0
     if a in b or b in a:
@@ -415,7 +416,7 @@ def _find_best_anchor_index(
     weak_anchor: bool,
     semantic_anchor_vec: Sequence[float] | None,
     semantic_element_vecs: Sequence[Sequence[float]] | None,
-) -> tuple[int | None, float]:
+) -> tuple[int | None, float, float]:
     best_idx: int | None = None
     best_score = 0.0
     if weak_anchor or semantic_anchor_vec is None or semantic_element_vecs is None:
@@ -433,13 +434,15 @@ def _find_best_anchor_index(
 
     threshold = WEAK_ANCHOR_MIN_SIM if weak_anchor else min_score
     if best_idx is None or best_score < threshold:
-        return None, best_score
-    return best_idx, best_score
+        return None, best_score, threshold
+    return best_idx, best_score, threshold
 
 
 def apply_template_segments(
     target_elements: Sequence[DocElement],
     segment_anchors: Sequence[SegmentAnchors],
+    *,
+    base_threshold: float = START_MIN_SIM,
 ) -> tuple[list[DocElement], int, int, list[dict[str, Any]], list[str]]:
     ranges: list[tuple[int, int]] = []
     cursor = 0
@@ -459,29 +462,32 @@ def apply_template_segments(
     } if semantic_vectors else {}
 
     for segment in segment_anchors:
-        debug_item = {"index": segment.index, "start_idx": None, "end_idx": None, "start_score": 0.0, "end_score": 0.0}
+        debug_item = {"index": segment.index, "start_idx": None, "end_idx": None, "start_score": 0.0, "end_score": 0.0, "start_threshold": None, "end_threshold": None, "start_status": "rejected", "end_status": "rejected"}
         if not segment.start_anchor_text:
             warnings.append(f"segment {segment.index}: missing start anchor")
             failed_segments += 1
             debug_segments.append(debug_item)
             continue
 
-        start_idx, start_score = _find_best_anchor_index(
+        start_idx, start_score, start_threshold = _find_best_anchor_index(
             segment.start_anchor_text,
             target_elements,
             start_from=cursor,
-            min_score=START_MIN_SIM,
+            min_score=base_threshold,
             weak_anchor=segment.weak_start_anchor,
             semantic_anchor_vec=anchor_vec_map.get(segment.start_anchor_text),
             semantic_element_vecs=semantic_element_vecs,
         )
         debug_item["start_idx"] = start_idx
         debug_item["start_score"] = round(float(start_score), 4)
+        debug_item["start_threshold"] = round(float(start_threshold), 4)
         if start_idx is None:
-            warnings.append(f"segment {segment.index}: start anchor below threshold")
+            warnings.append(f"segment {segment.index}: start anchor below threshold {start_threshold:.2f}")
             failed_segments += 1
             debug_segments.append(debug_item)
             continue
+
+        debug_item["start_status"] = "accepted"
 
         if segment.is_open_ended or not segment.end_anchor_text:
             ranges.append((start_idx + 1, len(target_elements) - 1))
@@ -491,24 +497,27 @@ def apply_template_segments(
             debug_segments.append(debug_item)
             continue
 
-        end_idx, end_score = _find_best_anchor_index(
+        end_idx, end_score, end_threshold = _find_best_anchor_index(
             segment.end_anchor_text,
             target_elements,
             start_from=start_idx + 1,
-            min_score=END_MIN_SIM,
+            min_score=base_threshold,
             weak_anchor=segment.weak_end_anchor,
             semantic_anchor_vec=anchor_vec_map.get(segment.end_anchor_text),
             semantic_element_vecs=semantic_element_vecs,
         )
         debug_item["end_idx"] = end_idx
         debug_item["end_score"] = round(float(end_score), 4)
+        debug_item["end_threshold"] = round(float(end_threshold), 4)
         if end_idx is None:
-            warnings.append(f"segment {segment.index}: end anchor missing, sliced to end")
+            warnings.append(f"segment {segment.index}: end anchor below threshold {end_threshold:.2f}, sliced to end")
             ranges.append((start_idx + 1, len(target_elements) - 1))
             cursor = len(target_elements)
             debug_item["open_ended"] = True
             debug_segments.append(debug_item)
             continue
+
+        debug_item["end_status"] = "accepted"
 
         if (end_idx - start_idx) > MAX_ANCHOR_LINE_DISTANCE:
             warnings.append(f"segment {segment.index}: large span ({end_idx - start_idx} lines)")
@@ -579,6 +588,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             target_kept_elements=0,
             fallback_reason="no-template",
             slicing_strategy="none",
+            template_anchor_threshold=None,
         )
 
     marker_sliced, marker_debug = slice_by_markers(target_elements, template.begin_marker, template.end_marker)
@@ -595,12 +605,14 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             target_kept_elements=int(marker_debug["kept_elements"]),
             fallback_reason=None,
             slicing_strategy="report_markers",
+            template_anchor_threshold=float(template.anchor_match_threshold or START_MIN_SIM),
         )
 
     from docx import Document
 
     template_doc = Document(template.file.path)
     segments = build_template_segments(template_doc, template.begin_marker, template.end_marker)
+    template_threshold = float(template.anchor_match_threshold or START_MIN_SIM)
     if not segments:
         return target_elements, SlicingDebugInfo(
             selected_template=template,
@@ -614,9 +626,14 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             target_kept_elements=int(marker_debug["kept_elements"]),
             fallback_reason="no-segments-detected",
             slicing_strategy="none",
+            template_anchor_threshold=template_threshold,
         )
 
-    sliced_elements, applied_segments, failed_segments, segment_matches, warnings = apply_template_segments(target_elements, segments)
+    sliced_elements, applied_segments, failed_segments, segment_matches, warnings = apply_template_segments(
+        target_elements,
+        segments,
+        base_threshold=template_threshold,
+    )
     if applied_segments == 0:
         kept = target_elements
         fallback_reason = "no-segments-applied"
@@ -638,4 +655,5 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         slicing_strategy="semantic_anchors" if applied_segments else "none",
         segment_matches=segment_matches,
         warnings=warnings,
+        template_anchor_threshold=template_threshold,
     )

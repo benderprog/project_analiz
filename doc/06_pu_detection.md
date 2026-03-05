@@ -91,8 +91,14 @@ python manage.py runserver
 - If semantic model is unavailable, anchor search degrades to lexical matching (no crash).
 
 Anchor matching uses configurable thresholds (`TEMPLATE_ANCHOR_START_MIN_SIM`,
-`TEMPLATE_ANCHOR_END_MIN_SIM`, `TEMPLATE_ANCHOR_WEAK_MIN_SIM`) and logs per-segment
-scores/indexes in debug logs.
+`TEMPLATE_ANCHOR_END_MIN_SIM`, `TEMPLATE_ANCHOR_WEAK_MIN_SIM`) and per-template setting
+`anchor_match_threshold` (admin field **«Порог совпадения якоря»**, recommended `0.55–0.70`).
+If per-template threshold is set, fallback anchor slicing uses it for start/end anchor checks
+(except weak anchors that keep `TEMPLATE_ANCHOR_WEAK_MIN_SIM`).
+
+Lexical fallback compares normalized single-line text (`lower`, `ё→е`, punctuation/symbol cleanup,
+collapsed spaces). Semantic embeddings remain computed from source text.
+Debug logs include threshold used, best start/end scores, matched indices and accepted/rejected status.
 
 ### In admin edit form and dedicated preview page
 
