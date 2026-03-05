@@ -14,11 +14,18 @@
   <fieldset class="module aligned">
     <h2>Предпросмотр шаблона</h2>
     {% if template_preview.has_text %}
-      <p><strong>Сегментов:</strong> {{ template_preview.segments_count }}</p>
+      <p><strong>Segments detected:</strong> {{ template_preview.segments_count }}</p>
       {% if template_preview.warnings %}
         <ul class="messagelist">
           {% for warning in template_preview.warnings %}
             <li class="warning">{{ warning }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% if template_preview.segments %}
+        <ul>
+          {% for segment in template_preview.segments %}
+            <li><strong>Сегмент {{ segment.index }}:</strong> START: {{ segment.start_anchor|default:"—" }}; END: {% if segment.open_ended %}до конца документа{% else %}{{ segment.end_anchor|default:"—" }}{% endif %}</li>
           {% endfor %}
         </ul>
       {% endif %}
@@ -30,5 +37,7 @@
   <style>
     .template-marker-begin { background: #dcfce7; color:#14532d; padding: 0 2px; }
     .template-marker-end { background: #fee2e2; color:#7f1d1d; padding: 0 2px; }
+  .template-anchor-start { background:#dbeafe; color:#1e3a8a; padding:0 2px; }
+  .template-anchor-end { background:#fef3c7; color:#78350f; padding:0 2px; }
   </style>
 {% endblock %}
