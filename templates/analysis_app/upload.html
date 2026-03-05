@@ -83,6 +83,7 @@
       {{ upload_form.selected_pu_id.label_tag }}
       {{ upload_form.selected_pu_id }}
       <small>По умолчанию: «Общая сводка».</small>
+      <a id="template-preview-link" href="#" target="_blank" rel="noopener" style="margin-left:12px; display:none;">Посмотреть шаблон</a>
     </p>
     <p>
       {{ upload_form.file.label_tag }}
@@ -131,6 +132,28 @@
   const statusUrl = "{{ queue_status_url }}";
   const body = document.getElementById("queue-table-body");
   const debugMode = "{{ debug_mode|yesno:'true,false' }}" === "true";
+  const templatePreviewByPu = JSON.parse("{{ template_preview_by_pu_json|escapejs }}");
+  const puSelect = document.getElementById("id_selected_pu_id");
+  const templatePreviewLink = document.getElementById("template-preview-link");
+
+  const updateTemplatePreviewLink = () => {
+    if (!puSelect || !templatePreviewLink) return;
+    const key = puSelect.value || "";
+    const url = templatePreviewByPu[key] || templatePreviewByPu[""] || "";
+    if (!url) {
+      templatePreviewLink.style.display = "none";
+      templatePreviewLink.removeAttribute("href");
+      return;
+    }
+    templatePreviewLink.href = url;
+    templatePreviewLink.style.display = "inline";
+  };
+
+  if (puSelect) {
+    puSelect.addEventListener("change", updateTemplatePreviewLink);
+    updateTemplatePreviewLink();
+  }
+
   if (!statusUrl || !body) return;
 
   const escapeHtml = (value) => {

@@ -1,0 +1,24 @@
+{% extends "analysis_app/base.html" %}
+
+{% block content %}
+<section class="card">
+  <h2>Просмотр шаблона</h2>
+  <p><strong>ПУ:</strong> {% if svodka_template.scope == "general" %}Общая сводка{% else %}{{ svodka_template.pu_name|default:svodka_template.pu_id }}{% endif %}</p>
+  <p><strong>Обновлён:</strong> {{ svodka_template.updated_at|date:"d.m.Y H:i" }}</p>
+  <p><strong>Сегментов:</strong> {{ preview.segments_count }}</p>
+
+  {% if preview.warnings %}
+    <ul>
+      {% for warning in preview.warnings %}
+        <li style="color:#b45309;">{{ warning }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <pre style="white-space: pre-wrap; border:1px solid #e5e7eb; border-radius:6px; padding:12px; background:#f8fafc; max-height:620px; overflow:auto;">{{ preview.html }}</pre>
+</section>
+<style>
+  .template-marker-begin { background: #dcfce7; color:#14532d; padding: 0 2px; }
+  .template-marker-end { background: #fee2e2; color:#7f1d1d; padding: 0 2px; }
+</style>
+{% endblock %}
