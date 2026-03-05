@@ -1,9 +1,11 @@
+import json
 import logging
 import os
 from pathlib import PurePath
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.paginator import EmptyPage, Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
@@ -28,7 +30,7 @@ from apps.analysis_app.event_payload import (
     status_for_timestamp,
     status_from_flag,
 )
-from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags, SvodkaTemplate
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
@@ -38,6 +40,7 @@ from apps.analysis_app.services import (
     highlight_text,
     match_event,
 )
+from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
@@ -1082,6 +1085,12 @@ class UploadView(View):
         if pending_selection_forms is None:
             pending_selection_forms = self._build_pending_selection_forms(request)
         queue_paginator, queue_page_obj = self._queue_page(request)
+        active_templates = SvodkaTemplate.objects.filter(is_active=True).only("template_id", "scope", "pu_id")
+        preview_by_pu: dict[str, str] = {}
+        for template in active_templates:
+            key = "" if template.scope == SvodkaTemplate.Scope.GENERAL else str(template.pu_id)
+            preview_by_pu[key] = reverse("analysis-template-preview", kwargs={"template_id": template.template_id})
+
         return {
             "upload_form": upload_form or UploadDocxWithPuForm(),
             "queue_page_obj": queue_page_obj,
@@ -1091,6 +1100,8 @@ class UploadView(View):
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
             "debug_mode": FeatureFlags.is_effective_debug_enabled(),
+            "template_preview_by_pu": preview_by_pu,
+            "template_preview_by_pu_json": json.dumps(preview_by_pu),
         }
 
     def _pending_runs(self, request, limit: int = 20):
@@ -1511,6 +1522,52 @@ class AnalysisDebugZipView(View):
         response = HttpResponse(build_debug_zip_bytes(run), content_type="application/zip")
         response["Content-Disposition"] = f'attachment; filename="debug_{run.run_id}.zip"'
         return response
+
+
+class TemplatePreviewView(LoginRequiredMixin, UserPassesTestMixin, View):
+    template_name = "analysis_app/template_preview.html"
+
+    def test_func(self):
+        return bool(self.request.user and self.request.user.is_staff)
+
+    def _render_preview(self, request, template: SvodkaTemplate):
+        template_text = ""
+        if template.file:
+            with template.file.open("rb") as source:
+                template_text = extract_template_text(source)
+
+        preview = build_template_preview_context(template_text, template.begin_marker, template.end_marker)
+        return render(
+            request,
+            self.template_name,
+            {
+                "svodka_template": template,
+                "preview": preview,
+            },
+        )
+
+    def get(self, request, template_id=None, pu_id=None):
+        if template_id is not None:
+            template = get_object_or_404(SvodkaTemplate, template_id=template_id)
+            return self._render_preview(request, template)
+
+        normalized_pu_id = str(pu_id or "").strip()
+        if not normalized_pu_id:
+            template = get_object_or_404(
+                SvodkaTemplate,
+                scope=SvodkaTemplate.Scope.GENERAL,
+                pu_id="",
+                is_active=True,
+            )
+            return self._render_preview(request, template)
+
+        template = get_object_or_404(
+            SvodkaTemplate,
+            scope=SvodkaTemplate.Scope.PU,
+            pu_id=normalized_pu_id,
+            is_active=True,
+        )
+        return self._render_preview(request, template)
 
 
 class AnalysisDetailView(View):
