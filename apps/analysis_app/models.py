@@ -1,12 +1,18 @@
 import uuid
 
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
 from apps.analysis_app.semantic import get_sentence_model
 from apps.analysis_app.subdivision_utils import build_embedding_source_hash, to_py_floats
 from apps.analysis_app.utils.text_normalize import normalize_subdivision_text
+
+
+SVODKA_TEMPLATE_DEFAULT_ANCHOR_MATCH_THRESHOLD = float(
+    getattr(settings, "TEMPLATE_ANCHOR_START_MIN_SIM", 0.60)
+)
 
 
 class AnalysisRun(models.Model):
@@ -90,6 +96,15 @@ class SvodkaTemplate(models.Model):
     file = models.FileField(upload_to="svodka_templates/", blank=True, null=True)
     begin_marker = models.CharField(max_length=32, default="[BEGIN]")
     end_marker = models.CharField(max_length=32, default="[END]")
+    anchor_match_threshold = models.FloatField(
+        default=SVODKA_TEMPLATE_DEFAULT_ANCHOR_MATCH_THRESHOLD,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        verbose_name="Порог совпадения якоря",
+        help_text=(
+            "Чем ниже — тем проще найти якорь при небольших изменениях, "
+            "но выше риск ложных совпадений. Рекомендовано 0.55–0.70."
+        ),
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

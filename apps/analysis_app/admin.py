@@ -280,6 +280,7 @@ class SvodkaTemplateAdmin(admin.ModelAdmin):
         "is_active",
         "begin_marker",
         "end_marker",
+        "anchor_match_threshold",
         "updated_at",
     )
     list_filter = ("scope", "is_active")

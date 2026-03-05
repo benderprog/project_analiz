@@ -7,8 +7,16 @@ from apps.analysis_app.svodka_templates import (
     build_template_segments,
     parse_template_marker_blocks,
     slice_by_markers,
+    normalize_anchor_text,
 )
 
+
+
+
+class AnchorNormalizationTests(SimpleTestCase):
+    def test_normalize_anchor_text_handles_case_punctuation_and_yo(self):
+        self.assertEqual(normalize_anchor_text("Ёлка, №1"), "елка 1")
+        self.assertEqual(normalize_anchor_text("елка 1"), "елка 1")
 
 class MarkerSlicingTests(SimpleTestCase):
     def test_two_segments_with_gap_keeps_only_segment_content(self):
@@ -96,6 +104,33 @@ class SvodkaTemplateSlicingTests(SimpleTestCase):
         self.assertEqual(applied, 1)
         self.assertEqual(failed, 0)
         self.assertEqual([e.text for e in sliced], ["inside", "tail"])
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_per_template_threshold_affects_match_acceptance(self):
+        anchors = [
+            SegmentAnchors(
+                start_anchor_text="дата нарушения место служба",
+                end_anchor_text=None,
+                is_open_ended=True,
+                index=0,
+            )
+        ]
+        target = [
+            DocElement(kind="paragraph", text="Дата нарушения и место"),
+            DocElement(kind="paragraph", text="тело"),
+            DocElement(kind="paragraph", text="хвост"),
+        ]
+
+        sliced_high, applied_high, failed_high, _, _ = apply_template_segments(target, anchors, base_threshold=0.65)
+        sliced_low, applied_low, failed_low, _, _ = apply_template_segments(target, anchors, base_threshold=0.6)
+
+        self.assertEqual(sliced_high, [])
+        self.assertEqual(applied_high, 0)
+        self.assertEqual(failed_high, 1)
+
+        self.assertEqual(applied_low, 1)
+        self.assertEqual(failed_low, 0)
+        self.assertEqual([e.text for e in sliced_low], ["тело", "хвост"])
 
     @override_settings(SKIP_SEMANTIC_MODEL=True)
     def test_paraphrased_anchor_lexical_match(self):

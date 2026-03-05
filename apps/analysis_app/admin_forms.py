@@ -34,7 +34,7 @@ class SvodkaTemplateAdminForm(forms.ModelForm):
 
     class Meta:
         model = SvodkaTemplate
-        fields = ("pu_select", "file", "begin_marker", "end_marker", "is_active")
+        fields = ("pu_select", "file", "begin_marker", "end_marker", "anchor_match_threshold", "is_active")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -48,6 +48,9 @@ class SvodkaTemplateAdminForm(forms.ModelForm):
                 self.fields["pu_select"].initial = str(self.instance.pu_id)
         else:
             self.fields["pu_select"].initial = GENERAL_PU_CHOICE_VALUE
+
+        self.fields["anchor_match_threshold"].min_value = 0.0
+        self.fields["anchor_match_threshold"].max_value = 1.0
 
     def _build_pu_choices(self):
         choices = [

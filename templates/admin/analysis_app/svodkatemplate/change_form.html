@@ -15,6 +15,7 @@
     <h2>Предпросмотр шаблона</h2>
     {% if template_preview.has_text %}
       <p><strong>Segments detected:</strong> {{ template_preview.segments_count }}</p>
+      <p><strong>Порог совпадения якоря:</strong> {{ adminform.form.anchor_match_threshold.value|default:"0.60" }}</p>
       {% if template_preview.warnings %}
         <ul class="messagelist">
           {% for warning in template_preview.warnings %}
