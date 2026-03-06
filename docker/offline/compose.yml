@@ -128,7 +128,7 @@ services:
         condition: service_healthy
       db_app:
         condition: service_healthy
-    command: ["celery", "-A", "config", "worker", "-l", "INFO", "-Q", "analysis"]
+    command: ["python", "scripts/run_celery_worker.py"]
     restart: unless-stopped
 
 volumes:
