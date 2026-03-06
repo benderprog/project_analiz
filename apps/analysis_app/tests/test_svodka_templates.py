@@ -1,4 +1,10 @@
+from tempfile import NamedTemporaryFile
+from types import SimpleNamespace
+import os
+from unittest.mock import patch
+
 from django.test import SimpleTestCase, override_settings
+from docx import Document
 
 from apps.analysis_app.svodka_templates import (
     DocElement,
@@ -8,6 +14,7 @@ from apps.analysis_app.svodka_templates import (
     parse_template_marker_blocks,
     slice_by_markers,
     normalize_anchor_text,
+    slice_document_for_run,
 )
 
 
@@ -166,3 +173,85 @@ class SvodkaTemplateSlicingTests(SimpleTestCase):
         ]
         kept, _ = slice_by_markers(elements, "[BEGIN]", "[END]")
         self.assertEqual([item.text for item in kept], ["y"])
+
+
+class SliceDocumentForRunFallbackTests(SimpleTestCase):
+    def _write_docx(self, paragraphs: list[str]) -> str:
+        document = Document()
+        for paragraph in paragraphs:
+            document.add_paragraph(paragraph)
+        with NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            document.save(tmp.name)
+            return tmp.name
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True, MIN_EVENT_PARAGRAPH_CHARS=20)
+    def test_anchor_miss_marks_meta_and_falls_back_to_full_document(self):
+        report_path = self._write_docx(["очень длинный абзац " * 8, "второй длинный абзац " * 8])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="missing", end_anchor_text="missing-end", index=0)],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertEqual(info.slicing_strategy, "none")
+            self.assertTrue(info.anchors_missing)
+            self.assertEqual(info.anchors_expected, 1)
+            self.assertEqual(info.anchors_matched, 0)
+            self.assertEqual(len(kept), info.total_elements)
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_when_anchors_match_method_is_template_anchors(self):
+        report_path = self._write_docx(["start anchor", "inside segment text", "end anchor"])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start anchor", end_anchor_text="end anchor", index=0)],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertEqual(info.slicing_strategy, "template_anchors")
+            self.assertEqual(info.anchors_matched, 1)
+            self.assertEqual([item.text for item in kept], ["inside segment text"])
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)
+
+    def test_report_markers_keep_priority(self):
+        report_path = self._write_docx(["prefix", "[BEGIN]", "inside", "[END]", "suffix"])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertEqual(info.slicing_strategy, "report_markers")
+            self.assertEqual([item.text for item in kept], ["inside"])
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)

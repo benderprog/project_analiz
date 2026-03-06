@@ -14,6 +14,27 @@
   {% if show_debug_zip_link and debug_zip_url %}
     <p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug-пакет</a></p>
   {% endif %}
+  {% if slicing_status %}
+    <p><strong>{{ slicing_status.label }}</strong></p>
+    {% if debug_mode %}
+      <p>
+        method={{ slicing_status.method }},
+        expected/matched={{ slicing_status.anchors_expected }}/{{ slicing_status.anchors_matched }},
+        threshold={{ slicing_status.threshold|default:"—" }}
+      </p>
+      {% if slicing_status.reasons %}
+        <p>reasons: {{ slicing_status.reasons|join:", " }}</p>
+      {% endif %}
+      {% if slicing_status.segments %}
+        <p>
+          top scores:
+          {% for seg in slicing_status.segments|slice:":3" %}
+            [#{{ seg.index }} start={{ seg.start_score|default:"—" }} end={{ seg.end_score|default:"—" }}]{% if not forloop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+      {% endif %}
+    {% endif %}
+  {% endif %}
   {% if debug_mode and debug_pipeline and debug_pipeline.stage_line %}
     <p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>
   {% endif %}

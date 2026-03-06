@@ -60,6 +60,21 @@ class SlicingDebugInfo:
     segment_matches: list[dict[str, Any]] | None = None
     warnings: list[str] | None = None
     template_anchor_threshold: float | None = None
+    anchors_expected: int = 0
+    anchors_matched: int = 0
+    anchors_missing: bool = False
+    reasons: list[str] | None = None
+
+    def to_meta(self) -> dict[str, Any]:
+        return {
+            "method": self.slicing_strategy,
+            "anchors_expected": int(self.anchors_expected),
+            "anchors_matched": int(self.anchors_matched),
+            "anchors_missing": bool(self.anchors_missing),
+            "reasons": list(self.reasons or []),
+            "threshold": self.template_anchor_threshold,
+            "segments": list(self.segment_matches or []),
+        }
 
 
 _TABLE_HEADER_KEYWORDS = (
@@ -464,7 +479,7 @@ def apply_template_segments(
     for segment in segment_anchors:
         debug_item = {"index": segment.index, "start_idx": None, "end_idx": None, "start_score": 0.0, "end_score": 0.0, "start_threshold": None, "end_threshold": None, "start_status": "rejected", "end_status": "rejected"}
         if not segment.start_anchor_text:
-            warnings.append(f"segment {segment.index}: missing start anchor")
+            warnings.append(f"segment {segment.index}: no_pre_anchor_line")
             failed_segments += 1
             debug_segments.append(debug_item)
             continue
@@ -482,7 +497,7 @@ def apply_template_segments(
         debug_item["start_score"] = round(float(start_score), 4)
         debug_item["start_threshold"] = round(float(start_threshold), 4)
         if start_idx is None:
-            warnings.append(f"segment {segment.index}: start anchor below threshold {start_threshold:.2f}")
+            warnings.append(f"segment {segment.index}: start_anchor_below_threshold {start_threshold:.2f}")
             failed_segments += 1
             debug_segments.append(debug_item)
             continue
@@ -510,7 +525,7 @@ def apply_template_segments(
         debug_item["end_score"] = round(float(end_score), 4)
         debug_item["end_threshold"] = round(float(end_threshold), 4)
         if end_idx is None:
-            warnings.append(f"segment {segment.index}: end anchor below threshold {end_threshold:.2f}, sliced to end")
+            warnings.append(f"segment {segment.index}: end_anchor_not_found {end_threshold:.2f}, sliced to end")
             ranges.append((start_idx + 1, len(target_elements) - 1))
             cursor = len(target_elements)
             debug_item["open_ended"] = True
@@ -589,6 +604,10 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             fallback_reason="no-template",
             slicing_strategy="none",
             template_anchor_threshold=None,
+            anchors_expected=0,
+            anchors_matched=0,
+            anchors_missing=False,
+            reasons=["no-template"],
         )
 
     marker_sliced, marker_debug = slice_by_markers(target_elements, template.begin_marker, template.end_marker)
@@ -606,6 +625,10 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             fallback_reason=None,
             slicing_strategy="report_markers",
             template_anchor_threshold=float(template.anchor_match_threshold or START_MIN_SIM),
+            anchors_expected=0,
+            anchors_matched=0,
+            anchors_missing=False,
+            reasons=[],
         )
 
     from docx import Document
@@ -627,6 +650,10 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             fallback_reason="no-segments-detected",
             slicing_strategy="none",
             template_anchor_threshold=template_threshold,
+            anchors_expected=0,
+            anchors_matched=0,
+            anchors_missing=True,
+            reasons=["template_has_no_valid_anchors"],
         )
 
     sliced_elements, applied_segments, failed_segments, segment_matches, warnings = apply_template_segments(
@@ -641,6 +668,11 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         kept = sliced_elements
         fallback_reason = None
 
+    reasons = list(warnings or [])
+    anchors_missing = bool(len(segments) > 0 and applied_segments == 0)
+    if anchors_missing and not reasons:
+        reasons.append("anchors_not_found")
+
     return kept, SlicingDebugInfo(
         selected_template=template,
         template_segments_total=len(segments),
@@ -652,8 +684,12 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         target_segments_count=int(marker_debug["segments_count"]),
         target_kept_elements=int(marker_debug["kept_elements"]),
         fallback_reason=fallback_reason,
-        slicing_strategy="semantic_anchors" if applied_segments else "none",
+        slicing_strategy="template_anchors" if applied_segments else "none",
         segment_matches=segment_matches,
         warnings=warnings,
         template_anchor_threshold=template_threshold,
+        anchors_expected=len(segments),
+        anchors_matched=applied_segments,
+        anchors_missing=anchors_missing,
+        reasons=reasons,
     )

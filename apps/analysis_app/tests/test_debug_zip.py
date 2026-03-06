@@ -67,6 +67,20 @@ class AnalysisDebugZipViewTests(TestCase):
         archive = zipfile.ZipFile(BytesIO(response.content))
         self.assertIn("meta.json", archive.namelist())
 
+
+    def test_debug_zip_contains_slicing_meta_file(self):
+        run = self._create_run(slicing_meta={"method": "none", "anchors_missing": True})
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = True
+        flags.save(update_fields=["debug_mode", "updated_at"])
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("analysis-debug-zip", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 200)
+        archive = zipfile.ZipFile(BytesIO(response.content))
+        self.assertIn("slicing_meta.json", archive.namelist())
+
     def test_other_user_cannot_access(self):
         run = self._create_run()
         flags = FeatureFlags.get_solo()

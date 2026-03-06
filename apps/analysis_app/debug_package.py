@@ -45,6 +45,7 @@ def _safe_run_payload(run: AnalysisRun) -> dict[str, object]:
         "progress_total": run.progress_total,
         "progress_done": run.progress_done,
         "progress_updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else None,
+        "slicing_meta": run.slicing_meta if isinstance(run.slicing_meta, dict) else {},
     }
 
 
@@ -89,6 +90,10 @@ def build_debug_zip_bytes(run: AnalysisRun) -> bytes:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("meta.json", json.dumps(meta_payload, ensure_ascii=False, indent=2))
         archive.writestr("run.json", json.dumps(_safe_run_payload(run), ensure_ascii=False, indent=2))
+        archive.writestr(
+            "slicing_meta.json",
+            json.dumps(run.slicing_meta if isinstance(run.slicing_meta, dict) else {}, ensure_ascii=False, indent=2),
+        )
 
         if slicing_payload.get("template") or slicing_payload.get("items"):
             archive.writestr(
