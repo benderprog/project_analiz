@@ -19,12 +19,12 @@ web:
 	$(MANAGE) runserver $(HOST):$(PORT)
 
 worker:
-	$(PY) scripts/run_celery_worker.py
+	$(PY) -m scripts.run_celery_worker
 
 dev:
 	@set -euo pipefail; \
 	echo "[dev] starting celery..."; \
-	$(PY) scripts/run_celery_worker.py & \
+	$(PY) -m scripts.run_celery_worker & \
 	CELERY_PID=$$!; \
 	cleanup() { \
 		echo ""; \
