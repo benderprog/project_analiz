@@ -46,6 +46,7 @@ class AnalysisRun(models.Model):
     progress_done = models.PositiveIntegerField(null=True, blank=True, default=None)
     progress_updated_at = models.DateTimeField(null=True, blank=True, default=None)
     debug_pipeline = models.JSONField(default=dict, blank=True)
+    slicing_meta = models.JSONField(default=dict, blank=True)
     debug_pipeline_updated_at = models.DateTimeField(null=True, blank=True)
     debug_package_file = models.FileField(upload_to="debug_packages/", null=True, blank=True)
     debug_package_created_at = models.DateTimeField(null=True, blank=True)

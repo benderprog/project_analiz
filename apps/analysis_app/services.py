@@ -98,11 +98,14 @@ def run_analysis_pipeline(
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
     parse_started = pytime.monotonic()
-    events = parse_docx(
+    events, slicing_meta = parse_docx(
         run.file.path,
         selected_pu_id=selected_pu_id or run.selected_pu_id,
         selected_pu_name=run.selected_pu_name,
+        return_slicing_meta=True,
     )
+    run.slicing_meta = slicing_meta
+    run.save(update_fields=["slicing_meta"])
     parse_ms = int((pytime.monotonic() - parse_started) * 1000)
     total_events = len(events)
     if stage_callback:
@@ -355,7 +358,8 @@ def parse_docx(
     *,
     selected_pu_id: str | None = None,
     selected_pu_name: str | None = None,
-) -> list[ParsedEvent]:
+    return_slicing_meta: bool = False,
+) -> list[ParsedEvent] | tuple[list[ParsedEvent], dict[str, Any]]:
     """Split DOCX content into ordered events from paragraphs and table rows."""
     from docx import Document
 
@@ -436,6 +440,9 @@ def parse_docx(
         skipped_empty_rows,
         min_chars,
     )
+    slicing_meta = slicing_info.to_meta()
+    if return_slicing_meta:
+        return events, slicing_meta
     return events
 
 

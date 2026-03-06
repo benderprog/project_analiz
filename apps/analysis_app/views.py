@@ -134,6 +134,43 @@ def _debug_pipeline_payload(run: AnalysisRun) -> dict:
     }
 
 
+
+
+def _slicing_status_payload(run: AnalysisRun) -> dict[str, object]:
+    meta = run.slicing_meta if isinstance(run.slicing_meta, dict) else {}
+    method = str(meta.get("method") or "none")
+    anchors_expected = int(meta.get("anchors_expected") or 0)
+    anchors_matched = int(meta.get("anchors_matched") or 0)
+    anchors_missing = bool(meta.get("anchors_missing"))
+    reasons = [str(item) for item in (meta.get("reasons") or []) if str(item)]
+    threshold = meta.get("threshold")
+    segments = meta.get("segments") if isinstance(meta.get("segments"), list) else []
+
+    if method == "report_markers":
+        label = "Шаблон: применён"
+        warning = False
+    elif anchors_missing:
+        label = "Шаблон: не применён — якоря не найдены, проанализирована вся сводка"
+        warning = True
+    elif anchors_matched > 0:
+        label = "Шаблон: применён"
+        warning = False
+    else:
+        label = "Шаблон: не применён"
+        warning = False
+
+    return {
+        "label": label,
+        "warning": warning,
+        "method": method,
+        "anchors_expected": anchors_expected,
+        "anchors_matched": anchors_matched,
+        "anchors_missing": anchors_missing,
+        "reasons": reasons,
+        "threshold": threshold,
+        "segments": segments,
+    }
+
 def _app_version_payload() -> dict[str, str]:
     settings_version = getattr(settings, "VERSION", "")
     git_sha = os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA") or os.getenv("SOURCE_VERSION") or ""
@@ -162,6 +199,7 @@ def _safe_run_payload(run: AnalysisRun) -> dict[str, object]:
         "progress_total": run.progress_total,
         "progress_done": run.progress_done,
         "progress_updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else None,
+        "slicing_meta": run.slicing_meta if isinstance(run.slicing_meta, dict) else {},
     }
 
 
@@ -1624,5 +1662,6 @@ class AnalysisDetailView(View):
                 "debug_zip_url": _debug_zip_url(run),
                 "show_debug_zip_link": FeatureFlags.is_effective_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
                 "debug_pipeline": _debug_pipeline_payload(run),
+                "slicing_status": _slicing_status_payload(run),
             },
         )
