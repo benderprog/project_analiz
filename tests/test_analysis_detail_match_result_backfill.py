@@ -110,3 +110,35 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         self.assertEqual(predicted.get("classifier_pattern_candidates"), candidates)
         by_type = {item.get("event_type_name"): item for item in candidates}
         self.assertEqual(by_type["Внос/вынос"].get("classifier_article"), "18.3 ч. 1")
+
+
+    def test_detail_view_shows_safe_slicing_preview_with_anchor_labels(self):
+        run = AnalysisRun.objects.create(
+            created_session_key=self._session_key(),
+            file=SimpleUploadedFile(
+                "report.docx",
+                b"dummy",
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            slicing_meta={
+                "analyzed_text": "line0\n<script>alert(1)</script>\nline2",
+                "segments": [{"start_idx": 0, "end_idx": 2}],
+                "fallback_to_full_report": True,
+                "method": "none",
+                "anchors_missing": True,
+            },
+        )
+        paragraph = AnalysisParagraph.objects.create(run=run, idx=1, text="Текст абзаца")
+        AnalysisResult.objects.create(paragraph=paragraph, extracted_attributes={}, match_result={"matched": False})
+
+        response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Предпросмотр обрезки / якорей", content)
+        self.assertIn("ANCHOR START (matched)", content)
+        self.assertIn("ANCHOR END (matched)", content)
+        self.assertIn("Fallback: анализ всей сводки", content)
+        self.assertNotIn("<script>alert(1)</script>", content)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
+
