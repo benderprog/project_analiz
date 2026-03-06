@@ -105,6 +105,7 @@ class SlicingDebugInfo:
                     },
                     "accepted": accepted,
                     "reasons": reasons,
+                    "slice_text": segment.get("slice_text") or "",
                 }
             )
 
@@ -541,6 +542,7 @@ def apply_template_segments(
             "open_ended": bool(segment.is_open_ended or not segment.end_anchor_text),
             "start_matched_line": None,
             "end_matched_line": None,
+            "slice_text": "",
         }
         if not segment.start_anchor_text:
             warnings.append(f"segment {segment.index}: no_pre_anchor_line")
@@ -572,6 +574,7 @@ def apply_template_segments(
         if segment.is_open_ended or not segment.end_anchor_text:
             slice_elements = target_elements[start_idx + 1 :]
             slice_text = "\n".join(item.text for item in slice_elements)
+            debug_item["slice_text"] = slice_text
             debug_item["slice_chars"] = len(slice_text.strip())
             if len(slice_text.strip()) < MIN_SLICE_CHARS:
                 warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{MIN_SLICE_CHARS})")
@@ -621,6 +624,7 @@ def apply_template_segments(
 
         slice_elements = target_elements[start_idx + 1 : end_idx]
         slice_text = "\n".join(item.text for item in slice_elements)
+        debug_item["slice_text"] = slice_text
         debug_item["slice_chars"] = len(slice_text.strip())
         if len(slice_text.strip()) < MIN_SLICE_CHARS:
             warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{MIN_SLICE_CHARS})")
