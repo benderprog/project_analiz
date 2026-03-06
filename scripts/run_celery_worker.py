@@ -19,6 +19,23 @@ from config.worker_autolimits import (
     log_worker_limits,
 )
 
+THREAD_ENV_VARS = (
+    'OMP_NUM_THREADS',
+    'MKL_NUM_THREADS',
+    'OPENBLAS_NUM_THREADS',
+    'NUMEXPR_NUM_THREADS',
+    'VECLIB_MAXIMUM_THREADS',
+)
+
+
+def _apply_worker_thread_env(threads_per_child: int) -> None:
+    thread_count = str(threads_per_child)
+    for name in THREAD_ENV_VARS:
+        os.environ[name] = thread_count
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    os.environ['WORKER_THREADS_PER_CHILD'] = thread_count
+    os.environ['PYTORCH_NUM_THREADS'] = thread_count
+
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -39,6 +56,7 @@ def main() -> None:
         safety_margin_kb=_env_int('WORKER_MEMORY_SAFETY_MARGIN_KB', 200_000),
     )
     log_worker_limits(limits)
+    _apply_worker_thread_env(limits.threads_per_child)
 
     command = build_celery_command(
         limits,

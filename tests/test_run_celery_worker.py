@@ -38,3 +38,23 @@ def test_main_smoke_logs_limits_without_import_error(monkeypatch, caplog) -> Non
     assert 'Worker auto-limits:' in caplog.text
     assert called['file'] == 'celery'
     assert called['args'][0] == 'celery'
+    assert os.environ['OMP_NUM_THREADS'] == '1'
+    assert os.environ['WORKER_THREADS_PER_CHILD'] == '1'
+
+
+def test_apply_worker_thread_env_sets_expected_variables(monkeypatch) -> None:
+    from scripts import run_celery_worker
+
+    for name in run_celery_worker.THREAD_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv('TOKENIZERS_PARALLELISM', raising=False)
+    monkeypatch.delenv('WORKER_THREADS_PER_CHILD', raising=False)
+    monkeypatch.delenv('PYTORCH_NUM_THREADS', raising=False)
+
+    run_celery_worker._apply_worker_thread_env(3)
+
+    for name in run_celery_worker.THREAD_ENV_VARS:
+        assert os.environ[name] == '3'
+    assert os.environ['TOKENIZERS_PARALLELISM'] == 'false'
+    assert os.environ['WORKER_THREADS_PER_CHILD'] == '3'
+    assert os.environ['PYTORCH_NUM_THREADS'] == '3'

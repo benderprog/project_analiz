@@ -39,6 +39,7 @@ def test_cgroup_v2_limits_are_used_for_cpu_and_memory() -> None:
     assert cpu_available == 2.0
     assert mem_available == 2 * 1024 * 1024 * 1024
     assert limits.concurrency == 1
+    assert limits.threads_per_child == 1
     assert limits.max_memory_per_child_kb == 1477721
 
 
@@ -58,6 +59,7 @@ def test_cgroup_v1_falls_back_to_host_when_unlimited() -> None:
     assert cpu_available == 10.0
     assert mem_available == 8192000 * 1024
     assert limits.concurrency == 8
+    assert limits.threads_per_child == 1
     assert limits.max_memory_per_child_kb == 619200
 
 
@@ -69,4 +71,12 @@ def test_log_worker_limits_smoke(caplog) -> None:
 
     assert 'cpu_available=4.000' in caplog.text
     assert 'computed_concurrency=3' in caplog.text
+    assert 'threads_per_child=1' in caplog.text
     assert 'computed_max_memory_per_child_kb=918481' in caplog.text
+
+
+def test_threads_per_child_uses_cpu_budget_split() -> None:
+    limits = compute_worker_limits(cpu_available=32.0, mem_available_bytes=16 * 1024 * 1024 * 1024)
+
+    assert limits.concurrency == 8
+    assert limits.threads_per_child == 3

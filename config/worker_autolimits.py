@@ -31,6 +31,7 @@ class WorkerLimits:
     cpu_available: float
     mem_available_bytes: int
     concurrency: int
+    threads_per_child: int
     max_memory_per_child_kb: int
 
 
@@ -117,6 +118,7 @@ def compute_worker_limits(
 ) -> WorkerLimits:
     cpu_budget = cpu_available * CPU_BUDGET_FACTOR
     concurrency = max(1, min(math.floor(cpu_budget), max_concurrency))
+    threads_per_child = max(1, math.floor(cpu_budget / concurrency))
 
     mem_budget = int(mem_available_bytes * MEMORY_BUDGET_FACTOR)
     max_memory_per_child_kb = max(1, math.floor(mem_budget / concurrency / 1024) - safety_margin_kb)
@@ -125,6 +127,7 @@ def compute_worker_limits(
         cpu_available=cpu_available,
         mem_available_bytes=mem_available_bytes,
         concurrency=concurrency,
+        threads_per_child=threads_per_child,
         max_memory_per_child_kb=max_memory_per_child_kb,
     )
 
@@ -132,10 +135,11 @@ def compute_worker_limits(
 def log_worker_limits(limits: WorkerLimits, *, logger: Optional[logging.Logger] = None) -> None:
     log = logger or logging.getLogger(__name__)
     log.info(
-        'Worker auto-limits: cpu_available=%.3f mem_available_bytes=%d computed_concurrency=%d computed_max_memory_per_child_kb=%d',
+        'Worker auto-limits: cpu_available=%.3f mem_available_bytes=%d computed_concurrency=%d threads_per_child=%d computed_max_memory_per_child_kb=%d',
         limits.cpu_available,
         limits.mem_available_bytes,
         limits.concurrency,
+        limits.threads_per_child,
         limits.max_memory_per_child_kb,
     )
 
