@@ -70,6 +70,44 @@ class SlicingDebugInfo:
     analyzed_text: str = ""
 
     def to_meta(self) -> dict[str, Any]:
+        segment_matches = list(self.segment_matches or [])
+        template_anchors: list[dict[str, Any]] = []
+        for segment in segment_matches:
+            if not isinstance(segment, dict):
+                continue
+            start_idx = segment.get("start_idx")
+            end_idx = segment.get("end_idx")
+            accepted = bool(segment.get("accepted"))
+            reasons: list[str] = []
+            if start_idx is None:
+                reasons.append("below_threshold")
+            invalid_reason = segment.get("invalid_reason")
+            if invalid_reason:
+                reasons.append(str(invalid_reason))
+            if not accepted and not reasons:
+                reasons.append("not_applied")
+
+            template_anchors.append(
+                {
+                    "segment_index": int(segment.get("index") or 0),
+                    "template_anchor_start": segment.get("template_anchor_start"),
+                    "template_anchor_end": segment.get("template_anchor_end"),
+                    "threshold": segment.get("start_threshold") or self.template_anchor_threshold,
+                    "start": {
+                        "idx": start_idx,
+                        "score": segment.get("start_score"),
+                        "matched_line": segment.get("start_matched_line"),
+                    },
+                    "end": {
+                        "idx": end_idx if not segment.get("open_ended") else None,
+                        "score": segment.get("end_score") if not segment.get("open_ended") else None,
+                        "matched_line": segment.get("end_matched_line") if not segment.get("open_ended") else None,
+                    },
+                    "accepted": accepted,
+                    "reasons": reasons,
+                }
+            )
+
         return {
             "method": self.slicing_strategy,
             "slice_strategy": self.slicing_strategy,
@@ -78,7 +116,8 @@ class SlicingDebugInfo:
             "anchors_missing": bool(self.anchors_missing),
             "reasons": list(self.reasons or []),
             "threshold": self.template_anchor_threshold,
-            "segments": list(self.segment_matches or []),
+            "segments": segment_matches,
+            "template_anchors": template_anchors,
             "fallback_to_full_report": bool(self.fallback_to_full_report),
             "min_slice_chars": int(self.min_slice_chars),
             "analyzed_text": self.analyzed_text,
@@ -486,6 +525,8 @@ def apply_template_segments(
     for segment in segment_anchors:
         debug_item = {
             "index": segment.index,
+            "template_anchor_start": segment.start_anchor_text,
+            "template_anchor_end": segment.end_anchor_text,
             "start_idx": None,
             "end_idx": None,
             "start_score": 0.0,
@@ -497,6 +538,9 @@ def apply_template_segments(
             "slice_chars": 0,
             "invalid_reason": None,
             "accepted": False,
+            "open_ended": bool(segment.is_open_ended or not segment.end_anchor_text),
+            "start_matched_line": None,
+            "end_matched_line": None,
         }
         if not segment.start_anchor_text:
             warnings.append(f"segment {segment.index}: no_pre_anchor_line")
@@ -516,6 +560,7 @@ def apply_template_segments(
         debug_item["start_idx"] = start_idx
         debug_item["start_score"] = round(float(start_score), 4)
         debug_item["start_threshold"] = round(float(start_threshold), 4)
+        debug_item["start_matched_line"] = target_elements[start_idx].text if start_idx is not None else None
         if start_idx is None:
             warnings.append(f"segment {segment.index}: start_anchor_below_threshold {start_threshold:.2f}")
             failed_segments += 1
@@ -554,6 +599,7 @@ def apply_template_segments(
         debug_item["end_idx"] = end_idx
         debug_item["end_score"] = round(float(end_score), 4)
         debug_item["end_threshold"] = round(float(end_threshold), 4)
+        debug_item["end_matched_line"] = target_elements[end_idx].text if end_idx is not None else None
         if end_idx is None:
             warnings.append(f"segment {segment.index}: end_anchor_not_found {end_threshold:.2f}, sliced to end")
             ranges.append((start_idx + 1, len(target_elements) - 1))

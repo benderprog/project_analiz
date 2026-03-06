@@ -122,7 +122,18 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
             ),
             slicing_meta={
                 "analyzed_text": "line0\n<script>alert(1)</script>\nline2",
-                "segments": [{"start_idx": 0, "end_idx": 2}],
+                "template_anchors": [
+                    {
+                        "segment_index": 0,
+                        "template_anchor_start": "start template",
+                        "template_anchor_end": "end template",
+                        "threshold": 0.6,
+                        "start": {"idx": 0, "score": 0.99, "matched_line": "line0"},
+                        "end": {"idx": 2, "score": 0.88, "matched_line": "line2"},
+                        "accepted": True,
+                        "reasons": [],
+                    }
+                ],
                 "fallback_to_full_report": True,
                 "method": "none",
                 "anchors_missing": True,
@@ -136,9 +147,52 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         self.assertEqual(response.status_code, 200)
         content = response.content.decode("utf-8")
         self.assertIn("Предпросмотр обрезки / якорей", content)
+        self.assertIn("Якорь начала (из шаблона):", content)
+        self.assertIn("start template", content)
+        self.assertIn("end template", content)
         self.assertIn("ANCHOR START (matched)", content)
         self.assertIn("ANCHOR END (matched)", content)
+        self.assertIn("anchor-start", content)
+        self.assertIn("anchor-end", content)
         self.assertIn("Fallback: анализ всей сводки", content)
         self.assertNotIn("<script>alert(1)</script>", content)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
 
+
+    def test_detail_view_shows_open_ended_anchor_segment(self):
+        run = AnalysisRun.objects.create(
+            created_session_key=self._session_key(),
+            file=SimpleUploadedFile(
+                "report.docx",
+                b"dummy",
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            slicing_meta={
+                "analyzed_text": "line0\nline1\nline2",
+                "template_anchors": [
+                    {
+                        "segment_index": 1,
+                        "template_anchor_start": "open start",
+                        "template_anchor_end": None,
+                        "threshold": 0.6,
+                        "start": {"idx": 1, "score": 0.73, "matched_line": "line1"},
+                        "end": {"idx": None, "score": None, "matched_line": None},
+                        "accepted": False,
+                        "reasons": ["below_threshold"],
+                    }
+                ],
+                "fallback_to_full_report": False,
+                "method": "none",
+                "anchors_missing": True,
+            },
+        )
+        paragraph = AnalysisParagraph.objects.create(run=run, idx=1, text="Текст абзаца")
+        AnalysisResult.objects.create(paragraph=paragraph, extracted_attributes={}, match_result={"matched": False})
+
+        response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Якорь конца (из шаблона):", content)
+        self.assertIn("до конца документа", content)
+        self.assertIn("Не применён: below_threshold", content)

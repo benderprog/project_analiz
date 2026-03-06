@@ -180,28 +180,57 @@ def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str,
     if not raw_text:
         return None
 
-    lines = raw_text.splitlines()
-    max_lines = 400
-    truncated = False
-    if len(lines) > max_lines:
-        truncated = True
-        lines = [*lines[:200], "…", *lines[-199:]]
+    all_lines = raw_text.splitlines()
+    if not all_lines:
+        return None
 
-    starts = {int(item.get("start_idx")) for item in (meta.get("segments") or []) if isinstance(item, dict) and item.get("start_idx") is not None}
-    ends = {int(item.get("end_idx")) for item in (meta.get("segments") or []) if isinstance(item, dict) and item.get("end_idx") is not None}
+    anchors = meta.get("template_anchors") if isinstance(meta.get("template_anchors"), list) else []
+    segments = [item for item in anchors if isinstance(item, dict)]
+
+    anchor_points: set[int] = set()
+    for seg in segments:
+        start = seg.get("start") if isinstance(seg.get("start"), dict) else {}
+        end = seg.get("end") if isinstance(seg.get("end"), dict) else {}
+        for value in (start.get("idx"), end.get("idx")):
+            if isinstance(value, int) and 0 <= value < len(all_lines):
+                anchor_points.add(value)
+
+    preview_start = 0
+    preview_end = len(all_lines) - 1
+    truncated = False
+    if anchor_points:
+        margin = 20
+        preview_start = max(min(anchor_points) - margin, 0)
+        preview_end = min(max(anchor_points) + margin, len(all_lines) - 1)
+        if preview_end - preview_start + 1 < 40:
+            preview_end = min(preview_start + 39, len(all_lines) - 1)
+    if (preview_end - preview_start + 1) > 500:
+        preview_end = preview_start + 499
+    if preview_start > 0 or preview_end < len(all_lines) - 1:
+        truncated = True
+
+    starts = {
+        item.get("start", {}).get("idx")
+        for item in segments
+        if isinstance(item.get("start"), dict) and item.get("start", {}).get("idx") is not None
+    }
+    ends = {
+        item.get("end", {}).get("idx")
+        for item in segments
+        if isinstance(item.get("end"), dict) and item.get("end", {}).get("idx") is not None
+    }
+
     marked_lines: list[dict[str, object]] = []
-    for idx, line in enumerate(lines):
+    for idx in range(preview_start, preview_end + 1):
+        line = all_lines[idx]
         css = ""
         label = ""
-        if isinstance(line, str) and line == "…":
-            marked_lines.append({"idx": idx, "text": line, "css": "slicing-skip", "label": ""})
-            continue
         if idx in starts:
-            css = "slicing-anchor-start"
+            css = "anchor-start"
             label = "ANCHOR START (matched)"
-        elif idx in ends:
-            css = "slicing-anchor-end"
-            label = "ANCHOR END (matched)"
+        if idx in ends:
+            css = f"{css} anchor-end".strip()
+            label = f"{label}, ANCHOR END (matched)".strip(", ") if label else "ANCHOR END (matched)"
         marked_lines.append({"idx": idx, "text": line, "css": css, "label": label})
 
     return {
@@ -209,7 +238,9 @@ def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str,
         "truncated": truncated,
         "fallback_to_full_report": bool(meta.get("fallback_to_full_report")),
         "show_anchor_attempts": debug_mode,
+        "template_anchors": segments,
     }
+
 
 def _app_version_payload() -> dict[str, str]:
     settings_version = getattr(settings, "VERSION", "")

@@ -8,8 +8,11 @@
   .slicing-preview { margin: .75rem 0 1rem; }
   .slicing-preview pre { max-height: 320px; overflow: auto; background: #fafafa; border: 1px solid #ddd; padding: .6rem; }
   .slicing-line { display: block; white-space: pre-wrap; word-break: break-word; }
-  .slicing-anchor-start { background: #dbeafe; }
-  .slicing-anchor-end { background: #fef3c7; }
+  .anchor-start { background: #dbeafe; border-left: 3px solid #2563eb; }
+  .anchor-end { background: #fef3c7; border-left: 3px solid #d97706; }
+  .anchor-template { font-weight: 600; padding: 0 .2rem; border-radius: 3px; }
+  .anchor-template.anchor-start { display: inline-block; }
+  .anchor-template.anchor-end { display: inline-block; }
   .slicing-line-label { font-size: .75rem; font-weight: 600; margin-left: .35rem; }
   .slicing-fallback { padding: .4rem .55rem; background: #fff7ed; border: 1px solid #fdba74; margin-bottom: .5rem; }
   .slicing-skip { color: #777; }
@@ -50,12 +53,43 @@
   {% if slicing_preview %}
     <details class="slicing-preview">
       <summary>Предпросмотр обрезки / якорей</summary>
+      {% if slicing_preview.template_anchors %}
+        <h4>Якоря</h4>
+        {% for seg in slicing_preview.template_anchors %}
+          <div>
+            <p><strong>Сегмент #{{ seg.segment_index }}</strong></p>
+            <p>Якорь начала (из шаблона): <span class="anchor-template anchor-start">{{ seg.template_anchor_start|default:"—" }}</span></p>
+            <p>
+              Найдено в сводке:
+              <span class="anchor-start">{{ seg.start.matched_line|default:"—" }}</span>
+              (score={{ seg.start.score|default:"—" }}, idx={{ seg.start.idx|default:"—" }})
+            </p>
+            {% if seg.template_anchor_end %}
+              <p>Якорь конца (из шаблона): <span class="anchor-template anchor-end">{{ seg.template_anchor_end }}</span></p>
+              <p>
+                Найдено в сводке:
+                <span class="anchor-end">{{ seg.end.matched_line|default:"—" }}</span>
+                (score={{ seg.end.score|default:"—" }}, idx={{ seg.end.idx|default:"—" }})
+              </p>
+            {% else %}
+              <p>Якорь конца (из шаблона): <span class="anchor-template anchor-end">до конца документа</span></p>
+            {% endif %}
+            <p>
+              {% if seg.accepted %}
+                <strong>Статус сегмента: Применён</strong>
+              {% else %}
+                <strong>Статус сегмента: Не применён{% if seg.reasons %}: {{ seg.reasons|join:", " }}{% endif %}</strong>
+              {% endif %}
+            </p>
+          </div>
+        {% endfor %}
+      {% endif %}
       {% if slicing_preview.fallback_to_full_report %}
         <div class="slicing-fallback">Fallback: анализ всей сводки</div>
       {% endif %}
       <pre>{% for line in slicing_preview.lines %}<span class="slicing-line {{ line.css }}">{{ line.text }}{% if line.label %}<span class="slicing-line-label">{{ line.label }}</span>{% endif %}</span>
 {% endfor %}</pre>
-      {% if slicing_preview.truncated %}<p>Показаны только часть строк (начало/конец).</p>{% endif %}
+      {% if slicing_preview.truncated %}<p>Показано окно вокруг найденных якорей.</p>{% endif %}
     </details>
   {% endif %}
 </section>
