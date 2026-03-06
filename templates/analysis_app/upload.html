@@ -12,11 +12,6 @@
 <section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
     <h2 style="margin:0;">Очередь анализов</h2>
-    <form method="post" action="{% url 'analysis-queue-reset' %}">
-      {% csrf_token %}
-      <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
-      <button type="submit">Сбросить очередь</button>
-    </form>
   </div>
 
   {% if queue_page_obj.object_list %}
@@ -42,15 +37,27 @@
                 <div class="queue-action-links">
                   <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
                   {% if debug_mode and run.debug_zip_url %}<a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
+                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+                    <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
+                  </form>
                 </div>
                 {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
               {% elif run.status == 'failed' %}
-                {% if debug_mode and run.debug_zip_url %}<div class="queue-action-links"><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a></div>{% endif %}
+                {% if debug_mode and run.debug_zip_url %}<div class="queue-action-links"><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a><form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form></div>{% else %}<div class="queue-action-links"><form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form></div>{% endif %}
                 <div class="queue-error-text">{{ run.error_message|default:"—" }}</div>
                 {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
               {% elif run.status == 'queued' or run.status == 'running' %}
                 <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
                 <div class="progress-text">{{ run.progress_label }}</div>
+                <div class="queue-action-links" style="margin-top:6px;">
+                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+                    <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
+                  </form>
+                </div>
                 {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
               {% else %}
                 —
@@ -113,10 +120,10 @@
           </form>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="primary" form="enqueue-form-{{ item.run.run_id }}">Запустить в очередь</button>
-            <form method="post" action="{% url 'analysis-run-cancel' item.run.run_id %}" style="margin:0;">
+            <form method="post" action="{% url 'analysis-run-delete' item.run.run_id %}" style="margin:0;">
               {% csrf_token %}
               <input type="hidden" name="next" value="{{ request.get_full_path }}">
-              <button type="submit">Отменить</button>
+              <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
             </form>
           </div>
         </div>
@@ -162,6 +169,21 @@
     return div.innerHTML;
   };
 
+  const getCookie = (name) => {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return "";
+  };
+  const csrfToken = getCookie("csrftoken");
+  const deleteActionHtml = (runId) => {
+    const action = `/analysis/${runId}/delete/`;
+    return `<form method="post" action="${action}" style="margin:0;display:inline;">`
+      + `<input type="hidden" name="csrfmiddlewaretoken" value="${escapeHtml(csrfToken)}">`
+      + `<button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>`
+      + `</form>`;
+  };
+
 
   const renderStageDebug = (run) => {
     if (!debugMode) return "";
@@ -196,18 +218,18 @@
 
       if (actionCell) {
         if (run.status === "done" && run.results_url) {
-          const links = [`<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`];
+          const links = [`<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`, deleteActionHtml(run.run_id)];
           if (debugMode && run.debug_zip_url) {
             links.push(`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`);
           }
           actionCell.innerHTML = `${renderActionLinks(links)}${renderStageDebug(run)}`;
         } else if (run.status === "failed") {
           const debugLink = debugMode && run.debug_zip_url
-            ? renderActionLinks([`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`])
-            : "";
+            ? renderActionLinks([`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`, deleteActionHtml(run.run_id)])
+            : renderActionLinks([deleteActionHtml(run.run_id)]);
           actionCell.innerHTML = `${debugLink}<div class="queue-error-text">${escapeHtml(run.error_message || "—")}</div>${renderStageDebug(run)}`;
         } else if (run.status === "queued" || run.status === "running") {
-          actionCell.innerHTML = renderProgress(run);
+          actionCell.innerHTML = `${renderProgress(run)}<div class="queue-action-links" style="margin-top:6px;">${deleteActionHtml(run.run_id)}</div>`;
         } else {
           actionCell.textContent = "—";
         }

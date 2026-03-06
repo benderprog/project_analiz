@@ -6,10 +6,12 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.files.storage import default_storage
 from django.core.paginator import EmptyPage, Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views import View
@@ -1392,34 +1394,6 @@ class UploadView(View):
         return redirect(f"{upload_url}?{'&'.join(query)}")
 
 
-class AnalysisQueueResetView(View):
-    def post(self, request):
-        queryset = UploadView._queue_queryset(request).filter(
-            status=AnalysisRun.Status.QUEUED,
-            started_at__isnull=True,
-            finished_at__isnull=True,
-        )
-        runs_to_cancel = list(queryset.only("run_id", "celery_task_id"))
-        if any(run.celery_task_id for run in runs_to_cancel):
-            from config.celery import app as celery_app
-
-            for task_id in [run.celery_task_id for run in runs_to_cancel if run.celery_task_id]:
-                try:
-                    celery_app.control.revoke(task_id, terminate=False)
-                except Exception:  # noqa: BLE001
-                    logger.warning("Failed to revoke task_id=%s", task_id, exc_info=True)
-
-        queryset.update(
-            status=AnalysisRun.Status.CANCELED,
-            error_message="Queue reset by operator",
-            finished_at=timezone.now(),
-        )
-
-        upload_url = redirect("analysis-upload").url
-        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page") or "1"
-        return redirect(f"{upload_url}?queue_page={queue_page}")
-
-
 class PendingRunCancelView(View):
     http_method_names = ["post"]
 
@@ -1447,6 +1421,82 @@ class PendingRunCancelView(View):
         if queue_page:
             return redirect(f"{upload_url}?queue_page={queue_page}")
         return redirect(upload_url)
+
+
+def _user_can_manage_run(request, run: AnalysisRun) -> bool:
+    if request.user.is_authenticated:
+        return bool(request.user.is_staff or run.uploaded_by_id == request.user.id)
+    return run.created_session_key == UploadView._ensure_session_key(request)
+
+
+def _build_delete_action_url(request) -> str:
+    next_url = request.POST.get("next") or request.GET.get("next")
+    if next_url:
+        return next_url
+    upload_url = redirect("analysis-upload").url
+    queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+    if queue_page:
+        return f"{upload_url}?queue_page={queue_page}"
+    return upload_url
+
+
+def _delete_run_files_after_commit(*, upload_name: str, debug_package_name: str) -> None:
+    def _cleanup() -> None:
+        for file_name in [upload_name, debug_package_name]:
+            if not file_name:
+                continue
+            try:
+                default_storage.delete(file_name)
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to delete run artifact file=%s", file_name, exc_info=True)
+
+    transaction.on_commit(_cleanup)
+
+
+class AnalysisRunDeleteView(View):
+    http_method_names = ["post"]
+
+    def post(self, request, run_id):
+        run = get_object_or_404(AnalysisRun, run_id=run_id)
+        if not _user_can_manage_run(request, run):
+            return redirect("analysis-upload")
+
+        revoke_task_id = run.celery_task_id or ""
+        revoke_terminate = run.status == AnalysisRun.Status.RUNNING
+        upload_name = str(run.file.name or "")
+        debug_package_name = str(run.debug_package_file.name or "")
+
+        if revoke_task_id:
+            from config.celery import app as celery_app
+
+            try:
+                celery_app.control.revoke(revoke_task_id, terminate=revoke_terminate)
+                logger.info(
+                    "Revoke requested for run_id=%s task_id=%s terminate=%s",
+                    run.run_id,
+                    revoke_task_id,
+                    revoke_terminate,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to revoke run_id=%s task_id=%s terminate=%s",
+                    run.run_id,
+                    revoke_task_id,
+                    revoke_terminate,
+                    exc_info=True,
+                )
+
+        with transaction.atomic():
+            run = AnalysisRun.objects.select_for_update().get(run_id=run_id)
+            if run.status in [AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED, AnalysisRun.Status.CREATED]:
+                run.status = AnalysisRun.Status.CANCELED
+                run.error_message = "Canceled and deleted by operator"
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+            run.delete()
+            _delete_run_files_after_commit(upload_name=upload_name, debug_package_name=debug_package_name)
+
+        return redirect(_build_delete_action_url(request))
 
 
 class AnalysisQueueStatusView(View):

@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -13,7 +14,7 @@ from django.utils import timezone
 from docx import Document
 
 from apps.analysis_app.forms import GENERAL_SUMMARY_PU_LABEL
-from apps.analysis_app.models import AnalysisRun, CachedPU, FeatureFlags
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
 
 
 class UploadAnalysisDocxTests(TestCase):
@@ -239,6 +240,24 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertContains(response, "visible.docx")
         self.assertNotContains(response, "hidden.docx")
 
+    def test_upload_page_shows_delete_action_and_not_queue_reset(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        AnalysisRun.objects.create(
+            original_filename="visible.docx",
+            file="uploads/visible.docx",
+            status=AnalysisRun.Status.QUEUED,
+            created_session_key=session_key,
+        )
+
+        response = self.client.get(reverse("analysis-upload"))
+
+        self.assertNotContains(response, "Сбросить очередь")
+        self.assertContains(response, "Удалить")
+
+
     def test_queue_status_elapsed_and_results_url(self):
         now = timezone.now()
         run_running = AnalysisRun.objects.create(
@@ -423,72 +442,114 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertContains(response_page_2, "Страница 2 из 2")
         self.assertContains(response_page_2, "queued-0.docx")
 
-    def test_queue_reset_cancels_only_not_started_queued_runs(self):
+    def test_queue_item_delete_removes_queued_run_and_related_results(self):
         session = self.client.session
         session.create()
         session_key = session.session_key or ""
 
-        queued_not_started = AnalysisRun.objects.create(
-            original_filename="queued.docx",
-            file="uploads/queued.docx",
-            status=AnalysisRun.Status.QUEUED,
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with override_settings(MEDIA_ROOT=tmp_dir):
+                run = AnalysisRun.objects.create(
+                    original_filename="queued.docx",
+                    file=SimpleUploadedFile("queued.docx", b"queued"),
+                    status=AnalysisRun.Status.QUEUED,
+                    created_session_key=session_key,
+                )
+                paragraph = AnalysisParagraph.objects.create(run=run, idx=0, text="p")
+                AnalysisResult.objects.create(paragraph=paragraph, matched=False)
+                run.debug_package_file.save("debug_queued.zip", ContentFile(b"dbg"), save=True)
+
+                upload_path = Path(tmp_dir) / run.file.name
+                debug_path = Path(tmp_dir) / run.debug_package_file.name
+                self.assertTrue(upload_path.exists())
+                self.assertTrue(debug_path.exists())
+
+                response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
+
+                self.assertEqual(response.status_code, 302)
+                self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
+                self.assertFalse(AnalysisParagraph.objects.filter(paragraph_id=paragraph.paragraph_id).exists())
+                self.assertFalse(AnalysisResult.objects.filter(paragraph=paragraph).exists())
+                self.assertFalse(upload_path.exists())
+                self.assertFalse(debug_path.exists())
+
+    def test_queue_item_delete_removes_done_run_and_related_results(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        run = AnalysisRun.objects.create(
+            original_filename="done.docx",
+            file="uploads/done.docx",
+            status=AnalysisRun.Status.DONE,
             created_session_key=session_key,
         )
-        running = AnalysisRun.objects.create(
+        paragraph = AnalysisParagraph.objects.create(run=run, idx=0, text="p")
+        AnalysisResult.objects.create(paragraph=paragraph, matched=True)
+
+        response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
+        self.assertFalse(AnalysisParagraph.objects.filter(paragraph_id=paragraph.paragraph_id).exists())
+
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_queue_item_delete_revokes_running_task_and_deletes_run(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        run = AnalysisRun.objects.create(
             original_filename="running.docx",
             file="uploads/running.docx",
             status=AnalysisRun.Status.RUNNING,
-            started_at=timezone.now(),
-            created_session_key=session_key,
-        )
-        queued_started = AnalysisRun.objects.create(
-            original_filename="queued-started.docx",
-            file="uploads/queued-started.docx",
-            status=AnalysisRun.Status.QUEUED,
+            celery_task_id="task-running-1",
             started_at=timezone.now(),
             created_session_key=session_key,
         )
 
-        response = self.client.post(reverse("analysis-queue-reset"), {"queue_page": "1"})
+        with patch("config.celery.app.control.revoke") as revoke_mock:
+            response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
 
         self.assertEqual(response.status_code, 302)
-        queued_not_started.refresh_from_db()
-        running.refresh_from_db()
-        queued_started.refresh_from_db()
+        revoke_mock.assert_called_once_with("task-running-1", terminate=True)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
 
-        self.assertEqual(queued_not_started.status, AnalysisRun.Status.CANCELED)
-        self.assertEqual(queued_not_started.error_message, "Queue reset by operator")
-        self.assertIsNotNone(queued_not_started.finished_at)
-        self.assertEqual(running.status, AnalysisRun.Status.RUNNING)
-        self.assertEqual(queued_started.status, AnalysisRun.Status.QUEUED)
-
-    def test_queue_reset_is_scoped_to_current_authenticated_user(self):
+    def test_queue_item_delete_denies_other_user_run(self):
         User = get_user_model()
-        user_a = User.objects.create_user(username="user-a", password="test-pass")
-        user_b = User.objects.create_user(username="user-b", password="test-pass")
+        owner = User.objects.create_user(username="owner-delete", password="test-pass")
+        other = User.objects.create_user(username="other-delete", password="test-pass")
 
-        run_a = AnalysisRun.objects.create(
-            original_filename="a.docx",
-            file="uploads/a.docx",
-            status=AnalysisRun.Status.QUEUED,
-            uploaded_by=user_a,
-        )
-        run_b = AnalysisRun.objects.create(
-            original_filename="b.docx",
-            file="uploads/b.docx",
-            status=AnalysisRun.Status.QUEUED,
-            uploaded_by=user_b,
+        run = AnalysisRun.objects.create(
+            original_filename="owner.docx",
+            file="uploads/owner.docx",
+            status=AnalysisRun.Status.DONE,
+            uploaded_by=owner,
         )
 
-        self.client.force_login(user_a)
-        response = self.client.post(reverse("analysis-queue-reset"), {"queue_page": "1"})
+        self.client.force_login(other)
+        response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
+
         self.assertEqual(response.status_code, 302)
+        self.assertTrue(AnalysisRun.objects.filter(run_id=run.run_id).exists())
 
-        run_a.refresh_from_db()
-        run_b.refresh_from_db()
-        self.assertEqual(run_a.status, AnalysisRun.Status.CANCELED)
-        self.assertEqual(run_b.status, AnalysisRun.Status.QUEUED)
+    def test_queue_item_delete_allows_staff_for_foreign_run(self):
+        User = get_user_model()
+        owner = User.objects.create_user(username="owner-staff", password="test-pass")
+        staff = User.objects.create_user(username="staff-delete", password="test-pass", is_staff=True)
 
+        run = AnalysisRun.objects.create(
+            original_filename="owner-staff.docx",
+            file="uploads/owner-staff.docx",
+            status=AnalysisRun.Status.DONE,
+            uploaded_by=owner,
+        )
+
+        self.client.force_login(staff)
+        response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
 
     def test_pending_run_cancel_changes_status_to_canceled(self):
         session = self.client.session
