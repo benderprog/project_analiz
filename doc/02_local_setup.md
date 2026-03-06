@@ -67,8 +67,10 @@ make worker
 Параметры запуска можно переопределять:
 
 ```bash
-make dev PORT=8001 CONCURRENCY=2
+make dev PORT=8001
 ```
+
+Celery worker при `make dev`/`make worker` автоматически ограничивает себя до 80% CPU/RAM, доступных контейнеру/хосту (cgroup-aware).
 
 Доступные страницы:
 
