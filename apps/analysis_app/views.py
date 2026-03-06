@@ -175,70 +175,53 @@ def _slicing_status_payload(run: AnalysisRun) -> dict[str, object]:
 
 
 def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str, object] | None:
+    del debug_mode
     meta = run.slicing_meta if isinstance(run.slicing_meta, dict) else {}
     raw_text = str(meta.get("analyzed_text") or "").strip()
     if not raw_text:
         return None
 
-    all_lines = raw_text.splitlines()
-    if not all_lines:
-        return None
-
+    fallback_to_full_report = bool(meta.get("fallback_to_full_report"))
     anchors = meta.get("template_anchors") if isinstance(meta.get("template_anchors"), list) else []
     segments = [item for item in anchors if isinstance(item, dict)]
+    segments.sort(key=lambda item: int(item.get("segment_index") or 0))
 
-    anchor_points: set[int] = set()
+    if fallback_to_full_report:
+        return {
+            "fallback_to_full_report": True,
+            "fallback_text": raw_text,
+            "inline_segments": [],
+        }
+
+    inline_segments: list[dict[str, object]] = []
     for seg in segments:
         start = seg.get("start") if isinstance(seg.get("start"), dict) else {}
         end = seg.get("end") if isinstance(seg.get("end"), dict) else {}
-        for value in (start.get("idx"), end.get("idx")):
-            if isinstance(value, int) and 0 <= value < len(all_lines):
-                anchor_points.add(value)
+        start_parts = [
+            f"Якорь начала (из шаблона): {seg.get('template_anchor_start') or '—'}",
+            f"(score={start.get('score') if start.get('score') is not None else '—'}, idx={start.get('idx') if start.get('idx') is not None else '—'})",
+        ]
+        if seg.get("template_anchor_end"):
+            end_parts = [
+                f"Якорь конца (из шаблона): {seg.get('template_anchor_end')}",
+                f"(score={end.get('score') if end.get('score') is not None else '—'}, idx={end.get('idx') if end.get('idx') is not None else '—'})",
+            ]
+        else:
+            end_parts = ["Якорь конца: отсутствует (сегмент до конца документа)"]
 
-    preview_start = 0
-    preview_end = len(all_lines) - 1
-    truncated = False
-    if anchor_points:
-        margin = 20
-        preview_start = max(min(anchor_points) - margin, 0)
-        preview_end = min(max(anchor_points) + margin, len(all_lines) - 1)
-        if preview_end - preview_start + 1 < 40:
-            preview_end = min(preview_start + 39, len(all_lines) - 1)
-    if (preview_end - preview_start + 1) > 500:
-        preview_end = preview_start + 499
-    if preview_start > 0 or preview_end < len(all_lines) - 1:
-        truncated = True
-
-    starts = {
-        item.get("start", {}).get("idx")
-        for item in segments
-        if isinstance(item.get("start"), dict) and item.get("start", {}).get("idx") is not None
-    }
-    ends = {
-        item.get("end", {}).get("idx")
-        for item in segments
-        if isinstance(item.get("end"), dict) and item.get("end", {}).get("idx") is not None
-    }
-
-    marked_lines: list[dict[str, object]] = []
-    for idx in range(preview_start, preview_end + 1):
-        line = all_lines[idx]
-        css = ""
-        label = ""
-        if idx in starts:
-            css = "anchor-start"
-            label = "ANCHOR START (matched)"
-        if idx in ends:
-            css = f"{css} anchor-end".strip()
-            label = f"{label}, ANCHOR END (matched)".strip(", ") if label else "ANCHOR END (matched)"
-        marked_lines.append({"idx": idx, "text": line, "css": css, "label": label})
+        inline_segments.append(
+            {
+                "segment_index": int(seg.get("segment_index") or 0),
+                "start_line": " ".join(start_parts),
+                "end_line": " ".join(end_parts),
+                "slice_text": str(seg.get("slice_text") or "").strip(),
+            }
+        )
 
     return {
-        "lines": marked_lines,
-        "truncated": truncated,
-        "fallback_to_full_report": bool(meta.get("fallback_to_full_report")),
-        "show_anchor_attempts": debug_mode,
-        "template_anchors": segments,
+        "fallback_to_full_report": False,
+        "fallback_text": "",
+        "inline_segments": inline_segments,
     }
 
 

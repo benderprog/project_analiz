@@ -128,6 +128,20 @@ class SvodkaTemplateSlicingTests(SimpleTestCase):
         self.assertEqual(debug_segments[0]["template_anchor_end"], "A end")
         self.assertEqual(debug_segments[0]["start_matched_line"], "A start")
         self.assertEqual(debug_segments[0]["end_matched_line"], "A end")
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_segment_debug_contains_slice_text(self):
+        anchors = [SegmentAnchors(start_anchor_text="A start", end_anchor_text="A end", index=0)]
+        target = [
+            DocElement(kind="paragraph", text="A start"),
+            DocElement(kind="paragraph", text="inside"),
+            DocElement(kind="paragraph", text="A end"),
+        ]
+
+        _, _, _, debug_segments, _ = apply_template_segments(target, anchors)
+
+        self.assertEqual(debug_segments[0]["slice_text"], "inside")
+
     @override_settings(SKIP_SEMANTIC_MODEL=True)
     def test_per_template_threshold_affects_match_acceptance(self):
         anchors = [
