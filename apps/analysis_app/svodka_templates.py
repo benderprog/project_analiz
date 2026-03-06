@@ -12,6 +12,7 @@ from django.db.models import QuerySet
 from apps.analysis_app.models import SvodkaTemplate
 
 logger = logging.getLogger(__name__)
+MIN_SLICE_CHARS = int(getattr(settings, "TEMPLATE_MIN_SLICE_CHARS", 300))
 
 
 @dataclass(frozen=True)
@@ -64,16 +65,23 @@ class SlicingDebugInfo:
     anchors_matched: int = 0
     anchors_missing: bool = False
     reasons: list[str] | None = None
+    fallback_to_full_report: bool = False
+    min_slice_chars: int = MIN_SLICE_CHARS
+    analyzed_text: str = ""
 
     def to_meta(self) -> dict[str, Any]:
         return {
             "method": self.slicing_strategy,
+            "slice_strategy": self.slicing_strategy,
             "anchors_expected": int(self.anchors_expected),
             "anchors_matched": int(self.anchors_matched),
             "anchors_missing": bool(self.anchors_missing),
             "reasons": list(self.reasons or []),
             "threshold": self.template_anchor_threshold,
             "segments": list(self.segment_matches or []),
+            "fallback_to_full_report": bool(self.fallback_to_full_report),
+            "min_slice_chars": int(self.min_slice_chars),
+            "analyzed_text": self.analyzed_text,
         }
 
 
@@ -93,7 +101,6 @@ START_MIN_SIM = float(getattr(settings, "TEMPLATE_ANCHOR_START_MIN_SIM", 0.60))
 END_MIN_SIM = float(getattr(settings, "TEMPLATE_ANCHOR_END_MIN_SIM", 0.60))
 WEAK_ANCHOR_MIN_SIM = float(getattr(settings, "TEMPLATE_ANCHOR_WEAK_MIN_SIM", 0.85))
 MAX_ANCHOR_LINE_DISTANCE = int(getattr(settings, "TEMPLATE_ANCHOR_MAX_LINE_DISTANCE", 400))
-
 
 def _normalize_ws(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
@@ -477,7 +484,20 @@ def apply_template_segments(
     } if semantic_vectors else {}
 
     for segment in segment_anchors:
-        debug_item = {"index": segment.index, "start_idx": None, "end_idx": None, "start_score": 0.0, "end_score": 0.0, "start_threshold": None, "end_threshold": None, "start_status": "rejected", "end_status": "rejected"}
+        debug_item = {
+            "index": segment.index,
+            "start_idx": None,
+            "end_idx": None,
+            "start_score": 0.0,
+            "end_score": 0.0,
+            "start_threshold": None,
+            "end_threshold": None,
+            "start_status": "rejected",
+            "end_status": "rejected",
+            "slice_chars": 0,
+            "invalid_reason": None,
+            "accepted": False,
+        }
         if not segment.start_anchor_text:
             warnings.append(f"segment {segment.index}: no_pre_anchor_line")
             failed_segments += 1
@@ -505,9 +525,19 @@ def apply_template_segments(
         debug_item["start_status"] = "accepted"
 
         if segment.is_open_ended or not segment.end_anchor_text:
+            slice_elements = target_elements[start_idx + 1 :]
+            slice_text = "\n".join(item.text for item in slice_elements)
+            debug_item["slice_chars"] = len(slice_text.strip())
+            if len(slice_text.strip()) < MIN_SLICE_CHARS:
+                warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{MIN_SLICE_CHARS})")
+                debug_item["invalid_reason"] = "slice_too_small"
+                failed_segments += 1
+                debug_segments.append(debug_item)
+                continue
             ranges.append((start_idx + 1, len(target_elements) - 1))
             debug_item["end_idx"] = len(target_elements) - 1
             debug_item["open_ended"] = True
+            debug_item["accepted"] = True
             cursor = len(target_elements)
             debug_segments.append(debug_item)
             continue
@@ -529,15 +559,36 @@ def apply_template_segments(
             ranges.append((start_idx + 1, len(target_elements) - 1))
             cursor = len(target_elements)
             debug_item["open_ended"] = True
+            debug_item["accepted"] = True
             debug_segments.append(debug_item)
             continue
 
         debug_item["end_status"] = "accepted"
 
+        if end_idx <= start_idx + 1:
+            warnings.append(f"segment {segment.index}: empty_slice")
+            debug_item["invalid_reason"] = "empty_slice"
+            failed_segments += 1
+            debug_segments.append(debug_item)
+            cursor = end_idx + 1
+            continue
+
+        slice_elements = target_elements[start_idx + 1 : end_idx]
+        slice_text = "\n".join(item.text for item in slice_elements)
+        debug_item["slice_chars"] = len(slice_text.strip())
+        if len(slice_text.strip()) < MIN_SLICE_CHARS:
+            warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{MIN_SLICE_CHARS})")
+            debug_item["invalid_reason"] = "slice_too_small"
+            failed_segments += 1
+            debug_segments.append(debug_item)
+            cursor = end_idx + 1
+            continue
+
         if (end_idx - start_idx) > MAX_ANCHOR_LINE_DISTANCE:
             warnings.append(f"segment {segment.index}: large span ({end_idx - start_idx} lines)")
 
         ranges.append((start_idx + 1, end_idx - 1))
+        debug_item["accepted"] = True
         cursor = end_idx + 1
         debug_segments.append(debug_item)
 
@@ -557,7 +608,6 @@ def apply_template_segments(
         if start <= end:
             sliced.extend(target_elements[start : end + 1])
     return sliced, len(ranges), failed_segments, debug_segments, warnings
-
 
 def _query_active_templates() -> QuerySet[SvodkaTemplate]:
     return SvodkaTemplate.objects.filter(is_active=True)
@@ -591,6 +641,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     template = get_template_for_run(selected_pu_id, selected_pu_name)
 
     if not template or not template.file:
+        analyzed_text = "\n".join(item.text for item in target_elements if item.text)
         return target_elements, SlicingDebugInfo(
             selected_template=template,
             template_segments_total=0,
@@ -608,10 +659,14 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             anchors_matched=0,
             anchors_missing=False,
             reasons=["no-template"],
+            fallback_to_full_report=False,
+            min_slice_chars=MIN_SLICE_CHARS,
+            analyzed_text=analyzed_text,
         )
 
     marker_sliced, marker_debug = slice_by_markers(target_elements, template.begin_marker, template.end_marker)
     if marker_debug["markers_found"] and marker_debug["kept_elements"] > 0:
+        analyzed_text = "\n".join(item.text for item in marker_sliced if item.text)
         return marker_sliced, SlicingDebugInfo(
             selected_template=template,
             template_segments_total=0,
@@ -629,6 +684,9 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             anchors_matched=0,
             anchors_missing=False,
             reasons=[],
+            fallback_to_full_report=False,
+            min_slice_chars=MIN_SLICE_CHARS,
+            analyzed_text=analyzed_text,
         )
 
     from docx import Document
@@ -637,6 +695,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     segments = build_template_segments(template_doc, template.begin_marker, template.end_marker)
     template_threshold = float(template.anchor_match_threshold or START_MIN_SIM)
     if not segments:
+        analyzed_text = "\n".join(item.text for item in target_elements if item.text)
         return target_elements, SlicingDebugInfo(
             selected_template=template,
             template_segments_total=0,
@@ -654,6 +713,9 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             anchors_matched=0,
             anchors_missing=True,
             reasons=["template_has_no_valid_anchors"],
+            fallback_to_full_report=True,
+            min_slice_chars=MIN_SLICE_CHARS,
+            analyzed_text=analyzed_text,
         )
 
     sliced_elements, applied_segments, failed_segments, segment_matches, warnings = apply_template_segments(
@@ -661,17 +723,19 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         segments,
         base_threshold=template_threshold,
     )
-    if applied_segments == 0:
+    anchors_missing = bool(len(segments) > 0 and applied_segments < len(segments))
+    if anchors_missing:
         kept = target_elements
-        fallback_reason = "no-segments-applied"
+        fallback_reason = "anchors-missing"
     else:
         kept = sliced_elements
         fallback_reason = None
 
     reasons = list(warnings or [])
-    anchors_missing = bool(len(segments) > 0 and applied_segments == 0)
     if anchors_missing and not reasons:
         reasons.append("anchors_not_found")
+
+    analyzed_text = "\n".join(item.text for item in kept if item.text)
 
     return kept, SlicingDebugInfo(
         selected_template=template,
@@ -684,7 +748,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         target_segments_count=int(marker_debug["segments_count"]),
         target_kept_elements=int(marker_debug["kept_elements"]),
         fallback_reason=fallback_reason,
-        slicing_strategy="template_anchors" if applied_segments else "none",
+        slicing_strategy="template_anchors" if not anchors_missing else "none",
         segment_matches=segment_matches,
         warnings=warnings,
         template_anchor_threshold=template_threshold,
@@ -692,4 +756,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         anchors_matched=applied_segments,
         anchors_missing=anchors_missing,
         reasons=reasons,
+        fallback_to_full_report=anchors_missing,
+        min_slice_chars=MIN_SLICE_CHARS,
+        analyzed_text=analyzed_text,
     )

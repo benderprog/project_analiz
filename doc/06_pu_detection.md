@@ -114,3 +114,24 @@ Dedicated staff-only pages:
 
 - `/analysis/templates/<id>/preview/`
 - `/analysis/pu/<pu_id>/template/preview/`
+
+## Anchor slicing fallback and debug artifacts
+
+- Segment is considered **invalid** when:
+  - `end_idx <= start_idx + 1` (`empty_slice`),
+  - sliced text length is below `TEMPLATE_MIN_SLICE_CHARS` (default `300`, reason `slice_too_small`).
+- `anchors_matched` counts only valid segments.
+- If anchors are expected but not fully matched (`anchors_matched < anchors_expected`), analysis falls back to the **full report**.
+- Result UI shows explicit status: anchors not determined and full report fallback was used.
+
+Debug package additions:
+
+- `slicing_meta.json` now includes `slice_strategy`, `fallback_to_full_report`, `min_slice_chars`, segment reasons and `analyzed_text`.
+- `analyzed_slice.txt` contains exactly the text that was sent to parsing/extraction stage.
+  For large payloads it is truncated (head/tail with truncation marker).
+
+Result page additions:
+
+- Collapsible block **«Предпросмотр обрезки / якорей»** shows analyzed summary text in safe `<pre>` rendering.
+- Matched anchors are highlighted as `ANCHOR START (matched)` and `ANCHOR END (matched)`.
+- If full-report fallback is used, a visible fallback badge is shown.

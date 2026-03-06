@@ -236,6 +236,35 @@ class SliceDocumentForRunFallbackTests(SimpleTestCase):
             os.unlink(report_path)
             os.unlink(template_path)
 
+
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True, TEMPLATE_MIN_SLICE_CHARS=300)
+    def test_empty_slice_forces_full_report_fallback(self):
+        report_path = self._write_docx(["start", "end", "очень длинный абзац " * 30])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start", end_anchor_text="end", index=0)],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertTrue(info.anchors_missing)
+            self.assertTrue(info.fallback_to_full_report)
+            self.assertEqual(info.slicing_strategy, "none")
+            self.assertIn("empty_slice", " ".join(info.reasons or []))
+            self.assertEqual(len(kept), info.total_elements)
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)
+
     def test_report_markers_keep_priority(self):
         report_path = self._write_docx(["prefix", "[BEGIN]", "inside", "[END]", "suffix"])
         template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])

@@ -5,6 +5,14 @@
   .badge + .badge { margin-left: .35rem; }
   .event-source-table { width: 100%; border-collapse: collapse; }
   .event-source-table td, .event-source-table th { border: 1px solid #d9d9d9; padding: .4rem .5rem; vertical-align: top; }
+  .slicing-preview { margin: .75rem 0 1rem; }
+  .slicing-preview pre { max-height: 320px; overflow: auto; background: #fafafa; border: 1px solid #ddd; padding: .6rem; }
+  .slicing-line { display: block; white-space: pre-wrap; word-break: break-word; }
+  .slicing-anchor-start { background: #dbeafe; }
+  .slicing-anchor-end { background: #fef3c7; }
+  .slicing-line-label { font-size: .75rem; font-weight: 600; margin-left: .35rem; }
+  .slicing-fallback { padding: .4rem .55rem; background: #fff7ed; border: 1px solid #fdba74; margin-bottom: .5rem; }
+  .slicing-skip { color: #777; }
 </style>
 <section class="card">
   <h2>Результаты анализа</h2>
@@ -37,6 +45,18 @@
   {% endif %}
   {% if debug_mode and debug_pipeline and debug_pipeline.stage_line %}
     <p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>
+  {% endif %}
+
+  {% if slicing_preview %}
+    <details class="slicing-preview">
+      <summary>Предпросмотр обрезки / якорей</summary>
+      {% if slicing_preview.fallback_to_full_report %}
+        <div class="slicing-fallback">Fallback: анализ всей сводки</div>
+      {% endif %}
+      <pre>{% for line in slicing_preview.lines %}<span class="slicing-line {{ line.css }}">{{ line.text }}{% if line.label %}<span class="slicing-line-label">{{ line.label }}</span>{% endif %}</span>
+{% endfor %}</pre>
+      {% if slicing_preview.truncated %}<p>Показаны только часть строк (начало/конец).</p>{% endif %}
+    </details>
   {% endif %}
 </section>
 

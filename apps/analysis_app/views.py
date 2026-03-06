@@ -142,6 +142,7 @@ def _slicing_status_payload(run: AnalysisRun) -> dict[str, object]:
     anchors_expected = int(meta.get("anchors_expected") or 0)
     anchors_matched = int(meta.get("anchors_matched") or 0)
     anchors_missing = bool(meta.get("anchors_missing"))
+    fallback_to_full_report = bool(meta.get("fallback_to_full_report"))
     reasons = [str(item) for item in (meta.get("reasons") or []) if str(item)]
     threshold = meta.get("threshold")
     segments = meta.get("segments") if isinstance(meta.get("segments"), list) else []
@@ -149,8 +150,8 @@ def _slicing_status_payload(run: AnalysisRun) -> dict[str, object]:
     if method == "report_markers":
         label = "Шаблон: применён"
         warning = False
-    elif anchors_missing:
-        label = "Шаблон: не применён — якоря не найдены, проанализирована вся сводка"
+    elif anchors_missing or fallback_to_full_report:
+        label = "Шаблон: не применён — якоря не определены, проанализирована вся сводка"
         warning = True
     elif anchors_matched > 0:
         label = "Шаблон: применён"
@@ -166,9 +167,48 @@ def _slicing_status_payload(run: AnalysisRun) -> dict[str, object]:
         "anchors_expected": anchors_expected,
         "anchors_matched": anchors_matched,
         "anchors_missing": anchors_missing,
+        "fallback_to_full_report": fallback_to_full_report,
         "reasons": reasons,
         "threshold": threshold,
         "segments": segments,
+    }
+
+
+def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str, object] | None:
+    meta = run.slicing_meta if isinstance(run.slicing_meta, dict) else {}
+    raw_text = str(meta.get("analyzed_text") or "").strip()
+    if not raw_text:
+        return None
+
+    lines = raw_text.splitlines()
+    max_lines = 400
+    truncated = False
+    if len(lines) > max_lines:
+        truncated = True
+        lines = [*lines[:200], "…", *lines[-199:]]
+
+    starts = {int(item.get("start_idx")) for item in (meta.get("segments") or []) if isinstance(item, dict) and item.get("start_idx") is not None}
+    ends = {int(item.get("end_idx")) for item in (meta.get("segments") or []) if isinstance(item, dict) and item.get("end_idx") is not None}
+    marked_lines: list[dict[str, object]] = []
+    for idx, line in enumerate(lines):
+        css = ""
+        label = ""
+        if isinstance(line, str) and line == "…":
+            marked_lines.append({"idx": idx, "text": line, "css": "slicing-skip", "label": ""})
+            continue
+        if idx in starts:
+            css = "slicing-anchor-start"
+            label = "ANCHOR START (matched)"
+        elif idx in ends:
+            css = "slicing-anchor-end"
+            label = "ANCHOR END (matched)"
+        marked_lines.append({"idx": idx, "text": line, "css": css, "label": label})
+
+    return {
+        "lines": marked_lines,
+        "truncated": truncated,
+        "fallback_to_full_report": bool(meta.get("fallback_to_full_report")),
+        "show_anchor_attempts": debug_mode,
     }
 
 def _app_version_payload() -> dict[str, str]:
@@ -1663,5 +1703,6 @@ class AnalysisDetailView(View):
                 "show_debug_zip_link": FeatureFlags.is_effective_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
                 "debug_pipeline": _debug_pipeline_payload(run),
                 "slicing_status": _slicing_status_payload(run),
+                "slicing_preview": _slicing_preview_payload(run, debug_mode=FeatureFlags.is_effective_debug_enabled()),
             },
         )
