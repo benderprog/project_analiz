@@ -148,6 +148,7 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         self.assertEqual(response.status_code, 200)
         content = response.content.decode("utf-8")
         self.assertIn("Предпросмотр обрезки / якорей", content)
+        self.assertNotIn('<details class="slicing-preview" open>', content)
         self.assertIn("Fallback: анализ всей сводки", content)
         self.assertNotIn("<script>alert(1)</script>", content)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
@@ -170,6 +171,7 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
                         "segment_index": 0,
                         "template_anchor_start": "start 1",
                         "template_anchor_end": "end 1",
+                        "threshold_used": 0.5,
                         "start": {"idx": 0, "score": 0.91, "matched_line": "start 1"},
                         "end": {"idx": 2, "score": 0.9, "matched_line": "end 1"},
                         "slice_text": "segment one text",
@@ -178,6 +180,7 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
                         "segment_index": 1,
                         "template_anchor_start": "start 2",
                         "template_anchor_end": "end 2",
+                        "threshold_used": 0.5,
                         "start": {"idx": 3, "score": 0.88, "matched_line": "start 2"},
                         "end": {"idx": 5, "score": 0.86, "matched_line": "end 2"},
                         "slice_text": "segment two text",
@@ -195,6 +198,9 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         content = response.content.decode("utf-8")
         self.assertEqual(content.count("anchor-line anchor-start"), 2)
         self.assertEqual(content.count("anchor-line anchor-end"), 2)
+        self.assertIn("Якорь начала (в сводке): start 1 (score=0.9100, threshold=0.50)", content)
+        self.assertIn("Якорь конца (в сводке): end 1 (score=0.9000, threshold=0.50)", content)
+        self.assertIn("(score=0.8800, threshold=0.50)", content)
         self.assertLess(content.index("segment one text"), content.index("segment two text"))
 
 
