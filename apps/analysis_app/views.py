@@ -181,6 +181,18 @@ def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str,
     if not raw_text:
         return None
 
+    def _format_score(value: object) -> str:
+        try:
+            return f"{float(value):.4f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    def _format_threshold(value: object) -> str:
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
     fallback_to_full_report = bool(meta.get("fallback_to_full_report"))
     anchors = meta.get("template_anchors") if isinstance(meta.get("template_anchors"), list) else []
     segments = [item for item in anchors if isinstance(item, dict)]
@@ -197,23 +209,39 @@ def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str,
     for seg in segments:
         start = seg.get("start") if isinstance(seg.get("start"), dict) else {}
         end = seg.get("end") if isinstance(seg.get("end"), dict) else {}
-        start_parts = [
-            f"Якорь начала (из шаблона): {seg.get('template_anchor_start') or '—'}",
-            f"(score={start.get('score') if start.get('score') is not None else '—'}, idx={start.get('idx') if start.get('idx') is not None else '—'})",
-        ]
-        if seg.get("template_anchor_end"):
-            end_parts = [
-                f"Якорь конца (из шаблона): {seg.get('template_anchor_end')}",
-                f"(score={end.get('score') if end.get('score') is not None else '—'}, idx={end.get('idx') if end.get('idx') is not None else '—'})",
-            ]
+        threshold_raw = seg.get("threshold_used", seg.get("threshold", meta.get("threshold")))
+        threshold = _format_threshold(threshold_raw)
+
+        start_matched_line = start.get("matched_line")
+        start_score = _format_score(start.get("score"))
+        start_best_score = _format_score(start.get("best_score"))
+        if start_matched_line:
+            start_line = (
+                f"Якорь начала (в сводке): {start_matched_line} "
+                f"(score={start_score}, threshold={threshold})"
+            )
         else:
-            end_parts = ["Якорь конца: отсутствует (сегмент до конца документа)"]
+            start_line = f"Якорь начала: не найден (best_score={start_best_score}, threshold={threshold})"
+
+        is_open_ended = bool(seg.get("open_ended")) or not seg.get("template_anchor_end")
+        end_matched_line = end.get("matched_line")
+        end_score = _format_score(end.get("score"))
+        if is_open_ended:
+            end_line = "Якорь конца: отсутствует (сегмент до конца документа)"
+        elif end_matched_line:
+            end_line = (
+                f"Якорь конца (в сводке): {end_matched_line} "
+                f"(score={end_score}, threshold={threshold})"
+            )
+        else:
+            end_best_score = _format_score(end.get("best_score"))
+            end_line = f"Якорь конца: не найден (best_score={end_best_score}, threshold={threshold})"
 
         inline_segments.append(
             {
                 "segment_index": int(seg.get("segment_index") or 0),
-                "start_line": " ".join(start_parts),
-                "end_line": " ".join(end_parts),
+                "start_line": start_line,
+                "end_line": end_line,
                 "slice_text": str(seg.get("slice_text") or "").strip(),
             }
         )

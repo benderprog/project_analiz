@@ -87,23 +87,30 @@ class SlicingDebugInfo:
             if not accepted and not reasons:
                 reasons.append("not_applied")
 
+            threshold_used = segment.get("start_threshold")
+            if threshold_used is None:
+                threshold_used = self.template_anchor_threshold
             template_anchors.append(
                 {
                     "segment_index": int(segment.get("index") or 0),
                     "template_anchor_start": segment.get("template_anchor_start"),
                     "template_anchor_end": segment.get("template_anchor_end"),
-                    "threshold": segment.get("start_threshold") or self.template_anchor_threshold,
+                    "threshold": threshold_used,
+                    "threshold_used": threshold_used,
                     "start": {
                         "idx": start_idx,
                         "score": segment.get("start_score"),
+                        "best_score": segment.get("start_score"),
                         "matched_line": segment.get("start_matched_line"),
                     },
                     "end": {
                         "idx": end_idx if not segment.get("open_ended") else None,
                         "score": segment.get("end_score") if not segment.get("open_ended") else None,
+                        "best_score": segment.get("end_score") if not segment.get("open_ended") else None,
                         "matched_line": segment.get("end_matched_line") if not segment.get("open_ended") else None,
                     },
                     "accepted": accepted,
+                    "open_ended": bool(segment.get("open_ended")),
                     "reasons": reasons,
                     "slice_text": segment.get("slice_text") or "",
                 }
@@ -560,8 +567,8 @@ def apply_template_segments(
             semantic_element_vecs=semantic_element_vecs,
         )
         debug_item["start_idx"] = start_idx
-        debug_item["start_score"] = round(float(start_score), 4)
-        debug_item["start_threshold"] = round(float(start_threshold), 4)
+        debug_item["start_score"] = float(start_score)
+        debug_item["start_threshold"] = float(start_threshold)
         debug_item["start_matched_line"] = target_elements[start_idx].text if start_idx is not None else None
         if start_idx is None:
             warnings.append(f"segment {segment.index}: start_anchor_below_threshold {start_threshold:.2f}")
@@ -600,8 +607,8 @@ def apply_template_segments(
             semantic_element_vecs=semantic_element_vecs,
         )
         debug_item["end_idx"] = end_idx
-        debug_item["end_score"] = round(float(end_score), 4)
-        debug_item["end_threshold"] = round(float(end_threshold), 4)
+        debug_item["end_score"] = float(end_score)
+        debug_item["end_threshold"] = float(end_threshold)
         debug_item["end_matched_line"] = target_elements[end_idx].text if end_idx is not None else None
         if end_idx is None:
             warnings.append(f"segment {segment.index}: end_anchor_not_found {end_threshold:.2f}, sliced to end")
