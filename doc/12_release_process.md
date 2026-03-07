@@ -43,9 +43,9 @@ docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_d
 
 ```bash
 ./scripts/offline/offline.sh bundle \
-  --version 1.9 \
-  --db-app-dump /absolute/path/app_db.dump \
-  --db-portal-dump /absolute/path/portal_db_test.dump \
+  --version 1.10 \
+  --db-app-dump "$DUMP_DIR/app_db.dump" \
+  --db-portal-dump "$DUMP_DIR/portal_db_test.dump" \
   --archive
 ```
 
