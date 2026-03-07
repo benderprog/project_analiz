@@ -18,12 +18,25 @@
   <p>Run ID: {{ run.run_id }}</p>
   <p>Статус: {{ run.status }}</p>
   <p>ПУ: {{ selected_pu_label }}</p>
-  {% if show_debug_zip_link and debug_zip_url %}
-    <p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug-пакет</a></p>
+  {% if is_ui_admin %}
+    <div class="admin-only">
+      <h3>Debug tools</h3>
+      {% if is_ui_admin and debug_mode %}
+        {% if show_debug_zip_link and debug_zip_url %}
+          <p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug.zip</a></p>
+        {% else %}
+          <p>debug.zip недоступен для этого статуса запуска.</p>
+        {% endif %}
+      {% else %}
+        <div class="admin-warning-banner">Debug отключен администратором. Включите debug_mode в <a href="/admin/analysis_app/featureflags/1/change/">настройках</a>.</div>
+      {% endif %}
+      <p>В debug.zip доступны: <code>slicing_meta.json</code>, <code>analyzed_slice.txt</code>.</p>
+    </div>
   {% endif %}
   {% if slicing_status %}
+    {% if is_ui_admin %}<div class="admin-only"><h3>Диагностическая панель</h3>{% endif %}
     <p><strong>{{ slicing_status.label }}</strong></p>
-    {% if debug_mode %}
+    {% if is_ui_admin and debug_mode %}
       <p>
         method={{ slicing_status.method }},
         expected/matched={{ slicing_status.anchors_expected }}/{{ slicing_status.anchors_matched }},
@@ -41,13 +54,14 @@
         </p>
       {% endif %}
     {% endif %}
+  {% if is_ui_admin %}</div>{% endif %}
   {% endif %}
-  {% if debug_mode and debug_pipeline and debug_pipeline.stage_line %}
+  {% if is_ui_admin and debug_mode and debug_pipeline and debug_pipeline.stage_line %}
     <p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>
   {% endif %}
 
   {% if slicing_preview %}
-    <details class="slicing-preview">
+    <details class="slicing-preview" {% if is_ui_admin %}open{% endif %}>
       <summary>Предпросмотр обрезки / якорей</summary>
       {% if slicing_preview.fallback_to_full_report %}
         <div class="slicing-fallback">Fallback: анализ всей сводки</div>

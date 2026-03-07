@@ -309,3 +309,39 @@ body {
 .message.error {
   background: #fdd;
 }
+
+.ui-mode-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+}
+
+.ui-mode-form select {
+  min-width: 140px;
+}
+
+.ui-admin-badge {
+  background: #dbeafe;
+  color: #1e3a8a;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.ui-admin .admin-only {
+  display: block;
+}
+
+.ui-user .admin-only {
+  display: none;
+}
+
+.admin-warning-banner {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
+  border-radius: 6px;
+}
