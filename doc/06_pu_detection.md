@@ -78,3 +78,60 @@ python manage.py runserver
 3. Change the PU manually and run analysis.
 4. Confirm subdivision matching uses only subdivisions from the selected PU (unless “Общая сводка”).
 5. If the debug output reports an empty filtered pool, verify the fallback to the full pool.
+
+## Template anchors and preview
+
+`[BEGIN]`/`[END]` in template files are now treated as **context anchors**, not only as literal markers.
+
+- Start anchor = nearest non-empty line before `[BEGIN]`.
+- End anchor = nearest non-empty line after `[END]`.
+- Multiple segments are supported.
+- Open-ended segment is supported (`[BEGIN]` without `[END]`): slice until the end of report.
+- If report contains literal `[BEGIN]`/`[END]`, strict marker slicing still has priority.
+- If semantic model is unavailable, anchor search degrades to lexical matching (no crash).
+
+Anchor matching uses configurable thresholds (`TEMPLATE_ANCHOR_START_MIN_SIM`,
+`TEMPLATE_ANCHOR_END_MIN_SIM`, `TEMPLATE_ANCHOR_WEAK_MIN_SIM`) and per-template setting
+`anchor_match_threshold` (admin field **«Порог совпадения якоря»**, recommended `0.55–0.70`).
+If per-template threshold is set, fallback anchor slicing uses it for start/end anchor checks
+(except weak anchors that keep `TEMPLATE_ANCHOR_WEAK_MIN_SIM`).
+
+Lexical fallback compares normalized single-line text (`lower`, `ё→е`, punctuation/symbol cleanup,
+collapsed spaces). Semantic embeddings remain computed from source text.
+Debug logs include threshold used, best start/end scores, matched indices and accepted/rejected status.
+
+### In admin edit form and dedicated preview page
+
+Preview includes:
+
+- `Segments detected: N` summary,
+- per-segment anchor start/end text and open-ended state,
+- warnings for missing/unbalanced anchors,
+- marker highlighting (`[BEGIN]`/`[END]`) and anchor line highlighting
+  (`ANCHOR START` / `ANCHOR END` semantics).
+
+Dedicated staff-only pages:
+
+- `/analysis/templates/<id>/preview/`
+- `/analysis/pu/<pu_id>/template/preview/`
+
+## Anchor slicing fallback and debug artifacts
+
+- Segment is considered **invalid** when:
+  - `end_idx <= start_idx + 1` (`empty_slice`),
+  - sliced text length is below `TEMPLATE_MIN_SLICE_CHARS` (default `300`, reason `slice_too_small`).
+- `anchors_matched` counts only valid segments.
+- If anchors are expected but not fully matched (`anchors_matched < anchors_expected`), analysis falls back to the **full report**.
+- Result UI shows explicit status: anchors not determined and full report fallback was used.
+
+Debug package additions:
+
+- `slicing_meta.json` now includes `slice_strategy`, `fallback_to_full_report`, `min_slice_chars`, segment reasons and `analyzed_text`.
+- `analyzed_slice.txt` contains exactly the text that was sent to parsing/extraction stage.
+  For large payloads it is truncated (head/tail with truncation marker).
+
+Result page additions:
+
+- Collapsible block **«Предпросмотр обрезки / якорей»** shows analyzed summary text in safe `<pre>` rendering.
+- Matched anchors are highlighted as `ANCHOR START (matched)` and `ANCHOR END (matched)`.
+- If full-report fallback is used, a visible fallback badge is shown.

@@ -1,13 +1,17 @@
+import json
 import logging
 import os
 from pathlib import PurePath
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.core.files.storage import default_storage
 from django.core.paginator import EmptyPage, Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views import View
@@ -28,7 +32,7 @@ from apps.analysis_app.event_payload import (
     status_for_timestamp,
     status_from_flag,
 )
-from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags
+from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun, CachedPU, FeatureFlags, SvodkaTemplate
 from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
@@ -38,6 +42,7 @@ from apps.analysis_app.services import (
     highlight_text,
     match_event,
 )
+from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
@@ -131,6 +136,125 @@ def _debug_pipeline_payload(run: AnalysisRun) -> dict:
     }
 
 
+
+
+def _slicing_status_payload(run: AnalysisRun) -> dict[str, object]:
+    meta = run.slicing_meta if isinstance(run.slicing_meta, dict) else {}
+    method = str(meta.get("method") or "none")
+    anchors_expected = int(meta.get("anchors_expected") or 0)
+    anchors_matched = int(meta.get("anchors_matched") or 0)
+    anchors_missing = bool(meta.get("anchors_missing"))
+    fallback_to_full_report = bool(meta.get("fallback_to_full_report"))
+    reasons = [str(item) for item in (meta.get("reasons") or []) if str(item)]
+    threshold = meta.get("threshold")
+    segments = meta.get("segments") if isinstance(meta.get("segments"), list) else []
+
+    if method == "report_markers":
+        label = "Шаблон: применён"
+        warning = False
+    elif anchors_missing or fallback_to_full_report:
+        label = "Шаблон: не применён — якоря не определены, проанализирована вся сводка"
+        warning = True
+    elif anchors_matched > 0:
+        label = "Шаблон: применён"
+        warning = False
+    else:
+        label = "Шаблон: не применён"
+        warning = False
+
+    return {
+        "label": label,
+        "warning": warning,
+        "method": method,
+        "anchors_expected": anchors_expected,
+        "anchors_matched": anchors_matched,
+        "anchors_missing": anchors_missing,
+        "fallback_to_full_report": fallback_to_full_report,
+        "reasons": reasons,
+        "threshold": threshold,
+        "segments": segments,
+    }
+
+
+def _slicing_preview_payload(run: AnalysisRun, *, debug_mode: bool) -> dict[str, object] | None:
+    del debug_mode
+    meta = run.slicing_meta if isinstance(run.slicing_meta, dict) else {}
+    raw_text = str(meta.get("analyzed_text") or "").strip()
+    if not raw_text:
+        return None
+
+    def _format_score(value: object) -> str:
+        try:
+            return f"{float(value):.4f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    def _format_threshold(value: object) -> str:
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    fallback_to_full_report = bool(meta.get("fallback_to_full_report"))
+    anchors = meta.get("template_anchors") if isinstance(meta.get("template_anchors"), list) else []
+    segments = [item for item in anchors if isinstance(item, dict)]
+    segments.sort(key=lambda item: int(item.get("segment_index") or 0))
+
+    if fallback_to_full_report:
+        return {
+            "fallback_to_full_report": True,
+            "fallback_text": raw_text,
+            "inline_segments": [],
+        }
+
+    inline_segments: list[dict[str, object]] = []
+    for seg in segments:
+        start = seg.get("start") if isinstance(seg.get("start"), dict) else {}
+        end = seg.get("end") if isinstance(seg.get("end"), dict) else {}
+        threshold_raw = seg.get("threshold_used", seg.get("threshold", meta.get("threshold")))
+        threshold = _format_threshold(threshold_raw)
+
+        start_matched_line = start.get("matched_line")
+        start_score = _format_score(start.get("score"))
+        start_best_score = _format_score(start.get("best_score"))
+        if start_matched_line:
+            start_line = (
+                f"Якорь начала (в сводке): {start_matched_line} "
+                f"(score={start_score}, threshold={threshold})"
+            )
+        else:
+            start_line = f"Якорь начала: не найден (best_score={start_best_score}, threshold={threshold})"
+
+        is_open_ended = bool(seg.get("open_ended")) or not seg.get("template_anchor_end")
+        end_matched_line = end.get("matched_line")
+        end_score = _format_score(end.get("score"))
+        if is_open_ended:
+            end_line = "Якорь конца: отсутствует (сегмент до конца документа)"
+        elif end_matched_line:
+            end_line = (
+                f"Якорь конца (в сводке): {end_matched_line} "
+                f"(score={end_score}, threshold={threshold})"
+            )
+        else:
+            end_best_score = _format_score(end.get("best_score"))
+            end_line = f"Якорь конца: не найден (best_score={end_best_score}, threshold={threshold})"
+
+        inline_segments.append(
+            {
+                "segment_index": int(seg.get("segment_index") or 0),
+                "start_line": start_line,
+                "end_line": end_line,
+                "slice_text": str(seg.get("slice_text") or "").strip(),
+            }
+        )
+
+    return {
+        "fallback_to_full_report": False,
+        "fallback_text": "",
+        "inline_segments": inline_segments,
+    }
+
+
 def _app_version_payload() -> dict[str, str]:
     settings_version = getattr(settings, "VERSION", "")
     git_sha = os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA") or os.getenv("SOURCE_VERSION") or ""
@@ -159,6 +283,7 @@ def _safe_run_payload(run: AnalysisRun) -> dict[str, object]:
         "progress_total": run.progress_total,
         "progress_done": run.progress_done,
         "progress_updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else None,
+        "slicing_meta": run.slicing_meta if isinstance(run.slicing_meta, dict) else {},
     }
 
 
@@ -1082,6 +1207,12 @@ class UploadView(View):
         if pending_selection_forms is None:
             pending_selection_forms = self._build_pending_selection_forms(request)
         queue_paginator, queue_page_obj = self._queue_page(request)
+        active_templates = SvodkaTemplate.objects.filter(is_active=True).only("template_id", "scope", "pu_id")
+        preview_by_pu: dict[str, str] = {}
+        for template in active_templates:
+            key = "" if template.scope == SvodkaTemplate.Scope.GENERAL else str(template.pu_id)
+            preview_by_pu[key] = reverse("analysis-template-preview", kwargs={"template_id": template.template_id})
+
         return {
             "upload_form": upload_form or UploadDocxWithPuForm(),
             "queue_page_obj": queue_page_obj,
@@ -1091,6 +1222,8 @@ class UploadView(View):
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
             "debug_mode": FeatureFlags.is_effective_debug_enabled(),
+            "template_preview_by_pu": preview_by_pu,
+            "template_preview_by_pu_json": json.dumps(preview_by_pu),
         }
 
     def _pending_runs(self, request, limit: int = 20):
@@ -1261,34 +1394,6 @@ class UploadView(View):
         return redirect(f"{upload_url}?{'&'.join(query)}")
 
 
-class AnalysisQueueResetView(View):
-    def post(self, request):
-        queryset = UploadView._queue_queryset(request).filter(
-            status=AnalysisRun.Status.QUEUED,
-            started_at__isnull=True,
-            finished_at__isnull=True,
-        )
-        runs_to_cancel = list(queryset.only("run_id", "celery_task_id"))
-        if any(run.celery_task_id for run in runs_to_cancel):
-            from config.celery import app as celery_app
-
-            for task_id in [run.celery_task_id for run in runs_to_cancel if run.celery_task_id]:
-                try:
-                    celery_app.control.revoke(task_id, terminate=False)
-                except Exception:  # noqa: BLE001
-                    logger.warning("Failed to revoke task_id=%s", task_id, exc_info=True)
-
-        queryset.update(
-            status=AnalysisRun.Status.CANCELED,
-            error_message="Queue reset by operator",
-            finished_at=timezone.now(),
-        )
-
-        upload_url = redirect("analysis-upload").url
-        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page") or "1"
-        return redirect(f"{upload_url}?queue_page={queue_page}")
-
-
 class PendingRunCancelView(View):
     http_method_names = ["post"]
 
@@ -1316,6 +1421,82 @@ class PendingRunCancelView(View):
         if queue_page:
             return redirect(f"{upload_url}?queue_page={queue_page}")
         return redirect(upload_url)
+
+
+def _user_can_manage_run(request, run: AnalysisRun) -> bool:
+    if request.user.is_authenticated:
+        return bool(request.user.is_staff or run.uploaded_by_id == request.user.id)
+    return run.created_session_key == UploadView._ensure_session_key(request)
+
+
+def _build_delete_action_url(request) -> str:
+    next_url = request.POST.get("next") or request.GET.get("next")
+    if next_url:
+        return next_url
+    upload_url = redirect("analysis-upload").url
+    queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+    if queue_page:
+        return f"{upload_url}?queue_page={queue_page}"
+    return upload_url
+
+
+def _delete_run_files_after_commit(*, upload_name: str, debug_package_name: str) -> None:
+    def _cleanup() -> None:
+        for file_name in [upload_name, debug_package_name]:
+            if not file_name:
+                continue
+            try:
+                default_storage.delete(file_name)
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to delete run artifact file=%s", file_name, exc_info=True)
+
+    transaction.on_commit(_cleanup)
+
+
+class AnalysisRunDeleteView(View):
+    http_method_names = ["post"]
+
+    def post(self, request, run_id):
+        run = get_object_or_404(AnalysisRun, run_id=run_id)
+        if not _user_can_manage_run(request, run):
+            return redirect("analysis-upload")
+
+        revoke_task_id = run.celery_task_id or ""
+        revoke_terminate = run.status == AnalysisRun.Status.RUNNING
+        upload_name = str(run.file.name or "")
+        debug_package_name = str(run.debug_package_file.name or "")
+
+        if revoke_task_id:
+            from config.celery import app as celery_app
+
+            try:
+                celery_app.control.revoke(revoke_task_id, terminate=revoke_terminate)
+                logger.info(
+                    "Revoke requested for run_id=%s task_id=%s terminate=%s",
+                    run.run_id,
+                    revoke_task_id,
+                    revoke_terminate,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to revoke run_id=%s task_id=%s terminate=%s",
+                    run.run_id,
+                    revoke_task_id,
+                    revoke_terminate,
+                    exc_info=True,
+                )
+
+        with transaction.atomic():
+            run = AnalysisRun.objects.select_for_update().get(run_id=run_id)
+            if run.status in [AnalysisRun.Status.RUNNING, AnalysisRun.Status.QUEUED, AnalysisRun.Status.CREATED]:
+                run.status = AnalysisRun.Status.CANCELED
+                run.error_message = "Canceled and deleted by operator"
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+            run.delete()
+            _delete_run_files_after_commit(upload_name=upload_name, debug_package_name=debug_package_name)
+
+        return redirect(_build_delete_action_url(request))
 
 
 class AnalysisQueueStatusView(View):
@@ -1513,6 +1694,52 @@ class AnalysisDebugZipView(View):
         return response
 
 
+class TemplatePreviewView(LoginRequiredMixin, UserPassesTestMixin, View):
+    template_name = "analysis_app/template_preview.html"
+
+    def test_func(self):
+        return bool(self.request.user and self.request.user.is_staff)
+
+    def _render_preview(self, request, template: SvodkaTemplate):
+        template_text = ""
+        if template.file:
+            with template.file.open("rb") as source:
+                template_text = extract_template_text(source)
+
+        preview = build_template_preview_context(template_text, template.begin_marker, template.end_marker)
+        return render(
+            request,
+            self.template_name,
+            {
+                "svodka_template": template,
+                "preview": preview,
+            },
+        )
+
+    def get(self, request, template_id=None, pu_id=None):
+        if template_id is not None:
+            template = get_object_or_404(SvodkaTemplate, template_id=template_id)
+            return self._render_preview(request, template)
+
+        normalized_pu_id = str(pu_id or "").strip()
+        if not normalized_pu_id:
+            template = get_object_or_404(
+                SvodkaTemplate,
+                scope=SvodkaTemplate.Scope.GENERAL,
+                pu_id="",
+                is_active=True,
+            )
+            return self._render_preview(request, template)
+
+        template = get_object_or_404(
+            SvodkaTemplate,
+            scope=SvodkaTemplate.Scope.PU,
+            pu_id=normalized_pu_id,
+            is_active=True,
+        )
+        return self._render_preview(request, template)
+
+
 class AnalysisDetailView(View):
     template_name = "analysis_app/detail.html"
 
@@ -1567,5 +1794,7 @@ class AnalysisDetailView(View):
                 "debug_zip_url": _debug_zip_url(run),
                 "show_debug_zip_link": FeatureFlags.is_effective_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
                 "debug_pipeline": _debug_pipeline_payload(run),
+                "slicing_status": _slicing_status_payload(run),
+                "slicing_preview": _slicing_preview_payload(run, debug_mode=FeatureFlags.is_effective_debug_enabled()),
             },
         )

@@ -45,6 +45,7 @@ def _safe_run_payload(run: AnalysisRun) -> dict[str, object]:
         "progress_total": run.progress_total,
         "progress_done": run.progress_done,
         "progress_updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else None,
+        "slicing_meta": run.slicing_meta if isinstance(run.slicing_meta, dict) else {},
     }
 
 
@@ -66,6 +67,17 @@ def _build_slicing_payload(results_qs) -> dict[str, object]:
             slicing["items"].append({"idx": result.paragraph.idx, "debug": debug_data})
     return slicing
 
+
+
+
+def _truncate_debug_text(text: str, *, max_bytes: int = 2 * 1024 * 1024) -> str:
+    raw = (text or "").encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text or ""
+    chunk = max_bytes // 2
+    head = raw[:chunk].decode("utf-8", errors="ignore")
+    tail = raw[-chunk:].decode("utf-8", errors="ignore")
+    return f"{head}\n\n... [TRUNCATED: original size {len(raw)} bytes] ...\n\n{tail}"
 
 def build_debug_zip_bytes(run: AnalysisRun) -> bytes:
     results_qs = AnalysisResult.objects.filter(paragraph__run_id=run.run_id).select_related(
@@ -89,6 +101,13 @@ def build_debug_zip_bytes(run: AnalysisRun) -> bytes:
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("meta.json", json.dumps(meta_payload, ensure_ascii=False, indent=2))
         archive.writestr("run.json", json.dumps(_safe_run_payload(run), ensure_ascii=False, indent=2))
+        slicing_meta = run.slicing_meta if isinstance(run.slicing_meta, dict) else {}
+        archive.writestr(
+            "slicing_meta.json",
+            json.dumps(slicing_meta, ensure_ascii=False, indent=2),
+        )
+        analyzed_text = _truncate_debug_text(str(slicing_meta.get("analyzed_text") or ""))
+        archive.writestr("analyzed_slice.txt", analyzed_text)
 
         if slicing_payload.get("template") or slicing_payload.get("items"):
             archive.writestr(

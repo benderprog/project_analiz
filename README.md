@@ -28,12 +28,17 @@
 Альтернативно можно запускать по отдельности:
 
 - `make web` — только Django (`HOST`/`PORT`)
-- `make worker` — только Celery (`CONCURRENCY`)
+- `make worker` — только Celery (авто-лимиты: 80% CPU/RAM контейнера, cgroup-aware)
 
 Параметры можно переопределять при запуске, например:
 
-- `make dev PORT=8001 CONCURRENCY=2`
+- `make dev PORT=8001`
 
 `make dev` запускает Celery worker в фоне и корректно останавливает его при остановке Django (`Ctrl+C`).
+
+Worker auto-limits:
+- воркер автоматически вычисляет `concurrency` и `--max-memory-per-child` из 80% доступных контейнеру CPU/RAM (с учетом cgroup-лимитов).
+- администратор может ограничить контейнер через Docker/Compose (`cpus`, `mem_limit`) — воркер возьмет 80% уже от этих лимитов.
+- дополнительные safety/env-параметры: `WORKER_MAX_CONCURRENCY` (default 8), `WORKER_MEMORY_SAFETY_MARGIN_KB` (default 200000), `WORKER_MAX_TASKS_PER_CHILD` (default 50), `WORKER_SOFT_TIME_LIMIT` (default 840), `WORKER_TIME_LIMIT` (default 900).
 
 После загрузки DOCX и выбора ПУ анализ выполняется в фоне; страница загрузки покажет текущий статус и таймер до завершения.

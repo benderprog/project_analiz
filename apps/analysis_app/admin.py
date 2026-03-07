@@ -20,6 +20,7 @@ from apps.analysis_app.pu_cache import upsert_pu_cache
 from apps.analysis_app.portal_records import PortalPURecord
 from apps.analysis_app.portal_db_runtime import apply_portal_db_settings, resolve_portal_password
 from apps.analysis_app.portal_db_settings_service import get_test_portal_db_params
+from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
 from apps.analysis_app.utils.portal_db_crypto import encrypt_password
 from apps.portaldb.gateway import get_portal_gateway
 
@@ -272,18 +273,42 @@ class CachedSubdivisionAliasAdmin(admin.ModelAdmin):
 @admin.register(SvodkaTemplate)
 class SvodkaTemplateAdmin(admin.ModelAdmin):
     form = SvodkaTemplateAdminForm
+    change_form_template = "admin/analysis_app/svodkatemplate/change_form.html"
     list_display = (
         "scope",
         "pu_display",
         "is_active",
         "begin_marker",
         "end_marker",
+        "anchor_match_threshold",
         "updated_at",
     )
     list_filter = ("scope", "is_active")
     search_fields = ()
     list_editable = ("is_active",)
     exclude = ("pu_id", "scope", "pu_name")
+
+    def render_change_form(self, request, context, add=False, change=False, form_url="", obj=None):
+        form = context.get("adminform").form
+        uploaded_file = request.FILES.get("file") if request.method == "POST" else None
+
+        template_text = ""
+        if uploaded_file:
+            template_text = extract_template_text(uploaded_file)
+        elif obj and obj.file:
+            with obj.file.open("rb") as source:
+                template_text = extract_template_text(source)
+
+        preview_context = build_template_preview_context(
+            template_text,
+            form["begin_marker"].value() or "[BEGIN]",
+            form["end_marker"].value() or "[END]",
+        )
+        context["template_preview"] = preview_context
+        context["template_preview_url"] = (
+            reverse("analysis-template-preview", kwargs={"template_id": obj.template_id}) if obj else ""
+        )
+        return super().render_change_form(request, context, add=add, change=change, form_url=form_url, obj=obj)
 
     @admin.display(description="Пограничное управление")
     def pu_display(self, obj):

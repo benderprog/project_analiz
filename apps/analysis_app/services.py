@@ -98,11 +98,14 @@ def run_analysis_pipeline(
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
     parse_started = pytime.monotonic()
-    events = parse_docx(
+    events, slicing_meta = parse_docx(
         run.file.path,
         selected_pu_id=selected_pu_id or run.selected_pu_id,
         selected_pu_name=run.selected_pu_name,
+        return_slicing_meta=True,
     )
+    run.slicing_meta = slicing_meta
+    run.save(update_fields=["slicing_meta"])
     parse_ms = int((pytime.monotonic() - parse_started) * 1000)
     total_events = len(events)
     if stage_callback:
@@ -355,7 +358,8 @@ def parse_docx(
     *,
     selected_pu_id: str | None = None,
     selected_pu_name: str | None = None,
-) -> list[ParsedEvent]:
+    return_slicing_meta: bool = False,
+) -> list[ParsedEvent] | tuple[list[ParsedEvent], dict[str, Any]]:
     """Split DOCX content into ordered events from paragraphs and table rows."""
     from docx import Document
 
@@ -407,10 +411,11 @@ def parse_docx(
     template = slicing_info.selected_template
     if template:
         logger.info(
-            "svodka template: scope=%s pu_id=%s template_id=%s segments_total=%s segments_applied=%s segments_failed=%s kept_elements=%s total_elements=%s target_markers_found=%s target_segments_count=%s target_kept_elements=%s fallback_reason=%s",
+            "svodka template: scope=%s pu_id=%s template_id=%s threshold=%s segments_total=%s segments_applied=%s segments_failed=%s kept_elements=%s total_elements=%s target_markers_found=%s target_segments_count=%s target_kept_elements=%s fallback_reason=%s slicing_strategy=%s segment_matches=%s warnings=%s",
             template.scope,
             template.pu_id,
             template.template_id,
+            slicing_info.template_anchor_threshold,
             slicing_info.template_segments_total,
             slicing_info.segments_applied,
             slicing_info.segments_failed,
@@ -420,6 +425,9 @@ def parse_docx(
             slicing_info.target_segments_count,
             slicing_info.target_kept_elements,
             slicing_info.fallback_reason,
+            slicing_info.slicing_strategy,
+            slicing_info.segment_matches,
+            slicing_info.warnings,
         )
     else:
         logger.info("svodka template: none selected")
@@ -432,6 +440,9 @@ def parse_docx(
         skipped_empty_rows,
         min_chars,
     )
+    slicing_meta = slicing_info.to_meta()
+    if return_slicing_meta:
+        return events, slicing_meta
     return events
 
 

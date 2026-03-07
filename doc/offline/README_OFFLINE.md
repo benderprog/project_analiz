@@ -55,6 +55,10 @@ bash scripts/offline/offline.sh up
 
 `up` performs restore via `postgres:15` tooling and starts runtime services: `web`, `worker`, `db_app`, `portal_db_test`, `redis`.
 
+Worker auto-limits:
+- `worker` стартует через helper и ставит лимиты Celery на 80% CPU/RAM, доступных контейнеру (с учетом cgroup).
+- Для админ-ограничений контейнера можно опционально задать Docker/Compose ресурсы (`cpus`, `mem_limit`) — worker автоматически уважает эти лимиты и берет 80% от них.
+
 ## 5. Operations
 
 ```bash

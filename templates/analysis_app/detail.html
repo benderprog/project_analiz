@@ -5,6 +5,13 @@
   .badge + .badge { margin-left: .35rem; }
   .event-source-table { width: 100%; border-collapse: collapse; }
   .event-source-table td, .event-source-table th { border: 1px solid #d9d9d9; padding: .4rem .5rem; vertical-align: top; }
+  .slicing-preview { margin: .75rem 0 1rem; }
+  .segment-preview { margin: .6rem 0; }
+  .anchor-line { padding: .35rem .5rem; border-radius: 4px; border: 1px solid transparent; margin: .25rem 0; font-size: .92rem; }
+  .anchor-start { background: #dbeafe; border-color: #93c5fd; color: #1e3a8a; }
+  .anchor-end { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
+  .segment-text { max-height: 320px; overflow: auto; background: #fafafa; border: 1px solid #ddd; padding: .6rem; white-space: pre-wrap; word-break: break-word; margin: .35rem 0; }
+  .slicing-fallback { padding: .4rem .55rem; background: #fff7ed; border: 1px solid #fdba74; margin-bottom: .5rem; }
 </style>
 <section class="card">
   <h2>Результаты анализа</h2>
@@ -14,8 +21,51 @@
   {% if show_debug_zip_link and debug_zip_url %}
     <p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug-пакет</a></p>
   {% endif %}
+  {% if slicing_status %}
+    <p><strong>{{ slicing_status.label }}</strong></p>
+    {% if debug_mode %}
+      <p>
+        method={{ slicing_status.method }},
+        expected/matched={{ slicing_status.anchors_expected }}/{{ slicing_status.anchors_matched }},
+        threshold={{ slicing_status.threshold|default:"—" }}
+      </p>
+      {% if slicing_status.reasons %}
+        <p>reasons: {{ slicing_status.reasons|join:", " }}</p>
+      {% endif %}
+      {% if slicing_status.segments %}
+        <p>
+          top scores:
+          {% for seg in slicing_status.segments|slice:":3" %}
+            [#{{ seg.index }} start={{ seg.start_score|default:"—" }} end={{ seg.end_score|default:"—" }}]{% if not forloop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+      {% endif %}
+    {% endif %}
+  {% endif %}
   {% if debug_mode and debug_pipeline and debug_pipeline.stage_line %}
     <p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>
+  {% endif %}
+
+  {% if slicing_preview %}
+    <details class="slicing-preview">
+      <summary>Предпросмотр обрезки / якорей</summary>
+      {% if slicing_preview.fallback_to_full_report %}
+        <div class="slicing-fallback">Fallback: анализ всей сводки</div>
+        <pre class="segment-text">{{ slicing_preview.fallback_text }}</pre>
+      {% else %}
+        {% for seg in slicing_preview.inline_segments %}
+          <div class="segment-preview">
+            <p><strong>Сегмент #{{ seg.segment_index }}</strong></p>
+            <div class="anchor-line anchor-start">{{ seg.start_line }}</div>
+            <pre class="segment-text">{{ seg.slice_text }}</pre>
+            <div class="anchor-line anchor-end">{{ seg.end_line }}</div>
+          </div>
+          {% if not forloop.last %}<hr>{% endif %}
+        {% empty %}
+          <p>Сегменты для предпросмотра не найдены.</p>
+        {% endfor %}
+      {% endif %}
+    </details>
   {% endif %}
 </section>
 

@@ -6,7 +6,6 @@ MANAGE := $(PY) manage.py
 
 HOST ?= 127.0.0.1
 PORT ?= 8000
-CONCURRENCY ?= 1
 
 .PHONY: test dev web worker migrate redis-docker redis-stop release-image
 
@@ -20,12 +19,12 @@ web:
 	$(MANAGE) runserver $(HOST):$(PORT)
 
 worker:
-	$(CELERY) -A config worker -l info -Q analysis --concurrency=$(CONCURRENCY)
+	$(PY) -m scripts.run_celery_worker
 
 dev:
 	@set -euo pipefail; \
 	echo "[dev] starting celery..."; \
-	$(CELERY) -A config worker -l info -Q analysis --concurrency=$(CONCURRENCY) & \
+	$(PY) -m scripts.run_celery_worker & \
 	CELERY_PID=$$!; \
 	cleanup() { \
 		echo ""; \

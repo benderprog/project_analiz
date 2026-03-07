@@ -86,7 +86,7 @@ docker compose build web
 ```
 
 ```bash
-VERSION="1.9"
+VERSION="1.10"
 docker tag project_analiz_web:latest "project_analiz:web-ver-${VERSION}"
 ```
 
@@ -106,9 +106,10 @@ bash scripts/prefetch_model.sh --model "${MODEL}" --out "${OUT}"
 
 ```bash
 rm -rf dist
-bash scripts/offline/offline.sh bundle --version 1.9 --with-model \
+bash scripts/offline/offline.sh bundle --version 1.10 --with-model \
   --db-app-dump "$DUMP_DIR/app_db.dump" \
-  --db-portal-dump "$DUMP_DIR/portal_db_test.dump"
+  --db-portal-dump "$DUMP_DIR/portal_db_test.dump" \
+  --archive
 ```
 
 ## G) Import images + start

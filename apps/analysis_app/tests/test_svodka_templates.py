@@ -1,13 +1,29 @@
-from django.test import SimpleTestCase
+from tempfile import NamedTemporaryFile
+from types import SimpleNamespace
+import os
+from unittest.mock import patch
+
+from django.test import SimpleTestCase, override_settings
+from docx import Document
 
 from apps.analysis_app.svodka_templates import (
     DocElement,
     SegmentAnchors,
     apply_template_segments,
     build_template_segments,
+    parse_template_marker_blocks,
     slice_by_markers,
+    normalize_anchor_text,
+    slice_document_for_run,
 )
 
+
+
+
+class AnchorNormalizationTests(SimpleTestCase):
+    def test_normalize_anchor_text_handles_case_punctuation_and_yo(self):
+        self.assertEqual(normalize_anchor_text("Ёлка, №1"), "елка 1")
+        self.assertEqual(normalize_anchor_text("елка 1"), "елка 1")
 
 class MarkerSlicingTests(SimpleTestCase):
     def test_two_segments_with_gap_keeps_only_segment_content(self):
@@ -28,20 +44,6 @@ class MarkerSlicingTests(SimpleTestCase):
         self.assertEqual(debug["segments_count"], 2)
         self.assertEqual(debug["kept_elements"], 2)
 
-    def test_unclosed_segment_keeps_until_document_end(self):
-        elements = [
-            DocElement(kind="paragraph", text="[BEGIN]"),
-            DocElement(kind="paragraph", text="A1"),
-            DocElement(kind="paragraph", text="A2"),
-        ]
-
-        kept, debug = slice_by_markers(elements, "[BEGIN]", "[END]")
-
-        self.assertEqual([item.text for item in kept], ["A1", "A2"])
-        self.assertTrue(debug["markers_found"])
-        self.assertEqual(debug["segments_count"], 1)
-        self.assertEqual(debug["kept_elements"], 2)
-
     def test_end_without_begin_keeps_nothing_for_direct_marker_slicing(self):
         elements = [
             DocElement(kind="paragraph", text="X"),
@@ -53,128 +55,262 @@ class MarkerSlicingTests(SimpleTestCase):
 
         self.assertEqual(kept, [])
         self.assertTrue(debug["markers_found"])
-        self.assertEqual(debug["segments_count"], 0)
-        self.assertEqual(debug["kept_elements"], 0)
+
+
+class TemplateBlockParsingTests(SimpleTestCase):
+    def test_single_segment_extracts_pre_and_post_anchors(self):
+        blocks, warnings = parse_template_marker_blocks("pre\n[BEGIN]\nbody\n[END]\npost")
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].pre_anchor_text, "pre")
+        self.assertEqual(blocks[0].post_anchor_text, "post")
+        self.assertEqual(warnings, [])
+
+    def test_multiple_segments_supported(self):
+        text = "a\n[BEGIN]\nA\n[END]\nb\n[BEGIN]\nB\n[END]\nc"
+        blocks, _ = parse_template_marker_blocks(text)
+        self.assertEqual(len(blocks), 2)
+
+    def test_begin_without_end_open_ended(self):
+        blocks, warnings = parse_template_marker_blocks("pre\n[BEGIN]\nbody")
+        self.assertEqual(len(blocks), 1)
+        self.assertIsNone(blocks[0].end_marker_span)
+        self.assertTrue(any("BEGIN without END" in item for item in warnings))
+
+    def test_end_without_begin_is_ignored(self):
+        blocks, warnings = parse_template_marker_blocks("x\n[END]\ny")
+        self.assertEqual(blocks, [])
+        self.assertTrue(any("END without BEGIN" in item for item in warnings))
 
 
 class SvodkaTemplateSlicingTests(SimpleTestCase):
-    def test_template_with_one_segment_keeps_only_matched_range(self):
-        template_elements = [
-            DocElement(kind="paragraph", text="Before"),
-            DocElement(kind="paragraph", text="[BEGIN]"),
-            DocElement(kind="paragraph", text="Start anchor text"),
-            DocElement(kind="paragraph", text="Middle"),
-            DocElement(kind="paragraph", text="End anchor text [END]"),
-        ]
-        segments = build_template_segments(template_elements, "[BEGIN]", "[END]")
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_exact_anchors_in_report_slice_between_lines(self):
+        anchors = [SegmentAnchors(start_anchor_text="A start", end_anchor_text="A end", index=0)]
         target = [
-            DocElement(kind="paragraph", text="unrelated"),
-            DocElement(kind="paragraph", text=".. START anchor text .."),
+            DocElement(kind="paragraph", text="A start"),
             DocElement(kind="paragraph", text="inside"),
-            DocElement(kind="paragraph", text="END anchor text!!!"),
-            DocElement(kind="paragraph", text="outside"),
+            DocElement(kind="paragraph", text="A end"),
         ]
 
-        sliced, applied, failed = apply_template_segments(target, segments)
+        sliced, applied, failed, _, _ = apply_template_segments(target, anchors)
 
         self.assertEqual(applied, 1)
         self.assertEqual(failed, 0)
-        self.assertEqual([e.text for e in sliced], [target[1].text, target[2].text, target[3].text])
+        self.assertEqual([e.text for e in sliced], ["inside"])
 
-    def test_template_with_two_segments_keeps_union_in_order(self):
-        template_elements = [
-            DocElement(kind="paragraph", text="Header"),
-            DocElement(kind="paragraph", text="[BEGIN]"),
-            DocElement(kind="paragraph", text="A start"),
-            DocElement(kind="paragraph", text="A middle"),
-            DocElement(kind="paragraph", text="A end [END]"),
-            DocElement(kind="paragraph", text="Between"),
-            DocElement(kind="paragraph", text="[BEGIN]"),
-            DocElement(kind="paragraph", text="B start"),
-            DocElement(kind="paragraph", text="B middle"),
-            DocElement(kind="paragraph", text="B end [END]"),
-        ]
-        segments = build_template_segments(template_elements, "[BEGIN]", "[END]")
-
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_open_ended_segment_slices_to_end(self):
+        anchors = [SegmentAnchors(start_anchor_text="A start", end_anchor_text=None, is_open_ended=True, index=0)]
         target = [
-            DocElement(kind="paragraph", text="preamble"),
             DocElement(kind="paragraph", text="A start"),
-            DocElement(kind="paragraph", text="A body"),
-            DocElement(kind="paragraph", text="A end"),
-            DocElement(kind="paragraph", text="skip"),
-            DocElement(kind="paragraph", text="B start"),
-            DocElement(kind="paragraph", text="B body"),
-            DocElement(kind="paragraph", text="B end"),
+            DocElement(kind="paragraph", text="inside"),
             DocElement(kind="paragraph", text="tail"),
         ]
 
-        sliced, applied, failed = apply_template_segments(target, segments)
-
-        self.assertEqual(applied, 2)
+        sliced, applied, failed, _, _ = apply_template_segments(target, anchors)
+        self.assertEqual(applied, 1)
         self.assertEqual(failed, 0)
-        self.assertEqual([e.text for e in sliced], ["A start", "A body", "A end", "B start", "B body", "B end"])
+        self.assertEqual([e.text for e in sliced], ["inside", "tail"])
 
-    def test_one_segment_matches_second_fails_keeps_first_without_fallback(self):
-        anchors = [
-            SegmentAnchors(start_anchor_text="A start", end_anchor_text="A end"),
-            SegmentAnchors(start_anchor_text="Missing start", end_anchor_text="Missing end"),
-        ]
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_segment_debug_contains_template_anchors_and_matched_lines(self):
+        anchors = [SegmentAnchors(start_anchor_text="A start", end_anchor_text="A end", index=0)]
         target = [
             DocElement(kind="paragraph", text="A start"),
-            DocElement(kind="paragraph", text="A body"),
+            DocElement(kind="paragraph", text="inside"),
             DocElement(kind="paragraph", text="A end"),
-            DocElement(kind="paragraph", text="outside"),
         ]
 
-        sliced, applied, failed = apply_template_segments(target, anchors)
+        _, _, _, debug_segments, _ = apply_template_segments(target, anchors)
 
-        self.assertEqual(applied, 1)
-        self.assertEqual(failed, 1)
-        self.assertEqual([e.text for e in sliced], ["A start", "A body", "A end"])
+        self.assertEqual(debug_segments[0]["template_anchor_start"], "A start")
+        self.assertEqual(debug_segments[0]["template_anchor_end"], "A end")
+        self.assertEqual(debug_segments[0]["start_matched_line"], "A start")
+        self.assertEqual(debug_segments[0]["end_matched_line"], "A end")
 
-    def test_sequential_matching_uses_later_duplicate_anchors(self):
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_segment_debug_contains_slice_text(self):
+        anchors = [SegmentAnchors(start_anchor_text="A start", end_anchor_text="A end", index=0)]
+        target = [
+            DocElement(kind="paragraph", text="A start"),
+            DocElement(kind="paragraph", text="inside"),
+            DocElement(kind="paragraph", text="A end"),
+        ]
+
+        _, _, _, debug_segments, _ = apply_template_segments(target, anchors)
+
+        self.assertEqual(debug_segments[0]["slice_text"], "inside")
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_per_template_threshold_affects_match_acceptance(self):
         anchors = [
-            SegmentAnchors(start_anchor_text="Start", end_anchor_text="End"),
-            SegmentAnchors(start_anchor_text="Start", end_anchor_text="End"),
+            SegmentAnchors(
+                start_anchor_text="дата нарушения место служба",
+                end_anchor_text=None,
+                is_open_ended=True,
+                index=0,
+            )
         ]
         target = [
-            DocElement(kind="paragraph", text="Start"),
-            DocElement(kind="paragraph", text="noise"),
-            DocElement(kind="paragraph", text="End"),
-            DocElement(kind="paragraph", text="gap"),
-            DocElement(kind="paragraph", text="Start"),
-            DocElement(kind="paragraph", text="inside second"),
-            DocElement(kind="paragraph", text="End"),
+            DocElement(kind="paragraph", text="Дата нарушения и место"),
+            DocElement(kind="paragraph", text="тело"),
+            DocElement(kind="paragraph", text="хвост"),
         ]
 
-        sliced, applied, failed = apply_template_segments(target, anchors)
+        sliced_high, applied_high, failed_high, _, _ = apply_template_segments(target, anchors, base_threshold=0.65)
+        sliced_low, applied_low, failed_low, _, _ = apply_template_segments(target, anchors, base_threshold=0.6)
 
-        self.assertEqual(applied, 2)
+        self.assertEqual(sliced_high, [])
+        self.assertEqual(applied_high, 0)
+        self.assertEqual(failed_high, 1)
+
+        self.assertEqual(applied_low, 1)
+        self.assertEqual(failed_low, 0)
+        self.assertEqual([e.text for e in sliced_low], ["тело", "хвост"])
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_paraphrased_anchor_lexical_match(self):
+        anchors = [SegmentAnchors(start_anchor_text="дата нарушения", end_anchor_text="итоги проверки", index=0)]
+        target = [
+            DocElement(kind="paragraph", text="Дата нарушения и место"),
+            DocElement(kind="paragraph", text="тело"),
+            DocElement(kind="paragraph", text="Итоги проверки по делу"),
+        ]
+
+        sliced, applied, failed, _, _ = apply_template_segments(target, anchors)
+        self.assertEqual(applied, 1)
         self.assertEqual(failed, 0)
-        self.assertEqual(
-            [e.text for e in sliced],
-            ["Start", "noise", "End", "Start", "inside second", "End"],
-        )
+        self.assertEqual([e.text for e in sliced], ["тело"])
 
-    def test_missing_markers_returns_no_segments(self):
+    def test_build_template_segments_supports_open_ended(self):
         template_elements = [
-            DocElement(kind="paragraph", text="No markers"),
-            DocElement(kind="paragraph", text="Still no markers"),
+            DocElement(kind="paragraph", text="start line"),
+            DocElement(kind="paragraph", text="[BEGIN]"),
+            DocElement(kind="paragraph", text="body"),
         ]
-
         segments = build_template_segments(template_elements, "[BEGIN]", "[END]")
+        self.assertEqual(len(segments), 1)
+        self.assertTrue(segments[0].is_open_ended)
 
-        self.assertEqual(segments, [])
-
-    def test_anchors_not_found_returns_empty_slice(self):
-        target = [
+    def test_regression_literal_markers_path_unchanged(self):
+        elements = [
             DocElement(kind="paragraph", text="x"),
+            DocElement(kind="paragraph", text="[BEGIN]"),
             DocElement(kind="paragraph", text="y"),
+            DocElement(kind="paragraph", text="[END]"),
+            DocElement(kind="paragraph", text="z"),
         ]
-        anchors = [SegmentAnchors(start_anchor_text="missing start", end_anchor_text="missing end")]
+        kept, _ = slice_by_markers(elements, "[BEGIN]", "[END]")
+        self.assertEqual([item.text for item in kept], ["y"])
 
-        sliced, applied, failed = apply_template_segments(target, anchors)
 
-        self.assertEqual(sliced, [])
-        self.assertEqual(applied, 0)
-        self.assertEqual(failed, 1)
+class SliceDocumentForRunFallbackTests(SimpleTestCase):
+    def _write_docx(self, paragraphs: list[str]) -> str:
+        document = Document()
+        for paragraph in paragraphs:
+            document.add_paragraph(paragraph)
+        with NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            document.save(tmp.name)
+            return tmp.name
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True, MIN_EVENT_PARAGRAPH_CHARS=20)
+    def test_anchor_miss_marks_meta_and_falls_back_to_full_document(self):
+        report_path = self._write_docx(["очень длинный абзац " * 8, "второй длинный абзац " * 8])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="missing", end_anchor_text="missing-end", index=0)],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertEqual(info.slicing_strategy, "none")
+            self.assertTrue(info.anchors_missing)
+            self.assertEqual(info.anchors_expected, 1)
+            self.assertEqual(info.anchors_matched, 0)
+            self.assertEqual(len(kept), info.total_elements)
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True)
+    def test_when_anchors_match_method_is_template_anchors(self):
+        report_path = self._write_docx(["start anchor", "inside segment text", "end anchor"])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start anchor", end_anchor_text="end anchor", index=0)],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertEqual(info.slicing_strategy, "template_anchors")
+            self.assertEqual(info.anchors_matched, 1)
+            self.assertEqual([item.text for item in kept], ["inside segment text"])
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)
+
+
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True, TEMPLATE_MIN_SLICE_CHARS=300)
+    def test_empty_slice_forces_full_report_fallback(self):
+        report_path = self._write_docx(["start", "end", "очень длинный абзац " * 30])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start", end_anchor_text="end", index=0)],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertTrue(info.anchors_missing)
+            self.assertTrue(info.fallback_to_full_report)
+            self.assertEqual(info.slicing_strategy, "none")
+            self.assertIn("empty_slice", " ".join(info.reasons or []))
+            self.assertEqual(len(kept), info.total_elements)
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)
+
+    def test_report_markers_keep_priority(self):
+        report_path = self._write_docx(["prefix", "[BEGIN]", "inside", "[END]", "suffix"])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertEqual(info.slicing_strategy, "report_markers")
+            self.assertEqual([item.text for item in kept], ["inside"])
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)

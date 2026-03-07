@@ -1,0 +1,44 @@
+{% extends "admin/change_form.html" %}
+
+{% block object-tools-items %}
+  {% if change and original and template_preview_url %}
+    <li>
+      <a href="{{ template_preview_url }}" target="_blank" rel="noopener">Посмотреть предпросмотр</a>
+    </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}
+
+{% block after_field_sets %}
+  {{ block.super }}
+  <fieldset class="module aligned">
+    <h2>Предпросмотр шаблона</h2>
+    {% if template_preview.has_text %}
+      <p><strong>Segments detected:</strong> {{ template_preview.segments_count }}</p>
+      <p><strong>Порог совпадения якоря:</strong> {{ adminform.form.anchor_match_threshold.value|default:"0.60" }}</p>
+      {% if template_preview.warnings %}
+        <ul class="messagelist">
+          {% for warning in template_preview.warnings %}
+            <li class="warning">{{ warning }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% if template_preview.segments %}
+        <ul>
+          {% for segment in template_preview.segments %}
+            <li><strong>Сегмент {{ segment.index }}:</strong> START: {{ segment.start_anchor|default:"—" }}; END: {% if segment.open_ended %}до конца документа{% else %}{{ segment.end_anchor|default:"—" }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <pre style="white-space: pre-wrap; border:1px solid #e5e7eb; border-radius:6px; padding:12px; background:#f8fafc; max-height:420px; overflow:auto;">{{ template_preview.html }}</pre>
+    {% else %}
+      <p>Загрузите DOCX шаблона, чтобы увидеть подсветку маркеров.</p>
+    {% endif %}
+  </fieldset>
+  <style>
+    .template-marker-begin { background: #dcfce7; color:#14532d; padding: 0 2px; }
+    .template-marker-end { background: #fee2e2; color:#7f1d1d; padding: 0 2px; }
+  .template-anchor-start { background:#dbeafe; color:#1e3a8a; padding:0 2px; }
+  .template-anchor-end { background:#fef3c7; color:#78350f; padding:0 2px; }
+  </style>
+{% endblock %}
