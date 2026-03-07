@@ -11,6 +11,7 @@ from apps.analysis_app.views import (
     AnalysisRunDeleteView,
     TemplatePreviewView,
     UploadView,
+    SetUiModeView,
 )
 
 urlpatterns = [
@@ -25,4 +26,5 @@ urlpatterns = [
     path("analysis/pu/<str:pu_id>/template/preview/", TemplatePreviewView.as_view(), name="analysis-template-preview-by-pu"),
     path("run/<uuid:run_id>/cancel/", PendingRunCancelView.as_view(), name="analysis-run-cancel"),
     path("analysis/<uuid:run_id>/delete/", AnalysisRunDeleteView.as_view(), name="analysis-run-delete"),
+    path("ui/mode/", SetUiModeView.as_view(), name="analysis-ui-mode"),
 ]

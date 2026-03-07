@@ -9,6 +9,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.files.storage import default_storage
 from django.core.paginator import EmptyPage, Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.db import transaction
@@ -43,6 +44,7 @@ from apps.analysis_app.services import (
     match_event,
 )
 from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
+from apps.analysis_app.ui_mode import UI_MODE_USER, get_ui_mode, set_ui_mode
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
@@ -1180,7 +1182,8 @@ class UploadView(View):
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
             run.results_url = _results_url(run)
-            run.debug_zip_url = _debug_zip_url(run)
+            ui_debug_enabled = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
+            run.debug_zip_url = _debug_zip_url(run) if ui_debug_enabled else ""
             progress_payload = _progress_payload(run)
             run.progress_total = progress_payload["progress_total"]
             run.progress_done = progress_payload["progress_done"]
@@ -1221,7 +1224,7 @@ class UploadView(View):
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
-            "debug_mode": FeatureFlags.is_effective_debug_enabled(),
+            "debug_mode": get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled(),
             "template_preview_by_pu": preview_by_pu,
             "template_preview_by_pu_json": json.dumps(preview_by_pu),
         }
@@ -1501,7 +1504,7 @@ class AnalysisRunDeleteView(View):
 
 class AnalysisQueueStatusView(View):
     def get(self, request):
-        debug_mode = FeatureFlags.is_effective_debug_enabled()
+        debug_mode = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
         runs = list(UploadView._queue_queryset(request)[:10])
         payload_runs = []
         for run in runs:
@@ -1574,11 +1577,12 @@ class AnalysisStatusView(View):
         return JsonResponse(payload)
 
 
-def _get_run_for_request(run_id, request) -> AnalysisRun:
+def _get_run_for_request(run_id, request, *, allow_staff: bool = False) -> AnalysisRun:
     run = get_object_or_404(AnalysisRun, run_id=run_id)
     if request.user.is_authenticated:
         if run.uploaded_by_id != request.user.id:
-            raise Http404
+            if not (allow_staff and request.user.is_staff):
+                raise Http404
         return run
 
     session_key = UploadView._ensure_session_key(request)
@@ -1593,7 +1597,7 @@ def paragraph_to_event_json(paragraph: AnalysisParagraph) -> dict:
 
 class AnalysisEventsListView(View):
     def get(self, request, run_id):
-        run = _get_run_for_request(run_id, request)
+        run = _get_run_for_request(run_id, request, allow_staff=True)
         try:
             page = max(1, int(request.GET.get("page", 1)))
         except (TypeError, ValueError):
@@ -1644,7 +1648,7 @@ class AnalysisEventsListView(View):
 
 class AnalysisEventDetailView(View):
     def get(self, request, run_id, idx):
-        run = _get_run_for_request(run_id, request)
+        run = _get_run_for_request(run_id, request, allow_staff=True)
         paragraph = get_object_or_404(
             AnalysisParagraph.objects.select_related("result", "run"),
             run=run,
@@ -1675,7 +1679,7 @@ class AnalysisDebugZipView(View):
         run = get_object_or_404(AnalysisRun, run_id=run_id)
 
         if request.user.is_authenticated:
-            if run.uploaded_by_id != request.user.id:
+            if run.uploaded_by_id != request.user.id and not request.user.is_staff:
                 raise Http404
         else:
             session_key = UploadView._ensure_session_key(request)
@@ -1692,6 +1696,26 @@ class AnalysisDebugZipView(View):
         response = HttpResponse(build_debug_zip_bytes(run), content_type="application/zip")
         response["Content-Disposition"] = f'attachment; filename="debug_{run.run_id}.zip"'
         return response
+
+
+
+def _is_staff_owner_or_session_user(*, request, run: AnalysisRun) -> bool:
+    if request.user.is_authenticated:
+        return bool(request.user.is_staff or run.uploaded_by_id == request.user.id)
+    return run.created_session_key == UploadView._ensure_session_key(request)
+
+
+def _redirect_back_or_upload(request):
+    referer = request.META.get("HTTP_REFERER", "")
+    if referer and url_has_allowed_host_and_scheme(referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        return redirect(referer)
+    return redirect("analysis-upload")
+
+
+class SetUiModeView(View):
+    def post(self, request):
+        set_ui_mode(request, request.POST.get("mode", UI_MODE_USER))
+        return _redirect_back_or_upload(request)
 
 
 class TemplatePreviewView(LoginRequiredMixin, UserPassesTestMixin, View):
@@ -1744,7 +1768,7 @@ class AnalysisDetailView(View):
     template_name = "analysis_app/detail.html"
 
     def get(self, request, run_id):
-        run = _get_run_for_request(run_id, request)
+        run = _get_run_for_request(run_id, request, allow_staff=True)
 
         selected_idx_param = request.GET.get("event")
         try:
@@ -1767,6 +1791,7 @@ class AnalysisDetailView(View):
         pu_label = GENERAL_SUMMARY_PU_LABEL
         if selected_pu:
             pu_label = str(selected_pu.full_name or selected_pu.short_name or pu_label)
+        ui_debug_enabled = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
         return render(
             request,
             self.template_name,
@@ -1790,11 +1815,11 @@ class AnalysisDetailView(View):
                     "run_status": run.status,
                 },
                 "selected_pu_label": pu_label,
-                "debug_mode": FeatureFlags.is_effective_debug_enabled(),
+                "debug_mode": ui_debug_enabled,
                 "debug_zip_url": _debug_zip_url(run),
-                "show_debug_zip_link": FeatureFlags.is_effective_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
+                "show_debug_zip_link": ui_debug_enabled and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED] and _is_staff_owner_or_session_user(request=request, run=run),
                 "debug_pipeline": _debug_pipeline_payload(run),
                 "slicing_status": _slicing_status_payload(run),
-                "slicing_preview": _slicing_preview_payload(run, debug_mode=FeatureFlags.is_effective_debug_enabled()),
+                "slicing_preview": _slicing_preview_payload(run, debug_mode=ui_debug_enabled),
             },
         )

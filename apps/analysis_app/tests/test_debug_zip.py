@@ -112,6 +112,40 @@ class AnalysisDebugZipViewTests(TestCase):
 
         self.assertIn(response.status_code, [403, 404])
 
+
+    def test_staff_can_access_debug_zip_for_foreign_run_when_debug_on(self):
+        run = self._create_run()
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = True
+        flags.save(update_fields=["debug_mode", "updated_at"])
+        staff = get_user_model().objects.create_user(
+            username="staff",
+            email="staff@example.com",
+            password="pass",
+            is_staff=True,
+        )
+
+        self.client.force_login(staff)
+        response = self.client.get(reverse("analysis-debug-zip", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_staff_cannot_access_debug_zip_when_debug_mode_off(self):
+        run = self._create_run()
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = False
+        flags.save(update_fields=["debug_mode", "updated_at"])
+        staff = get_user_model().objects.create_user(
+            username="staff-off",
+            email="staff-off@example.com",
+            password="pass",
+            is_staff=True,
+        )
+
+        self.client.force_login(staff)
+        response = self.client.get(reverse("analysis-debug-zip", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 404)
     def test_endpoint_uses_cached_debug_package_when_available(self):
         run = self._create_run()
         run.debug_package_file.save("debug_cached.zip", ContentFile(b"cached-data"), save=True)
