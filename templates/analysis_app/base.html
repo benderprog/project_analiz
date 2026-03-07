@@ -19,9 +19,14 @@
             <option value="user" {% if ui_mode == 'user' %}selected{% endif %}>Пользователь</option>
             <option value="admin" {% if ui_mode == 'admin' %}selected{% endif %}>Админ</option>
           </select>
-          {% if is_ui_admin %}<span class="ui-admin-badge">Диагностика включена</span>{% endif %}
         </form>
       {% endif %}
+      <div class="top-status-cluster" aria-label="runtime status">
+        <span class="status-chip">UI: {{ status_ui_label }}</span>
+        <span class="status-chip">PORTAL: {{ status_portal_label }}</span>
+        <span class="status-chip">DEBUG: {{ status_debug_label }}</span>
+        <span class="status-chip">{{ status_version_label }}</span>
+      </div>
     </nav>
   </header>
   <main class="container">
