@@ -11,6 +11,63 @@
 
   const isActiveStatus = (status) => status === 'running' || status === 'queued';
 
+  const renderActions = (row, run) => {
+    const actionCell = row.querySelector('.queue-action');
+    if (!actionCell) return;
+
+    const actionsInline = actionCell.querySelector('.actions-inline');
+    if (!actionsInline) return;
+
+    const openLink = actionsInline.querySelector('[data-role="open-link"]');
+    if (run.has_results && run.results_url) {
+      if (!openLink) {
+        const link = document.createElement('a');
+        link.className = 'primary';
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.setAttribute('data-role', 'open-link');
+        link.textContent = 'Открыть';
+        actionsInline.prepend(link);
+      }
+      actionsInline.querySelector('[data-role="open-link"]').href = run.results_url;
+    } else if (openLink) {
+      openLink.remove();
+    }
+
+    const debugLink = actionsInline.querySelector('[data-role="debug-link"]');
+    if (run.debug_available && run.debug_zip_url) {
+      if (!debugLink) {
+        const link = document.createElement('a');
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.setAttribute('data-role', 'debug-link');
+        link.textContent = 'Debug';
+        const deleteForm = actionsInline.querySelector('form');
+        if (deleteForm) {
+          actionsInline.insertBefore(link, deleteForm);
+        } else {
+          actionsInline.appendChild(link);
+        }
+      }
+      actionsInline.querySelector('[data-role="debug-link"]').href = run.debug_zip_url;
+    } else if (debugLink) {
+      debugLink.remove();
+    }
+
+    let details = actionCell.querySelector('[data-role="queue-details"]');
+    if (!isActiveStatus(String(run.status || '').toLowerCase()) && run.error_message) {
+      if (!details) {
+        details = document.createElement('div');
+        details.className = 'muted';
+        details.setAttribute('data-role', 'queue-details');
+        actionCell.appendChild(details);
+      }
+      details.textContent = run.error_message;
+    } else if (details) {
+      details.remove();
+    }
+  };
+
   const updateRow = (row, run) => {
     const normalizedStatus = String(run.status || '').toLowerCase();
     const badge = row.querySelector('[data-role="status-badge"]');
@@ -23,6 +80,8 @@
     if (elapsed) {
       elapsed.textContent = run.elapsed_display || '—';
     }
+
+    renderActions(row, run);
 
     const progressCell = row.querySelector('.queue-progress');
     if (!progressCell) return;

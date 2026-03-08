@@ -12,11 +12,12 @@
     </div>
 
     <div style="margin-top:12px;">
-      <p><strong>ПУ по умолчанию:</strong> {{ upload_form.selected_pu_id }}</p>
+      <p><strong>ПУ:</strong> {{ upload_form.selected_pu_id }}</p>
       <p class="muted">Применяется к новым файлам; для каждого ожидающего можно изменить отдельно.</p>
       <p><a id="template-preview-link" href="#" target="_blank" rel="noopener" style="display:none;">Открыть шаблон</a></p>
     </div>
 
+    <p id="selected-files-hint" class="muted" style="margin-top:8px;">Выбрано файлов: 0</p>
     <p style="margin-top:12px;"><button type="submit" class="primary">Загрузить и подготовить</button></p>
   </form>
 </section>
@@ -77,8 +78,8 @@
               <td class="queue-elapsed"><span data-role="elapsed">{{ run.elapsed_display }}</span></td>
               <td class="queue-action actions-col">
                 <div class="actions-inline">
-                  {% if run.results_url %}<a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
-                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">
+                  {% if run.results_url %}<a class="primary" data-role="open-link" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
+                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;" data-role="delete-run-form">
                     {% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
                     <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
                   </form>
@@ -87,7 +88,7 @@
                 <div class="progress-wrap"><div data-role="progress-bar" class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
                 <div data-role="progress-text" class="progress-text">{{ run.progress_label }}</div>
                 {% endif %}
-                {% if run.status == 'failed' %}<div class="muted">{{ run.error_message|default:"—" }}</div>{% endif %}
+                {% if run.status == 'failed' or run.status == 'canceled' %}<div class="muted" data-role="queue-details">{{ run.error_message|default:"—" }}</div>{% endif %}
               </td>
             </tr>
           {% endfor %}
@@ -116,6 +117,42 @@
   if (!statusUrl || !body) return;
 
   const isActiveStatus = (status) => status === "running" || status === "queued";
+  const renderActions = (row, run) => {
+    const actionCell = row.querySelector('.queue-action');
+    if (!actionCell) return;
+    const actionsInline = actionCell.querySelector('.actions-inline');
+    if (!actionsInline) return;
+
+    const existingOpen = actionsInline.querySelector('[data-role="open-link"]');
+    if (run.has_results && run.results_url) {
+      if (!existingOpen) {
+        const link = document.createElement('a');
+        link.className = 'primary';
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.setAttribute('data-role', 'open-link');
+        link.textContent = 'Открыть';
+        actionsInline.prepend(link);
+      }
+      actionsInline.querySelector('[data-role="open-link"]').href = run.results_url;
+    } else if (existingOpen) {
+      existingOpen.remove();
+    }
+
+    let details = actionCell.querySelector('[data-role="queue-details"]');
+    if (!isActiveStatus(String(run.status || '').toLowerCase()) && run.error_message) {
+      if (!details) {
+        details = document.createElement('div');
+        details.className = 'muted';
+        details.setAttribute('data-role', 'queue-details');
+        actionCell.appendChild(details);
+      }
+      details.textContent = run.error_message;
+    } else if (details) {
+      details.remove();
+    }
+  };
+
   const updateRow = (row, run) => {
     const status = String(run.status || "").toLowerCase();
     const badge = row.querySelector('[data-role="status-badge"]');
@@ -128,6 +165,7 @@
 
     const actionCell = row.querySelector('.queue-action');
     if (!actionCell) return;
+    renderActions(row, run);
     let progressText = row.querySelector('[data-role="progress-text"]');
     let progressBar = row.querySelector('[data-role="progress-bar"]');
 

@@ -1,9 +1,15 @@
 (function () {
-  const form = document.getElementById('upload-form');
   const dropZone = document.querySelector('.drop-zone');
   const fileInput = document.getElementById('id_file');
+  const filesHint = document.getElementById('selected-files-hint');
 
-  if (!form || !dropZone || !fileInput) return;
+  if (!dropZone || !fileInput) return;
+
+  const updateSelectedFilesHint = () => {
+    if (!filesHint) return;
+    const count = fileInput.files ? fileInput.files.length : 0;
+    filesHint.textContent = `Выбрано файлов: ${count}`;
+  };
 
   const toggleHighlight = (on) => {
     dropZone.classList.toggle('is-dragover', on);
@@ -28,6 +34,8 @@
     });
   });
 
+  fileInput.addEventListener('change', updateSelectedFilesHint);
+
   dropZone.addEventListener('drop', (event) => {
     const droppedFiles = event.dataTransfer ? event.dataTransfer.files : null;
     if (!droppedFiles || droppedFiles.length === 0) return;
@@ -40,6 +48,8 @@
       fileInput.files = droppedFiles;
     }
 
-    form.requestSubmit();
+    updateSelectedFilesHint();
   });
+
+  updateSelectedFilesHint();
 })();

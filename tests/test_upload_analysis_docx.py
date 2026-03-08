@@ -82,7 +82,7 @@ class UploadAnalysisDocxTests(TestCase):
             self.assertFalse(run.celery_task_id)
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_with_selected_pu_single_file_enqueues_run(self):
+    def test_upload_with_selected_pu_single_file_creates_pending_run(self):
         from uuid import uuid4
 
         pu = CachedPU.objects.create(
@@ -99,7 +99,6 @@ class UploadAnalysisDocxTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
                 with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
-                    delay_mock.return_value = type("Task", (), {"id": "task-single"})()
                     response = self.client.post(
                         reverse("analysis-upload"),
                         {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
@@ -109,11 +108,12 @@ class UploadAnalysisDocxTests(TestCase):
         run = AnalysisRun.objects.get()
         self.assertEqual(run.selected_pu_id, str(pu.portal_pu_id))
         self.assertEqual(run.selected_pu_name, "Пограничное управление Север")
-        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
-        self.assertTrue(run.celery_task_id)
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+        self.assertFalse(run.celery_task_id)
+        delay_mock.assert_not_called()
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_docx_single_file_enqueues_with_general_summary(self):
+    def test_upload_docx_single_file_creates_pending_with_general_summary(self):
         upload = SimpleUploadedFile(
             "sample.docx",
             self._make_docx_bytes(),
@@ -123,7 +123,6 @@ class UploadAnalysisDocxTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
                 with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
-                    delay_mock.return_value = type("Task", (), {"id": "task-general"})()
                     response = self.client.post(
                         reverse("analysis-upload"),
                         {"selected_pu_id": "", "file": upload},
@@ -131,9 +130,10 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.get()
-        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
         self.assertEqual(run.selected_pu_name, GENERAL_SUMMARY_PU_LABEL)
-        self.assertTrue(run.celery_task_id)
+        self.assertFalse(run.celery_task_id)
+        delay_mock.assert_not_called()
 
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
@@ -296,6 +296,8 @@ class UploadAnalysisDocxTests(TestCase):
         )
         self.assertEqual(runs[str(run_done.run_id)]["progress_percent"], 100)
         self.assertEqual(runs[str(run_done.run_id)]["progress_label"], "5 / 5 (100%)")
+        self.assertTrue(runs[str(run_done.run_id)]["has_results"])
+        self.assertFalse(runs[str(run_failed.run_id)]["has_results"])
         self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
 
     def test_queue_status_progress_payload(self):
@@ -634,11 +636,19 @@ class UploadAnalysisDocxTests(TestCase):
             self.assertEqual(run.status, status)
 
 
+
+    def test_upload_dropzone_script_does_not_autosubmit_and_updates_selected_files_hint(self):
+        script = Path("static/analysis_app/js/upload_dropzone.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("requestSubmit", script)
+        self.assertIn("selected-files-hint", script)
+        self.assertIn("Выбрано файлов", script)
+
     def test_upload_page_layout_moves_pu_under_dropzone_and_hides_parameters_block(self):
         response = self.client.get(reverse("analysis-upload"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "ПУ по умолчанию")
+        self.assertContains(response, "ПУ:")
         self.assertContains(response, "Применяется к новым файлам; для каждого ожидающего можно изменить отдельно.")
         self.assertNotContains(response, "Параметры")
 
