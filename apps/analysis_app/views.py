@@ -1458,6 +1458,44 @@ class PendingRunsStartAllView(UploadView):
             return redirect(f"{upload_url}?queue_page={queue_page}")
         return redirect(upload_url)
 
+class PendingRunsDeleteAllView(View):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        pending_queryset = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED)
+        if request.user.is_authenticated:
+            pending_queryset = pending_queryset.filter(uploaded_by=request.user)
+        else:
+            pending_queryset = pending_queryset.filter(created_session_key=UploadView._ensure_session_key(request))
+
+        deleted_count = 0
+        for run_id in pending_queryset.values_list("run_id", flat=True):
+            run = AnalysisRun.objects.filter(run_id=run_id).first()
+            if run is None or not _user_can_manage_run(request, run):
+                continue
+
+            upload_name = str(run.file.name or "")
+            debug_package_name = str(run.debug_package_file.name or "")
+            with transaction.atomic():
+                run = AnalysisRun.objects.select_for_update().filter(run_id=run_id).first()
+                if run is None or run.status != AnalysisRun.Status.CREATED:
+                    continue
+                run.status = AnalysisRun.Status.CANCELED
+                run.error_message = "Canceled and deleted by operator"
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+                run.delete()
+                _delete_run_files_after_commit(upload_name=upload_name, debug_package_name=debug_package_name)
+                deleted_count += 1
+
+        messages.success(request, f"Удалено ожидающих запусков: {deleted_count}")
+        upload_url = redirect("analysis-upload").url
+        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+        if queue_page:
+            return redirect(f"{upload_url}?queue_page={queue_page}")
+        return redirect(upload_url)
+
+
 
 def _user_can_manage_run(request, run: AnalysisRun) -> bool:
     if request.user.is_authenticated:
@@ -1562,6 +1600,7 @@ class AnalysisQueueStatusView(View):
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
+                "elapsed": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
                 "debug_zip_url": _debug_zip_url(run) if debug_mode else "",
                 "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
@@ -1569,7 +1608,9 @@ class AnalysisQueueStatusView(View):
                 "progress_total": progress_payload["progress_total"],
                 "progress_done": progress_payload["progress_done"],
                 "progress_percent": progress_payload["progress_percent"],
+                "percent": progress_payload["progress_percent"],
                 "progress_label": progress_payload["progress_label"],
+                "updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else run.updated_at.isoformat(),
             }
             if debug_mode:
                 payload["debug_pipeline"] = _debug_pipeline_payload(run)

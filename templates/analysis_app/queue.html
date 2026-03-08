@@ -20,9 +20,9 @@
           <td>{{ run.run_id|stringformat:"s"|slice:":8" }}…</td>
           <td>{{ run.original_filename|default:run.file.name }}</td>
           <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
-          <td class="queue-status"><span class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
-          <td class="queue-progress">{% if run.status == 'running' or run.status == 'queued' %}<div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div><div class="progress-text">{{ run.progress_label }}</div>{% else %}—{% endif %}</td>
-          <td class="queue-elapsed">{{ run.elapsed_display }}</td>
+          <td class="queue-status"><span data-role="status-badge" class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
+          <td class="queue-progress">{% if run.status == 'running' or run.status == 'queued' %}<div class="progress-wrap"><div data-role="progress-bar" class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div><div data-role="progress-text" class="progress-text">{{ run.progress_label }}</div>{% else %}—{% endif %}</td>
+          <td class="queue-elapsed"><span data-role="elapsed">{{ run.elapsed_display }}</span></td>
           {% if debug_mode %}
           <td>{{ run.debug_pipeline_payload.slicing_method|default:"—" }}</td>
           <td>{% if run.debug_pipeline_payload.portal_enabled %}on{% else %}off{% endif %}</td>

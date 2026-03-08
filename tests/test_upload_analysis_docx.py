@@ -256,6 +256,7 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertNotContains(response, "Сбросить очередь")
         self.assertContains(response, "Удалить")
+        self.assertContains(response, "Удалить все")
 
 
     def test_queue_status_elapsed_and_results_url(self):
@@ -664,6 +665,7 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertContains(response, "Запустить все")
         self.assertContains(response, "Запустить в очередь")
         self.assertContains(response, "Удалить")
+        self.assertContains(response, "Удалить все")
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
     def test_start_all_enqueues_only_current_user_pending_runs(self):
@@ -703,6 +705,88 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(my_run_2.status, AnalysisRun.Status.QUEUED)
         self.assertEqual(foreign_run.status, AnalysisRun.Status.CREATED)
         self.assertEqual(delay_mock.call_count, 2)
+
+
+
+    def test_pending_delete_all_deletes_only_current_user_pending_runs(self):
+        User = get_user_model()
+        owner = User.objects.create_user(username="deleteall-owner", password="test-pass")
+        other = User.objects.create_user(username="deleteall-other", password="test-pass")
+
+        my_created = AnalysisRun.objects.create(
+            original_filename="owner-created.docx",
+            file="uploads/owner-created.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+        my_queued = AnalysisRun.objects.create(
+            original_filename="owner-queued.docx",
+            file="uploads/owner-queued.docx",
+            status=AnalysisRun.Status.QUEUED,
+            uploaded_by=owner,
+        )
+        foreign_created = AnalysisRun.objects.create(
+            original_filename="other-created.docx",
+            file="uploads/other-created.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=other,
+        )
+
+        self.client.force_login(owner)
+        response = self.client.post(reverse("analysis-pending-delete-all"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=my_created.run_id).exists())
+        self.assertTrue(AnalysisRun.objects.filter(run_id=my_queued.run_id).exists())
+        self.assertTrue(AnalysisRun.objects.filter(run_id=foreign_created.run_id).exists())
+
+    def test_pending_delete_all_deletes_only_current_session_pending_runs(self):
+        owner_client = self.client_class()
+        owner_session = owner_client.session
+        owner_session.create()
+        owner_key = owner_session.session_key or ""
+
+        outsider_client = self.client_class()
+        outsider_session = outsider_client.session
+        outsider_session.create()
+        outsider_key = outsider_session.session_key or ""
+
+        my_created = AnalysisRun.objects.create(
+            original_filename="session-created.docx",
+            file="uploads/session-created.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=owner_key,
+        )
+        foreign_created = AnalysisRun.objects.create(
+            original_filename="session-foreign.docx",
+            file="uploads/session-foreign.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=outsider_key,
+        )
+
+        response = owner_client.post(reverse("analysis-pending-delete-all"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=my_created.run_id).exists())
+        self.assertTrue(AnalysisRun.objects.filter(run_id=foreign_created.run_id).exists())
+
+    def test_queue_page_rows_include_stable_refresh_hooks(self):
+        AnalysisRun.objects.create(
+            original_filename="queue-hooks.docx",
+            file="uploads/queue-hooks.docx",
+            status=AnalysisRun.Status.RUNNING,
+            progress_total=10,
+            progress_done=5,
+        )
+
+        response = self.client.get(reverse("analysis-queue"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-run-id="')
+        self.assertContains(response, 'data-role="status-badge"')
+        self.assertContains(response, 'data-role="progress-text"')
+        self.assertContains(response, 'data-role="progress-bar"')
+        self.assertContains(response, 'data-role="elapsed"')
 
     def test_delete_endpoint_removes_pending_created_run(self):
         session = self.client.session
