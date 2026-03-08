@@ -25,11 +25,18 @@
 <section class="card">
   <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
     <h2 class="section-title" style="margin-bottom:0;">Ожидают запуска</h2>
-    <form method="post" action="{% url 'analysis-pending-start-all' %}" style="margin:0;">
-      {% csrf_token %}
-      <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
-      <button type="submit" class="primary">Запустить все</button>
-    </form>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <form method="post" action="{% url 'analysis-pending-start-all' %}" style="margin:0;">
+        {% csrf_token %}
+        <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+        <button type="submit" class="primary">Запустить все</button>
+      </form>
+      <form method="post" action="{% url 'analysis-pending-delete-all' %}" style="margin:0;">
+        {% csrf_token %}
+        <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+        <button type="submit" onclick="return confirm('Удалить все ожидающие запуска анализы?');">Удалить все</button>
+      </form>
+    </div>
   </div>
   {% for item in pending_selection_forms %}
     <div style="display:flex; justify-content:space-between; gap:8px; border-top:1px solid #e2e8f0; padding:10px 0;">
@@ -66,8 +73,8 @@
             <tr data-run-id="{{ run.run_id }}">
               <td>{{ run.original_filename|default:run.file.name }}</td>
               <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
-              <td class="queue-status"><span class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
-              <td class="queue-elapsed">{{ run.elapsed_display }}</td>
+              <td class="queue-status"><span data-role="status-badge" class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
+              <td class="queue-elapsed"><span data-role="elapsed">{{ run.elapsed_display }}</span></td>
               <td class="queue-action actions-col">
                 <div class="actions-inline">
                   {% if run.results_url %}<a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
@@ -77,8 +84,8 @@
                   </form>
                 </div>
                 {% if run.status == 'running' or run.status == 'queued' %}
-                <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
-                <div class="progress-text">{{ run.progress_label }}</div>
+                <div class="progress-wrap"><div data-role="progress-bar" class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
+                <div data-role="progress-text" class="progress-text">{{ run.progress_label }}</div>
                 {% endif %}
                 {% if run.status == 'failed' %}<div class="muted">{{ run.error_message|default:"—" }}</div>{% endif %}
               </td>
@@ -108,22 +115,70 @@
   if (puSelect) { puSelect.addEventListener("change", updateTemplatePreviewLink); updateTemplatePreviewLink(); }
   if (!statusUrl || !body) return;
 
-  const escapeHtml = (value) => { const d = document.createElement("div"); d.textContent = value || ""; return d.innerHTML; };
-  const poll = async () => {
-    try {
-      const response = await fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } });
-      if (!response.ok) return;
-      const payload = await response.json();
-      const byId = new Map((payload.runs || []).map((run) => [run.run_id, run]));
-      body.querySelectorAll("tr[data-run-id]").forEach((row) => {
-        const run = byId.get(row.dataset.runId);
-        if (!run) return;
-        row.querySelector(".queue-status").innerHTML = `<span class="status-pill status-${run.status}">${escapeHtml(String(run.status || '').toUpperCase())}</span>`;
-        row.querySelector(".queue-elapsed").textContent = run.elapsed_display || "—";
-      });
-    } catch (_) {}
+  const isActiveStatus = (status) => status === "running" || status === "queued";
+  const updateRow = (row, run) => {
+    const status = String(run.status || "").toLowerCase();
+    const badge = row.querySelector('[data-role="status-badge"]');
+    if (badge) {
+      badge.textContent = status.toUpperCase();
+      badge.className = `status-pill status-${status}`;
+    }
+    const elapsed = row.querySelector('[data-role="elapsed"]');
+    if (elapsed) elapsed.textContent = run.elapsed_display || "—";
+
+    const actionCell = row.querySelector('.queue-action');
+    if (!actionCell) return;
+    let progressText = row.querySelector('[data-role="progress-text"]');
+    let progressBar = row.querySelector('[data-role="progress-bar"]');
+
+    if (isActiveStatus(status)) {
+      if (!progressText || !progressBar) {
+        const wrap = document.createElement('div');
+        wrap.className = 'progress-wrap';
+        progressBar = document.createElement('div');
+        progressBar.className = 'progress-bar';
+        progressBar.setAttribute('data-role', 'progress-bar');
+        wrap.appendChild(progressBar);
+        progressText = document.createElement('div');
+        progressText.className = 'progress-text';
+        progressText.setAttribute('data-role', 'progress-text');
+        actionCell.appendChild(wrap);
+        actionCell.appendChild(progressText);
+      }
+      progressBar.style.width = `${Number(run.progress_percent || 0)}%`;
+      progressText.textContent = String(run.progress_label || '—');
+    } else {
+      if (progressText) progressText.remove();
+      if (progressBar && progressBar.parentElement) progressBar.parentElement.remove();
+    }
   };
-  setInterval(poll, 5000);
+
+  const poll = async () => {
+    const response = await fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    const byId = new Map((payload.runs || []).map((run) => [run.run_id, run]));
+    body.querySelectorAll("tr[data-run-id]").forEach((row) => {
+      const run = byId.get(row.dataset.runId);
+      if (!run) {
+        row.remove();
+        return;
+      }
+      updateRow(row, run);
+    });
+    return (payload.runs || []).some((run) => isActiveStatus(String(run.status || '').toLowerCase()));
+  };
+
+  const tick = async () => {
+    try {
+      const active = await poll();
+      setTimeout(tick, active ? 3000 : 10000);
+    } catch (_) {
+      setTimeout(tick, 10000);
+    }
+  };
+
+  setTimeout(tick, 3000);
 })();
 </script>
 <script src="{% static 'analysis_app/js/upload_dropzone.js' %}"></script>

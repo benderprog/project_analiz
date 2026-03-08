@@ -6,41 +6,47 @@
   if (!statusUrl) return;
 
   const pollIntervalMs = Number(tableBody.dataset.pollIntervalMs || 3000);
-  const idleIntervalMs = Number(tableBody.dataset.idleIntervalMs || 12000);
+  const idleIntervalMs = Number(tableBody.dataset.idleIntervalMs || 10000);
   const warningNode = document.getElementById('queue-refresh-warning');
 
   const isActiveStatus = (status) => status === 'running' || status === 'queued';
 
-  const renderStatus = (run) => {
-    const normalizedStatus = String(run.status || '').toLowerCase();
-    return `<span class="status-pill status-${normalizedStatus}">${normalizedStatus.toUpperCase()}</span>`;
-  };
-
-  const renderProgress = (run) => {
-    if (!isActiveStatus(run.status)) {
-      return '—';
-    }
-    return `
-      <div class="progress-wrap"><div class="progress-bar" style="width: ${Number(run.progress_percent || 0)}%"></div></div>
-      <div class="progress-text">${String(run.progress_label || '—')}</div>
-    `;
-  };
-
   const updateRow = (row, run) => {
-    const statusCell = row.querySelector('.queue-status');
-    const elapsedCell = row.querySelector('.queue-elapsed');
-    const progressCell = row.querySelector('.queue-progress');
+    const normalizedStatus = String(run.status || '').toLowerCase();
+    const badge = row.querySelector('[data-role="status-badge"]');
+    if (badge) {
+      badge.textContent = normalizedStatus.toUpperCase();
+      badge.className = `status-pill status-${normalizedStatus}`;
+    }
 
-    if (statusCell) statusCell.innerHTML = renderStatus(run);
-    if (elapsedCell) elapsedCell.textContent = run.elapsed_display || '—';
-    if (progressCell) progressCell.innerHTML = renderProgress(run);
+    const elapsed = row.querySelector('[data-role="elapsed"]');
+    if (elapsed) {
+      elapsed.textContent = run.elapsed_display || '—';
+    }
+
+    const progressCell = row.querySelector('.queue-progress');
+    if (!progressCell) return;
+
+    let progressText = row.querySelector('[data-role="progress-text"]');
+    let progressBar = row.querySelector('[data-role="progress-bar"]');
+
+    if (isActiveStatus(normalizedStatus)) {
+      if (!progressText || !progressBar) {
+        progressCell.innerHTML = '<div class="progress-wrap"><div data-role="progress-bar" class="progress-bar"></div></div><div data-role="progress-text" class="progress-text"></div>';
+        progressText = row.querySelector('[data-role="progress-text"]');
+        progressBar = row.querySelector('[data-role="progress-bar"]');
+      }
+      progressBar.style.width = `${Number(run.progress_percent || 0)}%`;
+      progressText.textContent = String(run.progress_label || '—');
+    } else {
+      progressCell.textContent = '—';
+    }
   };
 
   const hasActiveFromDom = () => Array.from(tableBody.querySelectorAll('tr[data-run-id]')).some((row) => {
-    const statusPill = row.querySelector('.queue-status .status-pill');
-    if (!statusPill) return false;
-    const classes = Array.from(statusPill.classList);
-    return classes.includes('status-running') || classes.includes('status-queued');
+    const badge = row.querySelector('[data-role="status-badge"]');
+    if (!badge) return false;
+    return badge.classList.contains('status-running') || badge.classList.contains('status-queued');
   });
 
   const setWarning = (show) => {
@@ -55,15 +61,16 @@
         credentials: 'same-origin',
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const payload = await response.json();
       const byRunId = new Map((payload.runs || []).map((run) => [run.run_id, run]));
       tableBody.querySelectorAll('tr[data-run-id]').forEach((row) => {
         const run = byRunId.get(row.dataset.runId);
-        if (!run) return;
+        if (!run) {
+          row.remove();
+          return;
+        }
         updateRow(row, run);
       });
       setWarning(false);
@@ -76,8 +83,7 @@
 
   const tick = async () => {
     const hasActive = await poll();
-    const timeout = hasActive ? pollIntervalMs : idleIntervalMs;
-    window.setTimeout(tick, timeout);
+    window.setTimeout(tick, hasActive ? pollIntervalMs : idleIntervalMs);
   };
 
   window.setTimeout(tick, hasActiveFromDom() ? pollIntervalMs : idleIntervalMs);
