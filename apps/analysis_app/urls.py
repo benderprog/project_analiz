@@ -8,6 +8,7 @@ from apps.analysis_app.views import (
     AnalysisQueueStatusView,
     AnalysisQueueView,
     AnalysisStatusView,
+    PendingRunsStartAllView,
     PendingRunCancelView,
     AnalysisRunDeleteView,
     TemplatePreviewView,
@@ -27,6 +28,7 @@ urlpatterns = [
     path("analysis/templates/<uuid:template_id>/preview/", TemplatePreviewView.as_view(), name="analysis-template-preview"),
     path("analysis/pu/<str:pu_id>/template/preview/", TemplatePreviewView.as_view(), name="analysis-template-preview-by-pu"),
     path("run/<uuid:run_id>/cancel/", PendingRunCancelView.as_view(), name="analysis-run-cancel"),
+    path("analysis/pending/start_all/", PendingRunsStartAllView.as_view(), name="analysis-pending-start-all"),
     path("analysis/<uuid:run_id>/delete/", AnalysisRunDeleteView.as_view(), name="analysis-run-delete"),
     path("ui/mode/", SetUiModeView.as_view(), name="analysis-ui-mode"),
 ]

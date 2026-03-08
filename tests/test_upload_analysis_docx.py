@@ -632,6 +632,95 @@ class UploadAnalysisDocxTests(TestCase):
             run.refresh_from_db()
             self.assertEqual(run.status, status)
 
+
+    def test_upload_page_layout_moves_pu_under_dropzone_and_hides_parameters_block(self):
+        response = self.client.get(reverse("analysis-upload"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "ПУ по умолчанию")
+        self.assertContains(response, "Применяется к новым файлам; для каждого ожидающего можно изменить отдельно.")
+        self.assertNotContains(response, "Параметры")
+
+    def test_pending_section_has_start_all_and_delete_buttons(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        AnalysisRun.objects.create(
+            original_filename="pending-a.docx",
+            file="uploads/pending-a.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+        AnalysisRun.objects.create(
+            original_filename="pending-b.docx",
+            file="uploads/pending-b.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+
+        response = self.client.get(reverse("analysis-upload"))
+
+        self.assertContains(response, "Запустить все")
+        self.assertContains(response, "Запустить в очередь")
+        self.assertContains(response, "Удалить")
+
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_start_all_enqueues_only_current_user_pending_runs(self):
+        User = get_user_model()
+        owner = User.objects.create_user(username="startall-owner", password="test-pass")
+        other = User.objects.create_user(username="startall-other", password="test-pass")
+
+        my_run_1 = AnalysisRun.objects.create(
+            original_filename="owner-1.docx",
+            file="uploads/owner-1.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+        my_run_2 = AnalysisRun.objects.create(
+            original_filename="owner-2.docx",
+            file="uploads/owner-2.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+        foreign_run = AnalysisRun.objects.create(
+            original_filename="other-1.docx",
+            file="uploads/other-1.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=other,
+        )
+
+        self.client.force_login(owner)
+        with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+            delay_mock.side_effect = [type("Task", (), {"id": "task-startall-1"})(), type("Task", (), {"id": "task-startall-2"})()]
+            response = self.client.post(reverse("analysis-pending-start-all"))
+
+        self.assertEqual(response.status_code, 302)
+        my_run_1.refresh_from_db()
+        my_run_2.refresh_from_db()
+        foreign_run.refresh_from_db()
+        self.assertEqual(my_run_1.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(my_run_2.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(foreign_run.status, AnalysisRun.Status.CREATED)
+        self.assertEqual(delay_mock.call_count, 2)
+
+    def test_delete_endpoint_removes_pending_created_run(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        run = AnalysisRun.objects.create(
+            original_filename="pending-delete.docx",
+            file="uploads/pending-delete.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+
+        response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
+
     def _make_docx_bytes(self) -> bytes:
         document = Document()
         document.add_paragraph("Время 08:40 02.02.2026 без имен.")
