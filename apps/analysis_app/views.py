@@ -10,7 +10,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.files.storage import default_storage
 from django.core.paginator import EmptyPage, Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.db import transaction
@@ -45,7 +44,7 @@ from apps.analysis_app.services import (
     match_event,
 )
 from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
-from apps.analysis_app.ui_mode import UI_MODE_USER, get_ui_mode, set_ui_mode
+from apps.analysis_app.ui_mode import is_admin_ui
 from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
@@ -1183,7 +1182,7 @@ class UploadView(View):
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
             run.results_url = _results_url(run)
-            ui_debug_enabled = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
+            ui_debug_enabled = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
             run.debug_zip_url = _debug_zip_url(run) if ui_debug_enabled else ""
             progress_payload = _progress_payload(run)
             run.progress_total = progress_payload["progress_total"]
@@ -1225,7 +1224,7 @@ class UploadView(View):
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
-            "debug_mode": get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled(),
+            "debug_mode": is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled(),
             "template_preview_by_pu": preview_by_pu,
             "template_preview_by_pu_json": json.dumps(preview_by_pu),
         }
@@ -1568,7 +1567,7 @@ class AnalysisQueueView(UploadView):
 
 class AnalysisQueueStatusView(View):
     def get(self, request):
-        debug_mode = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
+        debug_mode = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
         runs = list(UploadView._queue_queryset(request)[:10])
         payload_runs = []
         for run in runs:
@@ -1774,19 +1773,6 @@ def _is_staff_owner_or_session_user(*, request, run: AnalysisRun) -> bool:
     return run.created_session_key == UploadView._ensure_session_key(request)
 
 
-def _redirect_back_or_upload(request):
-    referer = request.META.get("HTTP_REFERER", "")
-    if referer and url_has_allowed_host_and_scheme(referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
-        return redirect(referer)
-    return redirect("analysis-upload")
-
-
-class SetUiModeView(View):
-    def post(self, request):
-        set_ui_mode(request, request.POST.get("mode", UI_MODE_USER))
-        return _redirect_back_or_upload(request)
-
-
 class TemplatePreviewView(LoginRequiredMixin, UserPassesTestMixin, View):
     template_name = "analysis_app/template_preview.html"
 
@@ -1860,7 +1846,7 @@ class AnalysisDetailView(View):
         pu_label = GENERAL_SUMMARY_PU_LABEL
         if selected_pu:
             pu_label = str(selected_pu.full_name or selected_pu.short_name or pu_label)
-        ui_debug_enabled = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
+        ui_debug_enabled = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
         return render(
             request,
             self.template_name,

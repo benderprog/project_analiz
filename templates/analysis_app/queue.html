@@ -42,7 +42,7 @@
     </table>
   </div>
   {% else %}<p>Запусков пока нет.</p>{% endif %}
-  {% if ui_mode == "admin" %}<p id="queue-refresh-warning" class="muted" hidden>обновление недоступно</p>{% endif %}
+  {% if request.user.is_staff or request.user.is_superuser %}<p id="queue-refresh-warning" class="muted" hidden>обновление недоступно</p>{% endif %}
 </section>
 <script src="{% static 'analysis_app/js/queue_autorefresh.js' %}"></script>
 {% endblock %}

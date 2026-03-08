@@ -5,42 +5,19 @@ import subprocess
 from functools import lru_cache
 
 from django.conf import settings
-from django.http import HttpRequest
 from django.db import DatabaseError
+from django.http import HttpRequest
 
 from apps.analysis_app.models import FeatureFlags, PortalDbConnectionSettings
 
-UI_MODE_SESSION_KEY = "ui_mode"
-UI_MODE_USER = "user"
-UI_MODE_ADMIN = "admin"
-UI_MODE_CHOICES = {UI_MODE_USER, UI_MODE_ADMIN}
 
-
-def get_ui_mode(request: HttpRequest) -> str:
-    """Return effective UI mode with staff-only enforcement."""
-    mode = str(request.session.get(UI_MODE_SESSION_KEY, UI_MODE_USER)).strip().lower()
-    if mode not in UI_MODE_CHOICES:
-        mode = UI_MODE_USER
-    if not (request.user.is_authenticated and request.user.is_staff):
-        request.session[UI_MODE_SESSION_KEY] = UI_MODE_USER
-        return UI_MODE_USER
-    request.session[UI_MODE_SESSION_KEY] = mode
-    return mode
-
-
-def set_ui_mode(request: HttpRequest, mode: str) -> str:
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode not in UI_MODE_CHOICES:
-        normalized_mode = UI_MODE_USER
-    if not (request.user.is_authenticated and request.user.is_staff):
-        normalized_mode = UI_MODE_USER
-    request.session[UI_MODE_SESSION_KEY] = normalized_mode
-    return normalized_mode
+def is_admin_ui(request: HttpRequest) -> bool:
+    user = getattr(request, "user", None)
+    return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
 
 
 def ui_mode_context(request: HttpRequest) -> dict[str, object]:
-    ui_mode = get_ui_mode(request)
-    is_ui_admin = ui_mode == UI_MODE_ADMIN and bool(request.user.is_authenticated and request.user.is_staff)
+    is_ui_admin = is_admin_ui(request)
 
     debug_mode = False
     portal_mode = _portal_mode_label()
@@ -53,7 +30,6 @@ def ui_mode_context(request: HttpRequest) -> dict[str, object]:
         pass
 
     return {
-        "ui_mode": ui_mode,
         "is_ui_admin": is_ui_admin,
         "status_ui_label": "Admin" if is_ui_admin else "User",
         "status_portal_label": portal_mode,
