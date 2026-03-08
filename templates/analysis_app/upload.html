@@ -2,29 +2,57 @@
 {% load static %}
 
 {% block content %}
-<div class="two-col-grid">
-  <section class="card">
-    <h2 class="section-title">Параметры</h2>
-    <form method="post" enctype="multipart/form-data" id="upload-form">
-      {% csrf_token %}
-      <p>{{ upload_form.selected_pu_id.label_tag }} {{ upload_form.selected_pu_id }}</p>
-      <p class="muted">По умолчанию: «Общая сводка».</p>
-      <p><a id="template-preview-link" href="#" target="_blank" rel="noopener" style="display:none;">Открыть шаблон</a></p>
-  </section>
-
-  <section class="card">
-    <h2 class="section-title">Загрузка</h2>
+<section class="card">
+  <h2 class="section-title">Загрузка</h2>
+  <form method="post" enctype="multipart/form-data" id="upload-form">
+    {% csrf_token %}
     <div class="drop-zone">
       <label for="id_file"><strong>Перетащите файл сюда или выберите вручную</strong></label>
       {{ upload_form.file }}
     </div>
-    <p style="margin-top:12px;"><button type="submit" class="primary" form="upload-form">Загрузить и подготовить</button></p>
+
+    <div style="margin-top:12px;">
+      <p><strong>ПУ по умолчанию:</strong> {{ upload_form.selected_pu_id }}</p>
+      <p class="muted">Применяется к новым файлам; для каждого ожидающего можно изменить отдельно.</p>
+      <p><a id="template-preview-link" href="#" target="_blank" rel="noopener" style="display:none;">Открыть шаблон</a></p>
+    </div>
+
+    <p style="margin-top:12px;"><button type="submit" class="primary">Загрузить и подготовить</button></p>
+  </form>
+</section>
+
+{% if pending_selection_forms %}
+<section class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+    <h2 class="section-title" style="margin-bottom:0;">Ожидают запуска</h2>
+    <form method="post" action="{% url 'analysis-pending-start-all' %}" style="margin:0;">
+      {% csrf_token %}
+      <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+      <button type="submit" class="primary">Запустить все</button>
     </form>
-  </section>
-</div>
+  </div>
+  {% for item in pending_selection_forms %}
+    <div style="display:flex; justify-content:space-between; gap:8px; border-top:1px solid #e2e8f0; padding:10px 0;">
+      <div>
+        <strong>{{ item.run.original_filename|default:item.run.file.name }}</strong>
+        <div class="muted">Стадия: {{ item.run.debug_pipeline_payload.stage_line|default:"Ожидает параметров" }}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <form method="post" id="enqueue-form-{{ item.run.run_id }}" style="margin:0;">{% csrf_token %}{{ item.form.upload_id }}{{ item.form.selected_pu_id }}</form>
+        <button type="submit" class="primary" form="enqueue-form-{{ item.run.run_id }}">Запустить в очередь</button>
+        <form method="post" action="{% url 'analysis-run-delete' item.run.run_id %}" style="margin:0;">
+          {% csrf_token %}
+          <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+          <button type="submit" onclick="return confirm('Удалить этот ожидающий запуск?');">Удалить</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+</section>
+{% endif %}
 
 <section class="card">
-  <h2 class="section-title">Последние 5 запусков</h2>
+  <h2 class="section-title">Очередь/Последние запуски</h2>
   {% if queue_page_obj.object_list %}
     <div class="table-wrap">
       <table>
@@ -61,24 +89,6 @@
     </div>
   {% else %}<p>Запусков пока нет.</p>{% endif %}
 </section>
-
-{% if pending_selection_forms %}
-<section class="card">
-  <h2 class="section-title">Ожидают запуска</h2>
-  {% for item in pending_selection_forms %}
-    <div style="display:flex; justify-content:space-between; gap:8px; border-top:1px solid #e2e8f0; padding:10px 0;">
-      <div>
-        <strong>{{ item.run.original_filename|default:item.run.file.name }}</strong>
-        <div class="muted">Стадия: {{ item.run.debug_pipeline_payload.stage_line|default:"Ожидает параметров" }}</div>
-      </div>
-      <div style="display:flex; align-items:center; gap:8px;">
-        <form method="post" id="enqueue-form-{{ item.run.run_id }}">{% csrf_token %}{{ item.form.upload_id }}{{ item.form.selected_pu_id }}</form>
-        <button type="submit" class="primary" form="enqueue-form-{{ item.run.run_id }}">Запустить в очередь</button>
-      </div>
-    </div>
-  {% endfor %}
-</section>
-{% endif %}
 
 <script>
 (function () {

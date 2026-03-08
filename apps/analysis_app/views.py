@@ -5,6 +5,7 @@ from pathlib import PurePath
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.files.storage import default_storage
 from django.core.paginator import EmptyPage, Paginator
@@ -1419,6 +1420,38 @@ class PendingRunCancelView(View):
         if next_url:
             return redirect(next_url)
 
+        upload_url = redirect("analysis-upload").url
+        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+        if queue_page:
+            return redirect(f"{upload_url}?queue_page={queue_page}")
+        return redirect(upload_url)
+
+
+class PendingRunsStartAllView(UploadView):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        pending_queryset = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED)
+        if request.user.is_authenticated:
+            pending_queryset = pending_queryset.filter(uploaded_by=request.user)
+        else:
+            pending_queryset = pending_queryset.filter(created_session_key=self._ensure_session_key(request))
+
+        started_count = 0
+        for run_id in pending_queryset.values_list("run_id", flat=True):
+            with transaction.atomic():
+                run = AnalysisRun.objects.select_for_update().get(run_id=run_id)
+                if run.status != AnalysisRun.Status.CREATED:
+                    continue
+                if request.user.is_authenticated:
+                    if run.uploaded_by_id != request.user.id:
+                        continue
+                elif run.created_session_key != self._ensure_session_key(request):
+                    continue
+                self._enqueue_run(run, selected_pu_id=str(run.selected_pu_id or ""))
+                started_count += 1
+
+        messages.success(request, f"Запущено в очередь: {started_count}")
         upload_url = redirect("analysis-upload").url
         queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
         if queue_page:
