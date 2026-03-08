@@ -1502,6 +1502,15 @@ class AnalysisRunDeleteView(View):
         return redirect(_build_delete_action_url(request))
 
 
+class AnalysisQueueView(UploadView):
+    template_name = "analysis_app/queue.html"
+
+    def get(self, request):
+        context = self._build_context(request)
+        return render(request, self.template_name, context)
+
+
+
 class AnalysisQueueStatusView(View):
     def get(self, request):
         debug_mode = get_ui_mode(request) == "admin" and FeatureFlags.is_effective_debug_enabled()
