@@ -10,8 +10,14 @@ from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, Analysis
 class UiPagesSmokeTest(TestCase):
     @patch("apps.analysis_app.forms.get_pu_choices", return_value=[])
     def test_upload_and_queue_pages_render(self, _choices_mock):
-        self.assertEqual(self.client.get(reverse("analysis-upload")).status_code, 200)
-        self.assertEqual(self.client.get(reverse("analysis-queue")).status_code, 200)
+        upload_response = self.client.get(reverse("analysis-upload"))
+        queue_response = self.client.get(reverse("analysis-queue"))
+
+        self.assertEqual(upload_response.status_code, 200)
+        self.assertContains(upload_response, "analysis_app/js/upload_dropzone.js")
+
+        self.assertEqual(queue_response.status_code, 200)
+        self.assertContains(queue_response, "analysis_app/js/queue_autorefresh.js")
 
     def test_results_page_renders(self):
         session = self.client.session

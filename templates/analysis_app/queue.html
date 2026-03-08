@@ -1,4 +1,5 @@
 {% extends "analysis_app/base.html" %}
+{% load static %}
 
 {% block content %}
 <section class="card">
@@ -13,7 +14,7 @@
           <th class="actions-col">Actions</th>
         </tr>
       </thead>
-      <tbody id="queue-table-body">
+      <tbody id="queue-table-body" data-status-url="{{ queue_status_url }}" data-poll-interval-ms="3000" data-idle-interval-ms="12000">
         {% for run in queue_page_obj.object_list %}
         <tr data-run-id="{{ run.run_id }}">
           <td>{{ run.run_id|stringformat:"s"|slice:":8" }}…</td>
@@ -40,5 +41,7 @@
     </table>
   </div>
   {% else %}<p>Запусков пока нет.</p>{% endif %}
+  {% if ui_mode == "admin" %}<p id="queue-refresh-warning" class="muted" hidden>обновление недоступно</p>{% endif %}
 </section>
+<script src="{% static 'analysis_app/js/queue_autorefresh.js' %}"></script>
 {% endblock %}
