@@ -20,13 +20,13 @@
 <div class="tab-nav">
   <button class="tab-btn is-active" type="button" data-tab="events">События</button>
   <button class="tab-btn" type="button" data-tab="svodka">Сводка/якоря</button>
-  {% if is_ui_admin %}<button class="tab-btn" type="button" data-tab="debug">Debug</button>{% endif %}
+  {% if request.user.is_staff or request.user.is_superuser %}<button class="tab-btn" type="button" data-tab="debug">Debug</button>{% endif %}
 </div>
 
-<section class="card tab-panel" data-panel="svodka" {% if not is_ui_admin %}hidden{% endif %}>
+<section class="card tab-panel" data-panel="svodka" {% if not request.user.is_staff and not request.user.is_superuser %}hidden{% endif %}>
   {% if slicing_status %}<p><strong>{{ slicing_status.label }}</strong></p>{% endif %}
   {% if slicing_preview %}
-  <details class="slicing-preview" {% if is_ui_admin %}open{% endif %}>
+  <details class="slicing-preview" {% if request.user.is_staff or request.user.is_superuser %}open{% endif %}>
     <summary>Предпросмотр обрезки / якорей</summary>
     {% if slicing_preview.fallback_to_full_report %}
       <div class="slicing-fallback">Fallback: анализ всей сводки</div>
@@ -45,7 +45,7 @@
   {% endif %}
 </section>
 
-{% if is_ui_admin %}
+{% if request.user.is_staff or request.user.is_superuser %}
 <section class="card tab-panel" data-panel="debug" hidden>
   {% if debug_mode and show_debug_zip_link and debug_zip_url %}<p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug.zip</a></p>{% endif %}
   {% if debug_pipeline and debug_pipeline.stage_line %}<p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>{% endif %}

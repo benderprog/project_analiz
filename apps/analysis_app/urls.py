@@ -14,7 +14,6 @@ from apps.analysis_app.views import (
     AnalysisRunDeleteView,
     TemplatePreviewView,
     UploadView,
-    SetUiModeView,
 )
 
 urlpatterns = [
@@ -32,5 +31,4 @@ urlpatterns = [
     path("analysis/pending/start_all/", PendingRunsStartAllView.as_view(), name="analysis-pending-start-all"),
     path("analysis/pending/delete_all/", PendingRunsDeleteAllView.as_view(), name="analysis-pending-delete-all"),
     path("analysis/<uuid:run_id>/delete/", AnalysisRunDeleteView.as_view(), name="analysis-run-delete"),
-    path("ui/mode/", SetUiModeView.as_view(), name="analysis-ui-mode"),
 ]

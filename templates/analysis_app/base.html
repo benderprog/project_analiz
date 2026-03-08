@@ -6,23 +6,13 @@
   <link rel="stylesheet" href="/static/css/styles.css" />
   <link rel="stylesheet" href="/static/analysis_app_ui_operator_light.css" />
 </head>
-<body class="ui-{{ ui_mode|default:'user' }}">
+<body class="{% if request.user.is_authenticated and request.user.is_staff or request.user.is_superuser %}ui-admin{% else %}ui-user{% endif %}">
   <header class="site-header">
     <h1>Портал событий — анализ сводки</h1>
     <nav>
       <a href="/upload/">Загрузка</a>
       <a href="/analysis/queue/">Очередь</a>
       <a href="/admin/">Администрирование</a>
-      {% if request.user.is_authenticated and request.user.is_staff %}
-        <form class="ui-mode-form" method="post" action="{% url 'analysis-ui-mode' %}">
-          {% csrf_token %}
-          <label for="ui-mode-select">Режим:</label>
-          <select id="ui-mode-select" name="mode" onchange="this.form.submit()">
-            <option value="user" {% if ui_mode == 'user' %}selected{% endif %}>Пользователь</option>
-            <option value="admin" {% if ui_mode == 'admin' %}selected{% endif %}>Админ</option>
-          </select>
-        </form>
-      {% endif %}
       <div class="top-status-cluster" aria-label="runtime status">
         <span class="status-chip">UI: {{ status_ui_label }}</span>
         <span class="status-chip">PORTAL: {{ status_portal_label }}</span>
