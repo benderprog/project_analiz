@@ -1327,22 +1327,6 @@ class UploadView(View):
         selected_pu_name = _resolve_selected_pu_name(request, selected_pu_id)
         created_session_key = self._ensure_session_key(request)
 
-        if len(files) == 1:
-            uploaded_file = files[0]
-            run = AnalysisRun.objects.create(
-                uploaded_by=request.user if request.user.is_authenticated else None,
-                created_session_key=created_session_key,
-                file=uploaded_file,
-                original_filename=os.path.basename(uploaded_file.name or ""),
-                selected_pu_id=selected_pu_id,
-                selected_pu_name=selected_pu_name,
-                status=AnalysisRun.Status.CREATED,
-                error_message="",
-            )
-            logger.debug("Upload created analysis run run_id=%s", run.run_id)
-            self._enqueue_run(run, selected_pu_id=selected_pu_id)
-            return redirect("analysis-upload")
-
         selected_run_id = None
         for uploaded_file in files:
             run = AnalysisRun.objects.create(
@@ -1602,8 +1586,10 @@ class AnalysisQueueStatusView(View):
                 "elapsed_display": format_elapsed(elapsed_seconds),
                 "elapsed": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
+                "has_results": bool(_results_url(run)),
                 "debug_zip_url": _debug_zip_url(run) if debug_mode else "",
-                "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
+                "debug_available": bool(_debug_zip_url(run)) if debug_mode else False,
+                "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
                 "position": None,
                 "progress_total": progress_payload["progress_total"],
                 "progress_done": progress_payload["progress_done"],
