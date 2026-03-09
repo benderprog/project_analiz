@@ -34,3 +34,8 @@ class UiPagesSmokeTest(TestCase):
 
         response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<button class="tab-btn is-active" type="button" data-tab="events">События</button>', html=False)
+        self.assertContains(response, '<button class="tab-btn" type="button" data-tab="anchors">Якоря</button>', html=False)
+        self.assertContains(response, '<section class="card tab-panel" data-panel="anchors" hidden>', html=False)
+        self.assertNotContains(response, 'Сводка/якоря')
+        self.assertNotContains(response, '<div class="k">Slicing</div>', html=False)

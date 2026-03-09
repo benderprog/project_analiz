@@ -42,7 +42,10 @@ class UiModeTests(TestCase):
 
         self.assertContains(response, '<body class="ui-admin">', html=False)
         self.assertContains(response, '>Debug<', html=False)
-        self.assertContains(response, '<details class="slicing-preview" open>', html=False)
+        self.assertContains(response, '<button class="tab-btn" type="button" data-tab="anchors">Якоря</button>', html=False)
+        self.assertContains(response, '<section class="card tab-panel" data-panel="anchors" hidden>', html=False)
+        self.assertContains(response, '<details class="slicing-preview">', html=False)
+        self.assertNotContains(response, 'Сводка/якоря')
         self.assertNotContains(response, "Режим:")
 
     def test_non_staff_gets_minimal_layout_without_debug_tools(self):
@@ -58,7 +61,9 @@ class UiModeTests(TestCase):
 
         self.assertContains(response, '<body class="ui-user">', html=False)
         self.assertNotContains(response, "Debug tools")
-        self.assertContains(response, '<section class="card tab-panel" data-panel="svodka" hidden>', html=False)
+        self.assertContains(response, '<section class="card tab-panel" data-panel="anchors" hidden>', html=False)
+        self.assertContains(response, '<button class="tab-btn" type="button" data-tab="anchors">Якоря</button>', html=False)
+        self.assertNotContains(response, 'Сводка/якоря')
         self.assertContains(response, '<details class="slicing-preview"', html=False)
 
     def test_top_status_bar_renders_with_runtime_indicators(self):
