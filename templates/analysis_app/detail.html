@@ -6,27 +6,25 @@
   <p><strong>{{ run.original_filename|default:run.file.name }}</strong> · ПУ: {{ selected_pu_label }} · run_id: {{ run.run_id }}</p>
   <p>
     <span class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span>
-    {% if slicing_status %}<span class="status-pill {% if slicing_status.state == 'ok' %}status-done{% else %}status-failed{% endif %}">{{ slicing_status.label }}</span>{% endif %}
   </p>
 </section>
 
 <div class="summary-grid">
   <div class="metric-card"><div class="k">Events count</div><div class="v">{{ run.paragraphs.count }}</div></div>
   <div class="metric-card"><div class="k">Matched / mismatches</div><div class="v">{{ selected_event.match.matched|yesno:'1,0' }} / {% if selected_event.match.matched %}0{% else %}1{% endif %}</div></div>
-  <div class="metric-card"><div class="k">Slicing</div><div class="v">{{ slicing_status.method|default:'—' }}</div></div>
   <div class="metric-card"><div class="k">Portal mode</div><div class="v">{% if selected_event.portal.event_type %}ON{% else %}OFF{% endif %}</div></div>
 </div>
 
 <div class="tab-nav">
   <button class="tab-btn is-active" type="button" data-tab="events">События</button>
-  <button class="tab-btn" type="button" data-tab="svodka">Сводка/якоря</button>
+  <button class="tab-btn" type="button" data-tab="anchors">Якоря</button>
   {% if request.user.is_staff or request.user.is_superuser %}<button class="tab-btn" type="button" data-tab="debug">Debug</button>{% endif %}
 </div>
 
-<section class="card tab-panel" data-panel="svodka" {% if not request.user.is_staff and not request.user.is_superuser %}hidden{% endif %}>
+<section class="card tab-panel" data-panel="anchors" hidden>
   {% if slicing_status %}<p><strong>{{ slicing_status.label }}</strong></p>{% endif %}
   {% if slicing_preview %}
-  <details class="slicing-preview" {% if request.user.is_staff or request.user.is_superuser %}open{% endif %}>
+  <details class="slicing-preview">
     <summary>Предпросмотр обрезки / якорей</summary>
     {% if slicing_preview.fallback_to_full_report %}
       <div class="slicing-fallback">Fallback: анализ всей сводки</div>
