@@ -37,8 +37,6 @@ def format_run_started_at(dt: datetime | None) -> str:
     if dt is None:
         return "—"
     local_dt = timezone.localtime(dt)
-    if local_dt.date() == timezone.localdate():
-        return local_dt.strftime("%H:%M")
     return local_dt.strftime("%d.%m.%Y %H:%M")
 
 
