@@ -81,6 +81,11 @@
       elapsed.textContent = run.elapsed_display || '—';
     }
 
+    const startedAt = row.querySelector('[data-role="started-at"]');
+    if (startedAt) {
+      startedAt.textContent = run.started_at_display || '—';
+    }
+
     renderActions(row, run);
 
     const progressCell = row.querySelector('.queue-progress');

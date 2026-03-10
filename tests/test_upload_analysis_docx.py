@@ -299,6 +299,8 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertTrue(runs[str(run_done.run_id)]["has_results"])
         self.assertFalse(runs[str(run_failed.run_id)]["has_results"])
         self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
+        self.assertRegex(runs[str(run_running.run_id)]["started_at_display"], r"^\d{2}:\d{2}$")
+
 
     def test_queue_status_progress_payload(self):
         run = AnalysisRun.objects.create(
@@ -344,6 +346,27 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(runs[str(run_running.run_id)]["status"], AnalysisRun.Status.RUNNING)
         self.assertEqual(runs[str(run_queued.run_id)]["status"], AnalysisRun.Status.QUEUED)
 
+
+    def test_upload_and_queue_templates_render_started_at_display(self):
+        now = timezone.now()
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+        AnalysisRun.objects.create(
+            original_filename="started.docx",
+            file="uploads/started.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=now,
+            created_session_key=session_key,
+        )
+
+        upload_response = self.client.get(reverse("analysis-upload"))
+        queue_response = self.client.get(reverse("analysis-queue"))
+
+        self.assertContains(upload_response, "Время запуска")
+        self.assertContains(queue_response, "Время запуска")
+        self.assertRegex(upload_response.content.decode("utf-8"), r">\d{2}:\d{2}<")
+        self.assertRegex(queue_response.content.decode("utf-8"), r">\d{2}:\d{2}<")
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
     def test_pending_block_prefills_selected_pu(self):

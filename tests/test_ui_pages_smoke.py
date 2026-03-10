@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.utils import timezone
 from django.urls import reverse
 
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun
@@ -19,11 +20,32 @@ class UiPagesSmokeTest(TestCase):
         self.assertEqual(queue_response.status_code, 200)
         self.assertContains(queue_response, "analysis_app/js/queue_autorefresh.js")
 
+
+    def test_queue_tables_have_started_at_column(self):
+        session = self.client.session
+        if not session.session_key:
+            session.save()
+        AnalysisRun.objects.create(
+            file=SimpleUploadedFile("queue.docx", b"test"),
+            original_filename="queue.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=timezone.now(),
+            created_session_key=session.session_key,
+        )
+
+        upload_response = self.client.get(reverse("analysis-upload"))
+        queue_response = self.client.get(reverse("analysis-queue"))
+
+        self.assertContains(upload_response, "Время запуска")
+        self.assertContains(queue_response, "Время запуска")
+        self.assertContains(upload_response, 'data-role="started-at"')
+        self.assertContains(queue_response, 'data-role="started-at"')
+
     def test_results_page_renders(self):
         session = self.client.session
         if not session.session_key:
             session.save()
-        run = AnalysisRun.objects.create(
+        AnalysisRun.objects.create(
             file=SimpleUploadedFile("report.docx", b"test"),
             original_filename="report.docx",
             status=AnalysisRun.Status.DONE,
