@@ -33,6 +33,15 @@ def format_dt_dmy_hm(value: datetime | None) -> str:
     return local_dt.strftime("%d-%m-%Y %H:%M")
 
 
+def format_run_started_at(dt: datetime | None) -> str:
+    if dt is None:
+        return "—"
+    local_dt = timezone.localtime(dt)
+    if local_dt.date() == timezone.localdate():
+        return local_dt.strftime("%H:%M")
+    return local_dt.strftime("%d.%m.%Y %H:%M")
+
+
 def to_local_naive(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
