@@ -1,6 +1,6 @@
 import tempfile
 from io import BytesIO
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -301,6 +301,22 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
         self.assertRegex(runs[str(run_running.run_id)]["started_at_display"], r"^\d{2}:\d{2}$")
 
+
+    @override_settings(USE_TZ=True, TIME_ZONE="Europe/Moscow")
+    def test_queue_status_started_at_display_uses_server_local_time(self):
+        run = AnalysisRun.objects.create(
+            original_filename="tz.docx",
+            file="uploads/tz.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=datetime(2026, 2, 1, 20, 15, tzinfo=dt_timezone.utc),
+        )
+
+        with timezone.override("Europe/Moscow"), patch("django.utils.timezone.localdate", return_value=datetime(2026, 2, 2, 0, 0).date()):
+            response = self.client.get(reverse("analysis-queue-status"))
+
+        payload = {item["run_id"]: item for item in response.json()["runs"]}
+        self.assertEqual(payload[str(run.run_id)]["started_at_display"], "01.02.2026 23:15")
+        self.assertNotEqual(payload[str(run.run_id)]["started_at_display"], "20:15")
 
     def test_queue_status_progress_payload(self):
         run = AnalysisRun.objects.create(

@@ -45,7 +45,7 @@ from apps.analysis_app.services import (
 )
 from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
 from apps.analysis_app.ui_mode import is_admin_ui
-from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, to_local_naive
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_run_started_at
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
 
@@ -344,17 +344,10 @@ def _progress_payload(run: AnalysisRun) -> dict[str, int | str | None]:
 
 
 def _queue_started_at_display(run: AnalysisRun) -> str:
-    started_local = to_local_naive(run.started_at)
-    if started_local is not None:
-        now_local = timezone.localtime(timezone.now())
-        if started_local.date() == now_local.date():
-            return started_local.strftime("%H:%M")
-        return started_local.strftime("%d-%m %H:%M")
-
-    queued_local = to_local_naive(run.queued_at)
-    if queued_local is not None:
-        return queued_local.strftime("%H:%M")
-
+    if run.started_at is not None:
+        return format_run_started_at(run.started_at)
+    if run.queued_at is not None:
+        return format_run_started_at(run.queued_at)
     return "—"
 
 def _cached_pu_full_name_map(request) -> dict[str, str]:
@@ -1600,6 +1593,7 @@ class AnalysisQueueStatusView(View):
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
                 "started_at_display": _queue_started_at_display(run),
+                "queued_at_display": format_run_started_at(run.queued_at),
                 "elapsed": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
                 "has_results": bool(_results_url(run)),
@@ -1652,6 +1646,7 @@ class AnalysisStatusView(View):
             "elapsed_seconds": elapsed_seconds,
             "elapsed_display": format_elapsed(elapsed_seconds),
             "started_at_display": _queue_started_at_display(run),
+            "queued_at_display": format_run_started_at(run.queued_at),
             "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
             "worker_ok": worker_ok,
             "uploaded_filename": run.original_filename or _display_filename(run.file.name),
