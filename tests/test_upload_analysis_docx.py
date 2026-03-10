@@ -299,7 +299,7 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertTrue(runs[str(run_done.run_id)]["has_results"])
         self.assertFalse(runs[str(run_failed.run_id)]["has_results"])
         self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
-        self.assertRegex(runs[str(run_running.run_id)]["started_at_display"], r"^\d{2}:\d{2}$")
+        self.assertRegex(runs[str(run_running.run_id)]["started_at_display"], r"^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$")
 
 
     @override_settings(USE_TZ=True, TIME_ZONE="Europe/Moscow")

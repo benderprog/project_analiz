@@ -28,10 +28,10 @@ class DtDisplayFormatTests(SimpleTestCase):
 
 @override_settings(USE_TZ=True, TIME_ZONE="Europe/Moscow")
 class RunStartedAtFormatTests(SimpleTestCase):
-    def test_today_datetime_is_formatted_as_time_only(self):
+    def test_today_datetime_is_formatted_as_date_and_time(self):
         dt = datetime(2026, 2, 2, 8, 5, tzinfo=dt_timezone.utc)
         with timezone.override("Europe/Moscow"), patch("django.utils.timezone.localdate", return_value=date(2026, 2, 2)):
-            self.assertEqual(format_run_started_at(dt), "11:05")
+            self.assertEqual(format_run_started_at(dt), "02.02.2026 11:05")
 
     def test_older_datetime_is_formatted_as_date_and_time(self):
         dt = datetime(2026, 2, 1, 20, 45, tzinfo=dt_timezone.utc)
