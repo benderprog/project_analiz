@@ -1865,6 +1865,8 @@ class AnalysisDetailView(View):
             self.template_name,
             {
                 "run": run,
+                "run_started_at_display": format_run_started_at(run.started_at),
+                "run_finished_at_display": format_run_started_at(run.finished_at),
                 "selected_idx": selected_idx,
                 "selected_event": selected_event,
                 "events_list_url": reverse("analysis-events-list", kwargs={"run_id": str(run.run_id)}),

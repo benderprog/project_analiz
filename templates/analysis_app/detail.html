@@ -4,6 +4,8 @@
 <section class="card">
   <h2 class="section-title">Результаты анализа</h2>
   <p><strong>{{ run.original_filename|default:run.file.name }}</strong> · ПУ: {{ selected_pu_label }} · run_id: {{ run.run_id }}</p>
+  <p>Время запуска: {{ run_started_at_display }}</p>
+  {% if run.finished_at %}<p>Время завершения: {{ run_finished_at_display }}</p>{% endif %}
   <p>
     <span class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span>
   </p>
