@@ -24,8 +24,8 @@
 <section class="card tab-panel" data-panel="anchors" hidden>
   {% if slicing_status %}<p><strong>{{ slicing_status.label }}</strong></p>{% endif %}
   {% if slicing_preview %}
-  <details class="slicing-preview">
-    <summary>Предпросмотр обрезки / якорей</summary>
+  <div class="slicing-preview">
+    <p><strong>Предпросмотр обрезки / якорей</strong></p>
     {% if slicing_preview.fallback_to_full_report %}
       <div class="slicing-fallback">Fallback: анализ всей сводки</div>
       <pre class="segment-text">{{ slicing_preview.fallback_text }}</pre>
@@ -39,7 +39,7 @@
         </div>
       {% endfor %}
     {% endif %}
-  </details>
+  </div>
   {% endif %}
 </section>
 

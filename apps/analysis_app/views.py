@@ -45,7 +45,7 @@ from apps.analysis_app.services import (
 )
 from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
 from apps.analysis_app.ui_mode import is_admin_ui
-from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, to_local_naive
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
 
@@ -341,6 +341,21 @@ def _progress_payload(run: AnalysisRun) -> dict[str, int | str | None]:
         "progress_percent": percent,
         "progress_label": label,
     }
+
+
+def _queue_started_at_display(run: AnalysisRun) -> str:
+    started_local = to_local_naive(run.started_at)
+    if started_local is not None:
+        now_local = timezone.localtime(timezone.now())
+        if started_local.date() == now_local.date():
+            return started_local.strftime("%H:%M")
+        return started_local.strftime("%d-%m %H:%M")
+
+    queued_local = to_local_naive(run.queued_at)
+    if queued_local is not None:
+        return queued_local.strftime("%H:%M")
+
+    return "—"
 
 def _cached_pu_full_name_map(request) -> dict[str, str]:
     cached = getattr(request, "_pu_full_name_map", None)
@@ -1181,6 +1196,7 @@ class UploadView(View):
         for run in page_obj.object_list:
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
+            run.started_at_display = _queue_started_at_display(run)
             run.results_url = _results_url(run)
             ui_debug_enabled = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
             run.debug_zip_url = _debug_zip_url(run) if ui_debug_enabled else ""
@@ -1583,6 +1599,7 @@ class AnalysisQueueStatusView(View):
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
+                "started_at_display": _queue_started_at_display(run),
                 "elapsed": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
                 "has_results": bool(_results_url(run)),
@@ -1634,6 +1651,7 @@ class AnalysisStatusView(View):
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
             "elapsed_seconds": elapsed_seconds,
             "elapsed_display": format_elapsed(elapsed_seconds),
+            "started_at_display": _queue_started_at_display(run),
             "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
             "worker_ok": worker_ok,
             "uploaded_filename": run.original_filename or _display_filename(run.file.name),

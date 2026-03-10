@@ -66,12 +66,13 @@
       <table>
         <thead>
           <tr>
-            <th>Файл</th><th>ПУ</th><th>Статус</th><th>Длительность</th><th class="actions-col">Действия</th>
+            <th>Время запуска</th><th>Файл</th><th>ПУ</th><th>Статус</th><th>Длительность</th><th class="actions-col">Действия</th>
           </tr>
         </thead>
         <tbody id="queue-table-body">
           {% for run in queue_page_obj.object_list|slice:":5" %}
             <tr data-run-id="{{ run.run_id }}">
+              <td class="queue-started-at"><span data-role="started-at">{{ run.started_at_display }}</span></td>
               <td>{{ run.original_filename|default:run.file.name }}</td>
               <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
               <td class="queue-status"><span data-role="status-badge" class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
@@ -162,6 +163,8 @@
     }
     const elapsed = row.querySelector('[data-role="elapsed"]');
     if (elapsed) elapsed.textContent = run.elapsed_display || "—";
+    const startedAt = row.querySelector('[data-role="started-at"]');
+    if (startedAt) startedAt.textContent = run.started_at_display || "—";
 
     const actionCell = row.querySelector('.queue-action');
     if (!actionCell) return;
