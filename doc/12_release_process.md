@@ -16,8 +16,6 @@ make release-image VERSION=1.9
 
 The command builds `docker/Dockerfile.web` and tags the image as:
 
-> Note: Docker build context excludes `dist/`, `*.part`, and `db_dumps/` via `.dockerignore`, so release artifacts are not copied into the runtime image.
-
 - `project_analiz:web-ver-1.9`
 
 ## 2) Prepare PostgreSQL dumps (strictly with postgres:15 tools)
