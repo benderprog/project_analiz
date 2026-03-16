@@ -14,9 +14,6 @@ __pycache__/
 .vscode/
 node_modules/
 artifacts/
-dist/
-*.part
-db_dumps/
 *.tar
 media/
 staticfiles/
