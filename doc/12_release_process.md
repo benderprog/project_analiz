@@ -18,6 +18,8 @@ The command builds `docker/Dockerfile.web` and tags the image as:
 
 - `project_analiz:web-ver-1.9`
 
+`docker build` context excludes release artifacts from `.dockerignore` (including `dist/`, `*.part`, `db_dumps/`), so offline bundles and split archive parts are not copied into runtime image layers.
+
 ## 2) Prepare PostgreSQL dumps (strictly with postgres:15 tools)
 
 Dumps for offline bundle must be `pg_dump -Fc` and produced by `postgres:15` tools.
