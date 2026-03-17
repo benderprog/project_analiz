@@ -28,8 +28,8 @@ def cleanup_run_upload(run: AnalysisRun) -> None:
 
 @app.task(
     bind=True,
-    soft_time_limit=getattr(settings, "ANALYSIS_TASK_SOFT_TIME_LIMIT", 1020),
-    time_limit=getattr(settings, "ANALYSIS_TASK_TIME_LIMIT", 1080),
+    soft_time_limit=getattr(settings, "ANALYSIS_TASK_SOFT_TIME_LIMIT", 1800),
+    time_limit=getattr(settings, "ANALYSIS_TASK_TIME_LIMIT", 1860),
 )
 def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> None:
     with transaction.atomic():
