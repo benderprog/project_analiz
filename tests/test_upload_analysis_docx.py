@@ -854,6 +854,48 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
 
+    def test_delete_endpoint_redirects_back_to_queue_when_next_is_queue_url(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        run = AnalysisRun.objects.create(
+            original_filename="queue-delete.docx",
+            file="uploads/queue-delete.docx",
+            status=AnalysisRun.Status.DONE,
+            created_session_key=session_key,
+        )
+
+        response = self.client.post(
+            reverse("analysis-run-delete", kwargs={"run_id": run.run_id}),
+            {"queue_page": "2", "next": f"{reverse('analysis-queue')}?queue_page=2"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, f"{reverse('analysis-queue')}?queue_page=2")
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
+
+    def test_queue_page_delete_form_has_next_to_stay_on_queue(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        AnalysisRun.objects.create(
+            original_filename="queue-form.docx",
+            file="uploads/queue-form.docx",
+            status=AnalysisRun.Status.DONE,
+            created_session_key=session_key,
+        )
+
+        response = self.client.get(reverse("analysis-queue"), {"queue_page": 2})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            f'name="next" value="{reverse("analysis-queue")}?queue_page=2"',
+            html=False,
+        )
+
     def _make_docx_bytes(self) -> bytes:
         document = Document()
         document.add_paragraph("Время 08:40 02.02.2026 без имен.")
