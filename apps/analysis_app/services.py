@@ -467,15 +467,28 @@ def parse_uploaded_document(
 
     extracted = extract_document_text(file_path, filename=filename)
     min_chars = max(int(getattr(settings, "MIN_EVENT_PARAGRAPH_CHARS", 100) or 0), 0)
-    full_text = normalize_event_paragraph_text(extracted.text)
     events: list[ParsedEvent] = []
-    if len(full_text) >= min_chars:
-        events.append(ParsedEvent(kind="paragraph", joined_text=full_text))
+    blocks = extracted.text_blocks or extracted.lines
+    skipped_short = 0
+
+    for block in blocks:
+        normalized = normalize_event_paragraph_text(block)
+        if len(normalized) < min_chars:
+            skipped_short += 1
+            continue
+        events.append(ParsedEvent(kind="paragraph", joined_text=normalized))
+
+    if not events:
+        full_text = normalize_event_paragraph_text(extracted.text)
+        if len(full_text) >= min_chars:
+            events.append(ParsedEvent(kind="paragraph", joined_text=full_text))
 
     slicing_meta: dict[str, Any] = {
-        "method": "full_document_text",
+        "method": "document_text_blocks",
         "source_format": extracted.source_format,
         "line_count": len(extracted.lines),
+        "block_count": len(blocks),
+        "skipped_short": skipped_short,
     }
     if return_slicing_meta:
         return events, slicing_meta
