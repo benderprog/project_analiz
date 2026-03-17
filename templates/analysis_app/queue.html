@@ -33,7 +33,7 @@
             <div class="actions-inline">
               {% if run.results_url %}<a class="primary" data-role="open-link" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
               {% if debug_mode and run.debug_zip_url %}<a data-role="debug-link" href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug</a>{% endif %}
-              <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form>
+              <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit">Удалить</button></form>
             </div>
             {% if run.status == 'failed' or run.status == 'canceled' %}<div class="muted" data-role="queue-details">{{ run.error_message|default:"—" }}</div>{% endif %}
           </td>
