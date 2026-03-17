@@ -875,6 +875,55 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(response.url, f"{reverse('analysis-queue')}?queue_page=2")
         self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
 
+    def test_analysis_queue_page_shows_pagination_controls(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        for idx in range(21):
+            AnalysisRun.objects.create(
+                original_filename=f"queue-page-{idx}.docx",
+                file=f"uploads/queue-page-{idx}.docx",
+                status=AnalysisRun.Status.DONE,
+                created_session_key=session_key,
+            )
+
+        response = self.client.get(reverse("analysis-queue"), {"queue_page": 2})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Страница 2 из 2")
+        self.assertContains(response, f'href="{reverse("analysis-queue")}?queue_page=1"')
+        self.assertContains(response, f'href="{reverse("analysis-queue")}?queue_page=2"')
+
+    def test_delete_endpoint_redirects_to_existing_queue_page_when_page_became_empty(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        for idx in range(20):
+            AnalysisRun.objects.create(
+                original_filename=f"queue-fill-{idx}.docx",
+                file=f"uploads/queue-fill-{idx}.docx",
+                status=AnalysisRun.Status.DONE,
+                created_session_key=session_key,
+            )
+
+        run_last = AnalysisRun.objects.create(
+            original_filename="queue-last.docx",
+            file="uploads/queue-last.docx",
+            status=AnalysisRun.Status.DONE,
+            created_session_key=session_key,
+        )
+
+        response = self.client.post(
+            reverse("analysis-run-delete", kwargs={"run_id": run_last.run_id}),
+            {"next": f"{reverse('analysis-queue')}?queue_page=2", "queue_page": "2"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, f"{reverse('analysis-queue')}?queue_page=1")
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run_last.run_id).exists())
+
     def test_queue_page_delete_form_has_next_to_stay_on_queue(self):
         session = self.client.session
         session.create()
