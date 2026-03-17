@@ -2,13 +2,13 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>Анализ сводки</title>
+  <title>Анализ событий</title>
   <link rel="stylesheet" href="/static/css/styles.css" />
   <link rel="stylesheet" href="/static/analysis_app_ui_operator_light.css" />
 </head>
 <body class="{% if request.user.is_authenticated and request.user.is_staff or request.user.is_superuser %}ui-admin{% else %}ui-user{% endif %}">
   <header class="site-header">
-    <h1>Портал событий — анализ сводки</h1>
+    <h1>Анализ событий</h1>
     <nav>
       <a href="/upload/">Загрузка</a>
       <a href="/analysis/queue/">Очередь</a>
