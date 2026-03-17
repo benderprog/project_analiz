@@ -9,3 +9,4 @@
 Notes:
 - `portal_db_test` is `postgres:15` restored from `portal_db_test.dump`.
 - Dumps are expected in `pg_dump -Fc` format and restored via `pg_restore` from `postgres:15` image.
+- Runtime web/worker image must contain Django deps + `celery` + Redis Python client (`redis`) to avoid runtime import failures in offline contour.
