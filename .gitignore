@@ -19,3 +19,13 @@ models/
 # Database dump artifacts
 *.dump
 db_dumps/
+
+.env
+.idea/
+becomes
+media/
+
+.env
+.idea/
+becomes
+media/
