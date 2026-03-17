@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from zipfile import ZipFile
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
@@ -12,6 +14,7 @@ from apps.analysis_app.document_parsers import (
     extract_document_text,
 )
 from apps.analysis_app.services import parse_uploaded_document
+from apps.analysis_app.svodka_templates import SegmentAnchors
 
 
 class DocumentParserTests(SimpleTestCase):
@@ -141,6 +144,108 @@ class DocumentParserTests(SimpleTestCase):
 
         self.assertEqual(len(events), 2)
         self.assertEqual([e.joined_text for e in events], ["Первое событие", "Второе событие"])
+
+
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0, TEMPLATE_MIN_SLICE_CHARS=1, SKIP_SEMANTIC_MODEL=True)
+    def test_parse_uploaded_document_applies_docx_template_for_odt_summary(self):
+        from docx import Document
+
+        content_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<office:document-content
+ xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+ xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0'>
+ <office:body>
+  <office:text>
+   <text:p>start anchor</text:p>
+   <text:p>Внутри шаблона ODT</text:p>
+   <text:p>end anchor</text:p>
+  </office:text>
+ </office:body>
+</office:document-content>"""
+
+        template = Document()
+        template.add_paragraph("header")
+        template.add_paragraph("[BEGIN]")
+        template.add_paragraph("body")
+        template.add_paragraph("[END]")
+        template.add_paragraph("footer")
+
+        with NamedTemporaryFile(suffix=".odt") as summary_tmp, NamedTemporaryFile(suffix=".docx") as template_tmp:
+            with ZipFile(summary_tmp.name, "w") as archive:
+                archive.writestr("content.xml", content_xml)
+            template.save(template_tmp.name)
+
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_tmp.name, name="template.docx"),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+                scope="pu",
+                pu_id="1",
+                template_id="fake-template",
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start anchor", end_anchor_text="end anchor", index=0)],
+            ):
+                events, meta = parse_uploaded_document(
+                    summary_tmp.name,
+                    filename="summary.odt",
+                    selected_pu_id="1",
+                    selected_pu_name="ПУ",
+                    return_slicing_meta=True,
+                )
+
+        self.assertEqual([e.joined_text for e in events], ["Внутри шаблона ODT"])
+        self.assertEqual(meta.get("slice_strategy"), "template_anchors")
+        self.assertEqual(meta.get("anchors_matched"), 1)
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0, TEMPLATE_MIN_SLICE_CHARS=1, SKIP_SEMANTIC_MODEL=True)
+    def test_parse_uploaded_document_applies_docx_template_for_docx_summary_regression(self):
+        from docx import Document
+
+        summary = Document()
+        summary.add_paragraph("start anchor")
+        summary.add_paragraph("inside docx")
+        summary.add_paragraph("end anchor")
+
+        template = Document()
+        template.add_paragraph("header")
+        template.add_paragraph("[BEGIN]")
+        template.add_paragraph("body")
+        template.add_paragraph("[END]")
+        template.add_paragraph("footer")
+
+        with NamedTemporaryFile(suffix=".docx") as summary_tmp, NamedTemporaryFile(suffix=".docx") as template_tmp:
+            summary.save(summary_tmp.name)
+            template.save(template_tmp.name)
+
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_tmp.name, name="template.docx"),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+                scope="pu",
+                pu_id="1",
+                template_id="fake-template",
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start anchor", end_anchor_text="end anchor", index=0)],
+            ):
+                events, meta = parse_uploaded_document(
+                    summary_tmp.name,
+                    filename="summary.docx",
+                    selected_pu_id="1",
+                    selected_pu_name="ПУ",
+                    return_slicing_meta=True,
+                )
+
+        self.assertEqual([e.joined_text for e in events], ["inside docx"])
+        self.assertEqual(meta.get("slice_strategy"), "template_anchors")
+        self.assertEqual(meta.get("anchors_matched"), 1)
+
 
     @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0)
     def test_parse_uploaded_document_uses_blocks_for_pdf(self):

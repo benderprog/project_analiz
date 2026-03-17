@@ -1,10 +1,13 @@
+from io import BytesIO
+from zipfile import ZipFile
+
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.test import TestCase, SimpleTestCase
 from django.urls import reverse
 
 from apps.analysis_app.models import SvodkaTemplate
-from apps.analysis_app.template_preview import build_template_preview_context, detect_template_anchors
+from apps.analysis_app.template_preview import build_template_preview_context, detect_template_anchors, extract_template_text
 
 
 class TemplateAnchorDetectorTests(SimpleTestCase):
@@ -85,3 +88,28 @@ class TemplatePreviewContextTests(SimpleTestCase):
         self.assertEqual(context["segments_count"], 1)
         self.assertEqual(context["segments"][0]["start_anchor"], "anchor")
         self.assertEqual(context["segments"][0]["end_anchor"], "end")
+
+
+class TemplateExtractTextTests(SimpleTestCase):
+    def test_extract_template_text_supports_odt(self):
+        content_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<office:document-content
+ xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+ xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0'>
+ <office:body><office:text>
+  <text:p>anchor</text:p>
+  <text:p>[BEGIN]</text:p>
+  <text:p>body</text:p>
+  <text:p>[END]</text:p>
+ </office:text></office:body>
+</office:document-content>"""
+        payload = BytesIO()
+        with ZipFile(payload, "w") as archive:
+            archive.writestr("content.xml", content_xml)
+        payload.seek(0)
+        payload.name = "template.odt"
+
+        text = extract_template_text(payload)
+
+        self.assertIn("[BEGIN]", text)
+        self.assertIn("[END]", text)
