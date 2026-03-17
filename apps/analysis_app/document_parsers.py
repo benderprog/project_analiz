@@ -33,6 +33,7 @@ class ExtractedDocument:
     source_format: str
     text: str
     lines: list[str]
+    text_blocks: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
     is_text_based: bool = True
@@ -85,7 +86,13 @@ def _extract_docx(source: str | Path | BinaryIO) -> ExtractedDocument:
         if value:
             lines.append(value)
 
-    return ExtractedDocument("docx", "\n".join(lines), lines, meta={"byte_size": len(raw), "line_count": len(lines)})
+    return ExtractedDocument(
+        "docx",
+        "\n".join(lines),
+        lines,
+        text_blocks=lines.copy(),
+        meta={"byte_size": len(raw), "line_count": len(lines), "block_count": len(lines)},
+    )
 
 
 def _extract_odt(source: str | Path | BinaryIO) -> ExtractedDocument:
@@ -94,14 +101,21 @@ def _extract_odt(source: str | Path | BinaryIO) -> ExtractedDocument:
         xml_content = archive.read("content.xml")
 
     root = ElementTree.fromstring(xml_content)
-    lines: list[str] = []
-    for tag in ("text:h", "text:p"):
-        for node in root.findall(f".//{tag}", _ODT_NS):
-            value = "".join(node.itertext()).strip()
-            if value:
-                lines.append(value)
+    blocks: list[str] = []
+    for node in root.iter():
+        if node.tag not in {f"{{{_ODT_NS['text']}}}h", f"{{{_ODT_NS['text']}}}p"}:
+            continue
+        value = " ".join(part.strip() for part in node.itertext() if part and part.strip()).strip()
+        if value:
+            blocks.append(value)
 
-    return ExtractedDocument("odt", "\n".join(lines), lines, meta={"byte_size": len(raw), "line_count": len(lines)})
+    return ExtractedDocument(
+        "odt",
+        "\n".join(blocks),
+        blocks.copy(),
+        text_blocks=blocks,
+        meta={"byte_size": len(raw), "line_count": len(blocks), "block_count": len(blocks)},
+    )
 
 
 def _extract_rtf(source: str | Path | BinaryIO) -> ExtractedDocument:
@@ -111,13 +125,20 @@ def _extract_rtf(source: str | Path | BinaryIO) -> ExtractedDocument:
     except UnicodeDecodeError:
         decoded = raw.decode("latin1", errors="ignore")
     text = _rtf_to_text(decoded)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return ExtractedDocument("rtf", "\n".join(lines), lines, meta={"line_count": len(lines)})
+    blocks = [line.strip() for line in text.splitlines() if line.strip()]
+    return ExtractedDocument(
+        "rtf",
+        "\n".join(blocks),
+        blocks.copy(),
+        text_blocks=blocks,
+        meta={"line_count": len(blocks), "block_count": len(blocks)},
+    )
 
 
 def _extract_pdf(source: str | Path | BinaryIO) -> ExtractedDocument:
     raw = _read_bytes(source)
     lines: list[str] = []
+    blocks: list[str] = []
     page_count = None
 
     try:
@@ -128,9 +149,11 @@ def _extract_pdf(source: str | Path | BinaryIO) -> ExtractedDocument:
         for page in reader.pages:
             page_text = (page.extract_text() or "").strip()
             if page_text:
+                blocks.extend(_split_text_blocks(page_text))
                 lines.extend(line.strip() for line in page_text.splitlines() if line.strip())
     except Exception:
         lines = _extract_pdf_text_naive(raw)
+        blocks = lines.copy()
 
     if not lines:
         raise PdfTextLayerMissingError(
@@ -141,9 +164,17 @@ def _extract_pdf(source: str | Path | BinaryIO) -> ExtractedDocument:
         "pdf",
         "\n".join(lines),
         lines,
-        meta={"line_count": len(lines), "page_count": page_count},
+        text_blocks=blocks or lines.copy(),
+        meta={"line_count": len(lines), "block_count": len(blocks or lines), "page_count": page_count},
         is_text_based=True,
     )
+
+
+def _split_text_blocks(text: str) -> list[str]:
+    chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n+", text) if chunk.strip()]
+    if chunks:
+        return chunks
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def _extract_pdf_text_naive(raw: bytes) -> list[str]:
