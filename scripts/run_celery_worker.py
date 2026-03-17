@@ -64,8 +64,8 @@ def main() -> None:
         log_level=os.getenv('WORKER_LOG_LEVEL', 'INFO'),
         queue=os.getenv('WORKER_QUEUE', 'analysis'),
         max_tasks_per_child=_env_int('WORKER_MAX_TASKS_PER_CHILD', 50),
-        soft_time_limit=_env_int('WORKER_SOFT_TIME_LIMIT', 840),
-        time_limit=_env_int('WORKER_TIME_LIMIT', 900),
+        soft_time_limit=_env_int('WORKER_SOFT_TIME_LIMIT', 1020),
+        time_limit=_env_int('WORKER_TIME_LIMIT', 1080),
     )
 
     logging.getLogger(__name__).info('Starting Celery with computed command: %s', ' '.join(command))
