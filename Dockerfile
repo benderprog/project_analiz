@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential curl \
+    && apt-get install -y --no-install-recommends build-essential curl libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 ARG TORCH_CHANNEL=cpu

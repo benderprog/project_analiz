@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, BinaryIO
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
-SUPPORTED_FORMATS = {".docx", ".odt", ".rtf", ".pdf"}
+SUPPORTED_FORMATS = {".doc", ".docx", ".odt", ".rtf", ".pdf"}
 
 _DOCX_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 _ODT_NS = {
@@ -28,6 +31,10 @@ class PdfTextLayerMissingError(DocumentExtractionError):
     pass
 
 
+class DocConversionError(DocumentExtractionError):
+    pass
+
+
 @dataclass(slots=True)
 class ExtractedDocument:
     source_format: str
@@ -44,7 +51,7 @@ def detect_document_format(path: str | Path | None = None, *, filename: str | No
     ext = Path(candidate).suffix.lower()
     if ext not in SUPPORTED_FORMATS:
         raise UnsupportedDocumentFormatError(
-            "Unsupported document format. Supported formats: docx, odt, rtf, pdf."
+            "Unsupported document format. Supported formats: doc, docx, odt, rtf, pdf."
         )
     return ext.lstrip(".")
 
@@ -55,6 +62,8 @@ def extract_document_text(path_or_file: str | Path | BinaryIO, *, filename: str 
     else:
         source_format = detect_document_format(filename=filename)
 
+    if source_format == "doc":
+        return _extract_doc(path_or_file)
     if source_format == "docx":
         return _extract_docx(path_or_file)
     if source_format == "odt":
@@ -93,6 +102,58 @@ def _extract_docx(source: str | Path | BinaryIO) -> ExtractedDocument:
         text_blocks=lines.copy(),
         meta={"byte_size": len(raw), "line_count": len(lines), "block_count": len(lines)},
     )
+
+
+def _extract_doc(source: str | Path | BinaryIO) -> ExtractedDocument:
+    raw = _read_bytes(source)
+    soffice_bin = shutil.which("soffice")
+    if not soffice_bin:
+        raise DocConversionError(
+            "DOC conversion is unavailable: local converter 'soffice' (LibreOffice headless) is not installed."
+        )
+
+    with TemporaryDirectory(prefix="doc-convert-") as temp_dir:
+        temp_path = Path(temp_dir)
+        input_path = temp_path / "input.doc"
+        output_path = temp_path / "input.docx"
+        input_path.write_bytes(raw)
+
+        try:
+            conversion = subprocess.run(
+                [
+                    soffice_bin,
+                    "--headless",
+                    "--convert-to",
+                    "docx",
+                    "--outdir",
+                    str(temp_path),
+                    str(input_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise DocConversionError(f"DOC conversion failed to start local converter: {exc}") from exc
+
+        if conversion.returncode != 0:
+            details = (conversion.stderr or conversion.stdout or "unknown error").strip()
+            raise DocConversionError(f"DOC conversion failed via local headless converter: {details}")
+
+        if not output_path.exists():
+            raise DocConversionError(
+                "DOC conversion failed: converter finished without producing DOCX output."
+            )
+
+        converted = _extract_docx(output_path)
+
+    converted.source_format = "doc"
+    converted.meta = {
+        **converted.meta,
+        "converted_from": "doc",
+        "converter": "soffice-headless",
+    }
+    return converted
 
 
 def _extract_odt(source: str | Path | BinaryIO) -> ExtractedDocument:
