@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 MIN_SLICE_CHARS = int(getattr(settings, "TEMPLATE_MIN_SLICE_CHARS", 300))
 
 
+def _min_slice_chars() -> int:
+    return int(getattr(settings, "TEMPLATE_MIN_SLICE_CHARS", MIN_SLICE_CHARS))
+
+
 @dataclass(frozen=True)
 class DocElement:
     kind: str
@@ -148,6 +152,20 @@ START_MIN_SIM = float(getattr(settings, "TEMPLATE_ANCHOR_START_MIN_SIM", 0.60))
 END_MIN_SIM = float(getattr(settings, "TEMPLATE_ANCHOR_END_MIN_SIM", 0.60))
 WEAK_ANCHOR_MIN_SIM = float(getattr(settings, "TEMPLATE_ANCHOR_WEAK_MIN_SIM", 0.85))
 MAX_ANCHOR_LINE_DISTANCE = int(getattr(settings, "TEMPLATE_ANCHOR_MAX_LINE_DISTANCE", 400))
+MAX_DEBUG_TEXT_CHARS = int(getattr(settings, "ANALYSIS_DEBUG_TEXT_MAX_CHARS", 20000))
+ANCHOR_FALLBACK_FULL_REPORT_MAX_ELEMENTS = int(getattr(settings, "ANALYSIS_ANCHOR_FALLBACK_FULL_REPORT_MAX_ELEMENTS", 1200))
+
+
+def _anchor_fallback_full_report_max_elements() -> int:
+    return int(getattr(settings, "ANALYSIS_ANCHOR_FALLBACK_FULL_REPORT_MAX_ELEMENTS", ANCHOR_FALLBACK_FULL_REPORT_MAX_ELEMENTS))
+
+
+def _truncate_debug_text(text: str, *, limit: int = MAX_DEBUG_TEXT_CHARS) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n...[truncated {len(text)-limit} chars]"
 
 def _normalize_ws(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
@@ -514,6 +532,7 @@ def apply_template_segments(
     base_threshold: float = START_MIN_SIM,
 ) -> tuple[list[DocElement], int, int, list[dict[str, Any]], list[str]]:
     ranges: list[tuple[int, int]] = []
+    min_slice_chars = _min_slice_chars()
     cursor = 0
     failed_segments = 0
     debug_segments: list[dict[str, Any]] = []
@@ -581,10 +600,10 @@ def apply_template_segments(
         if segment.is_open_ended or not segment.end_anchor_text:
             slice_elements = target_elements[start_idx + 1 :]
             slice_text = "\n".join(item.text for item in slice_elements)
-            debug_item["slice_text"] = slice_text
+            debug_item["slice_text"] = _truncate_debug_text(slice_text)
             debug_item["slice_chars"] = len(slice_text.strip())
-            if len(slice_text.strip()) < MIN_SLICE_CHARS:
-                warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{MIN_SLICE_CHARS})")
+            if len(slice_text.strip()) < min_slice_chars:
+                warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{min_slice_chars})")
                 debug_item["invalid_reason"] = "slice_too_small"
                 failed_segments += 1
                 debug_segments.append(debug_item)
@@ -631,10 +650,10 @@ def apply_template_segments(
 
         slice_elements = target_elements[start_idx + 1 : end_idx]
         slice_text = "\n".join(item.text for item in slice_elements)
-        debug_item["slice_text"] = slice_text
+        debug_item["slice_text"] = _truncate_debug_text(slice_text)
         debug_item["slice_chars"] = len(slice_text.strip())
-        if len(slice_text.strip()) < MIN_SLICE_CHARS:
-            warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{MIN_SLICE_CHARS})")
+        if len(slice_text.strip()) < min_slice_chars:
+            warnings.append(f"segment {segment.index}: slice_too_small ({len(slice_text.strip())}<{min_slice_chars})")
             debug_item["invalid_reason"] = "slice_too_small"
             failed_segments += 1
             debug_segments.append(debug_item)
@@ -698,7 +717,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     template = get_template_for_run(selected_pu_id, selected_pu_name)
 
     if not template or not template.file:
-        analyzed_text = "\n".join(item.text for item in target_elements if item.text)
+        analyzed_text = _truncate_debug_text("\n".join(item.text for item in target_elements if item.text))
         return target_elements, SlicingDebugInfo(
             selected_template=template,
             template_segments_total=0,
@@ -717,13 +736,13 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             anchors_missing=False,
             reasons=["no-template"],
             fallback_to_full_report=False,
-            min_slice_chars=MIN_SLICE_CHARS,
+            min_slice_chars=_min_slice_chars(),
             analyzed_text=analyzed_text,
         )
 
     marker_sliced, marker_debug = slice_by_markers(target_elements, template.begin_marker, template.end_marker)
     if marker_debug["markers_found"] and marker_debug["kept_elements"] > 0:
-        analyzed_text = "\n".join(item.text for item in marker_sliced if item.text)
+        analyzed_text = _truncate_debug_text("\n".join(item.text for item in marker_sliced if item.text))
         return marker_sliced, SlicingDebugInfo(
             selected_template=template,
             template_segments_total=0,
@@ -742,7 +761,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             anchors_missing=False,
             reasons=[],
             fallback_to_full_report=False,
-            min_slice_chars=MIN_SLICE_CHARS,
+            min_slice_chars=_min_slice_chars(),
             analyzed_text=analyzed_text,
         )
 
@@ -752,7 +771,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     segments = build_template_segments(template_doc, template.begin_marker, template.end_marker)
     template_threshold = float(template.anchor_match_threshold or START_MIN_SIM)
     if not segments:
-        analyzed_text = "\n".join(item.text for item in target_elements if item.text)
+        analyzed_text = _truncate_debug_text("\n".join(item.text for item in target_elements if item.text))
         return target_elements, SlicingDebugInfo(
             selected_template=template,
             template_segments_total=0,
@@ -771,7 +790,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             anchors_missing=True,
             reasons=["template_has_no_valid_anchors"],
             fallback_to_full_report=True,
-            min_slice_chars=MIN_SLICE_CHARS,
+            min_slice_chars=_min_slice_chars(),
             analyzed_text=analyzed_text,
         )
 
@@ -781,9 +800,18 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         base_threshold=template_threshold,
     )
     anchors_missing = bool(len(segments) > 0 and applied_segments < len(segments))
+    fallback_limited = bool(
+        anchors_missing
+        and sliced_elements
+        and len(target_elements) > _anchor_fallback_full_report_max_elements()
+    )
     if anchors_missing:
-        kept = target_elements
-        fallback_reason = "anchors-missing"
+        if fallback_limited:
+            kept = sliced_elements
+            fallback_reason = "anchors-missing-limited"
+        else:
+            kept = target_elements
+            fallback_reason = "anchors-missing"
     else:
         kept = sliced_elements
         fallback_reason = None
@@ -791,8 +819,10 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
     reasons = list(warnings or [])
     if anchors_missing and not reasons:
         reasons.append("anchors_not_found")
+    if fallback_limited:
+        reasons.append("fallback_limited_to_anchor_slices")
 
-    analyzed_text = "\n".join(item.text for item in kept if item.text)
+    analyzed_text = _truncate_debug_text("\n".join(item.text for item in kept if item.text))
 
     return kept, SlicingDebugInfo(
         selected_template=template,
@@ -813,7 +843,7 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
         anchors_matched=applied_segments,
         anchors_missing=anchors_missing,
         reasons=reasons,
-        fallback_to_full_report=anchors_missing,
-        min_slice_chars=MIN_SLICE_CHARS,
+        fallback_to_full_report=bool(anchors_missing and not fallback_limited),
+        min_slice_chars=_min_slice_chars(),
         analyzed_text=analyzed_text,
     )

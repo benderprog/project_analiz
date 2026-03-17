@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.test import TestCase
 from django.utils import timezone
 
@@ -31,7 +32,7 @@ class AnalysisTasksTests(TestCase):
             queued_at=timezone.now(),
         )
 
-        def pipeline_stub(run_obj, *, selected_pu_id=None, progress_callback=None):
+        def pipeline_stub(run_obj, *, selected_pu_id=None, progress_callback=None, stage_callback=None, debug_enabled=False):
             self.assertIsNotNone(progress_callback)
             progress_callback(0, 10, force=True)
             progress_callback(3, 10, force=True)
@@ -123,3 +124,34 @@ class AnalysisTasksTests(TestCase):
         self.assertEqual(run.debug_pipeline.get("current_stage"), "done")
         stage_names = [item.get("name") for item in run.debug_pipeline.get("stages", [])]
         self.assertEqual(stage_names, ["parsing", "extraction", "matching", "classification"])
+
+    def test_run_docx_analysis_soft_timeout_sets_human_error(self):
+        run = AnalysisRun.objects.create(
+            original_filename="timeout.docx",
+            file="uploads/timeout.docx",
+            status=AnalysisRun.Status.QUEUED,
+            queued_at=timezone.now(),
+        )
+
+        flags = FeatureFlags.get_solo()
+        flags.debug_mode = True
+        flags.save(update_fields=["debug_mode", "updated_at"])
+
+        def pipeline_stub(run_obj, *, selected_pu_id=None, progress_callback=None, stage_callback=None, debug_enabled=False):
+            if stage_callback:
+                stage_callback(current_stage="matching", force=True)
+            raise SoftTimeLimitExceeded()
+
+        with (
+            patch("apps.analysis_app.tasks.run_analysis_pipeline", side_effect=pipeline_stub),
+            patch("apps.analysis_app.tasks.build_debug_zip_bytes", return_value=b"zip"),
+            patch("apps.analysis_app.tasks.prune_debug_packages_for_owner"),
+        ):
+            with self.assertRaises(SoftTimeLimitExceeded):
+                run_docx_analysis.run(str(run.run_id), selected_pu_id=None)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AnalysisRun.Status.FAILED)
+        self.assertIn("Превышен лимит времени", run.error_message)
+        self.assertIn("matching", run.error_message)
+        self.assertEqual(run.debug_pipeline.get("current_stage"), "timeout:matching")
