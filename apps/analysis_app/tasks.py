@@ -126,7 +126,7 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
             run.save(update_fields=["debug_package_file", "debug_package_created_at"])
             prune_debug_packages_for_owner(run)
     except SoftTimeLimitExceeded as exc:
-        logger.warning("DOCX analysis soft time limit exceeded for run %s", run_id, exc_info=True)
+        logger.warning("Document analysis soft time limit exceeded for run %s", run_id, exc_info=True)
         run.status = AnalysisRun.Status.FAILED
         timelimit = getattr(self.request, "timelimit", None)
         hard_limit = timelimit[0] if isinstance(timelimit, (list, tuple)) and len(timelimit) > 0 else None
@@ -152,7 +152,7 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
         cleanup_run_upload(run)
         raise exc
     except Exception as exc:  # noqa: BLE001
-        logger.exception("DOCX analysis failed for run %s", run_id)
+        logger.exception("Document analysis failed for run %s", run_id)
         run.status = AnalysisRun.Status.FAILED
         run.error_message = str(exc)
         run.finished_at = timezone.now()

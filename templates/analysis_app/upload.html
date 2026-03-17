@@ -9,6 +9,16 @@
     <div class="drop-zone">
       <label for="id_file"><strong>Перетащите файл сюда или выберите вручную</strong></label>
       {{ upload_form.file }}
+      {% if upload_form.file.errors %}
+      <div class="muted" style="color:#b91c1c; margin-top:8px;">
+        {% for error in upload_form.file.errors %}<div>{{ error }}</div>{% endfor %}
+      </div>
+      {% endif %}
+      {% if upload_form.non_field_errors %}
+      <div class="muted" style="color:#b91c1c; margin-top:8px;">
+        {% for error in upload_form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+      </div>
+      {% endif %}
     </div>
 
     <div style="margin-top:12px;">

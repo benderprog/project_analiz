@@ -4,13 +4,14 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from zipfile import ZipFile
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from apps.analysis_app.document_parsers import (
     PdfTextLayerMissingError,
     UnsupportedDocumentFormatError,
     extract_document_text,
 )
+from apps.analysis_app.services import parse_uploaded_document
 
 
 class DocumentParserTests(SimpleTestCase):
@@ -78,6 +79,20 @@ class DocumentParserTests(SimpleTestCase):
                 extract_document_text(tmp.name)
 
         self.assertIn("Scanned/image-only PDF is not supported yet", str(error.exception))
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0)
+    def test_parse_uploaded_document_uses_universal_extractor_for_rtf(self):
+        rtf_content = r"{\rtf1\ansi Универсальный extractor\par строка 2}"
+
+        with NamedTemporaryFile(suffix=".rtf", mode="w", encoding="utf-8") as tmp:
+            tmp.write(rtf_content)
+            tmp.flush()
+            events, meta = parse_uploaded_document(tmp.name, filename="sample.rtf", return_slicing_meta=True)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, "paragraph")
+        self.assertIn("Универсальный extractor", events[0].joined_text)
+        self.assertEqual(meta.get("source_format"), "rtf")
 
     def test_unsupported_format_raises(self):
         with NamedTemporaryFile(suffix=".txt") as tmp:

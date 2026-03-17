@@ -46,6 +46,7 @@ from .subdivision_matcher import (
 )
 
 from .svodka_templates import slice_document_for_run
+from .document_parsers import extract_document_text
 
 logger = logging.getLogger(__name__)
 TABLE_ROW_JOINER = " "
@@ -98,8 +99,9 @@ def run_analysis_pipeline(
     from apps.analysis_app.models import AnalysisParagraph, AnalysisResult
 
     parse_started = pytime.monotonic()
-    events, slicing_meta = parse_docx(
+    events, slicing_meta = parse_uploaded_document(
         run.file.path,
+        filename=run.original_filename or getattr(run.file, "name", ""),
         selected_pu_id=selected_pu_id or run.selected_pu_id,
         selected_pu_name=run.selected_pu_name,
         return_slicing_meta=True,
@@ -445,6 +447,39 @@ def parse_docx(
         return events, slicing_meta
     return events
 
+
+def parse_uploaded_document(
+    file_path: str,
+    *,
+    filename: str | None = None,
+    selected_pu_id: str | None = None,
+    selected_pu_name: str | None = None,
+    return_slicing_meta: bool = False,
+) -> list[ParsedEvent] | tuple[list[ParsedEvent], dict[str, Any]]:
+    source_name = (filename or file_path or "").lower()
+    if source_name.endswith(".docx"):
+        return parse_docx(
+            file_path,
+            selected_pu_id=selected_pu_id,
+            selected_pu_name=selected_pu_name,
+            return_slicing_meta=return_slicing_meta,
+        )
+
+    extracted = extract_document_text(file_path, filename=filename)
+    min_chars = max(int(getattr(settings, "MIN_EVENT_PARAGRAPH_CHARS", 100) or 0), 0)
+    full_text = normalize_event_paragraph_text(extracted.text)
+    events: list[ParsedEvent] = []
+    if len(full_text) >= min_chars:
+        events.append(ParsedEvent(kind="paragraph", joined_text=full_text))
+
+    slicing_meta: dict[str, Any] = {
+        "method": "full_document_text",
+        "source_format": extracted.source_format,
+        "line_count": len(extracted.lines),
+    }
+    if return_slicing_meta:
+        return events, slicing_meta
+    return events
 
 @lru_cache(maxsize=1)
 def _get_morph():
