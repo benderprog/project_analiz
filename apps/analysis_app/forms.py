@@ -4,12 +4,15 @@ import uuid
 
 from django import forms
 
+from apps.analysis_app.document_parsers import DocumentExtractionError, extract_document_text
 from apps.analysis_app.models import CachedPU
 
 logger = logging.getLogger(__name__)
 
 
 GENERAL_SUMMARY_PU_LABEL = "Общая сводка"
+SUPPORTED_UPLOAD_EXTENSIONS = {".docx", ".odt", ".rtf", ".pdf"}
+SUPPORTED_UPLOAD_ACCEPT = ".docx,.odt,.rtf,.pdf"
 
 
 def is_general_summary_pu(selected_pu_id: str | uuid.UUID | None) -> bool:
@@ -38,17 +41,25 @@ class MultipleFileField(forms.FileField):
 
 class UploadDocxForm(forms.Form):
     file = MultipleFileField(
-        label="DOCX файл",
+        label="Файл сводки",
         required=True,
-        widget=MultipleFileInput(attrs={"multiple": True}),
+        widget=MultipleFileInput(attrs={"multiple": True, "accept": SUPPORTED_UPLOAD_ACCEPT}),
     )
 
     def clean_file(self):
         files = self.cleaned_data["file"]
         for uploaded_file in files:
             ext = os.path.splitext(uploaded_file.name or "")[1].lower()
-            if ext != ".docx":
-                raise forms.ValidationError(f"Файл {uploaded_file.name} должен быть в формате DOCX.")
+            if ext not in SUPPORTED_UPLOAD_EXTENSIONS:
+                raise forms.ValidationError(
+                    f"Файл {uploaded_file.name} не поддерживается. Допустимые форматы: DOCX, ODT, RTF, PDF."
+                )
+            try:
+                extract_document_text(uploaded_file, filename=uploaded_file.name)
+            except DocumentExtractionError as exc:
+                raise forms.ValidationError(f"Файл {uploaded_file.name}: {exc}") from exc
+            finally:
+                uploaded_file.seek(0)
         return files
 
 
