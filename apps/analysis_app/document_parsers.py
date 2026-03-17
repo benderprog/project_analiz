@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import zlib
@@ -114,46 +115,70 @@ def _extract_doc(source: str | Path | BinaryIO) -> ExtractedDocument:
 
     with TemporaryDirectory(prefix="doc-convert-") as temp_dir:
         temp_path = Path(temp_dir)
-        input_path = temp_path / "input.doc"
-        output_path = temp_path / "input.docx"
+        source_name = Path(source).name if isinstance(source, (str, Path)) else "input.doc"
+        source_stem = Path(source_name).stem or "input"
+        input_path = temp_path / f"{source_stem}.doc"
+        output_path = temp_path / f"{input_path.stem}.docx"
         input_path.write_bytes(raw)
 
+        cmd = [
+            soffice_bin,
+            "--headless",
+            "--convert-to",
+            "docx:MS Word 2007 XML",
+            "--outdir",
+            str(temp_path),
+            str(input_path),
+        ]
+
         try:
-            conversion = subprocess.run(
-                [
-                    soffice_bin,
-                    "--headless",
-                    "--convert-to",
-                    "docx",
-                    "--outdir",
-                    str(temp_path),
-                    str(input_path),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            conversion = subprocess.run(cmd, capture_output=True, text=True, check=False)
         except OSError as exc:
             raise DocConversionError(f"DOC conversion failed to start local converter: {exc}") from exc
 
+        diagnostic = _build_doc_conversion_diagnostics(cmd, conversion, temp_path)
+
         if conversion.returncode != 0:
-            details = (conversion.stderr or conversion.stdout or "unknown error").strip()
-            raise DocConversionError(f"DOC conversion failed via local headless converter: {details}")
+            raise DocConversionError(f"DOC conversion failed via local headless converter.\n{diagnostic}")
 
-        if not output_path.exists():
-            raise DocConversionError(
-                "DOC conversion failed: converter finished without producing DOCX output."
-            )
+        docx_candidates = sorted(
+            [path for path in temp_path.iterdir() if path.is_file() and path.suffix.lower() == ".docx"],
+            key=lambda path: (path.name.lower(), str(path)),
+        )
+        if output_path.exists():
+            selected_output = output_path
+        elif len(docx_candidates) == 1:
+            selected_output = docx_candidates[0]
+        elif len(docx_candidates) > 1:
+            selected_output = docx_candidates[0]
+        else:
+            raise DocConversionError(f"DOC conversion failed: no DOCX output was produced.\n{diagnostic}")
 
-        converted = _extract_docx(output_path)
+        converted = _extract_docx(selected_output)
 
     converted.source_format = "doc"
     converted.meta = {
         **converted.meta,
         "converted_from": "doc",
         "converter": "soffice-headless",
+        "conversion_output_file": selected_output.name,
+        "conversion_output_candidates": [path.name for path in docx_candidates],
     }
     return converted
+
+
+def _build_doc_conversion_diagnostics(cmd: list[str], conversion: subprocess.CompletedProcess[str], output_dir: Path) -> str:
+    output_listing = sorted(path.name for path in output_dir.iterdir())
+    return "\n".join(
+        [
+            f"command: {shlex.join(cmd)}",
+            f"returncode: {conversion.returncode}",
+            f"stdout: {(conversion.stdout or '').strip() or '<empty>'}",
+            f"stderr: {(conversion.stderr or '').strip() or '<empty>'}",
+            f"output_dir: {output_dir}",
+            f"output_dir_listing: {output_listing or ['<empty>']}",
+        ]
+    )
 
 
 def _extract_odt(source: str | Path | BinaryIO) -> ExtractedDocument:
