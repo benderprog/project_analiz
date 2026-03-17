@@ -50,6 +50,10 @@ class UploadFlowFormatsTests(TestCase):
             archive.writestr("content.xml", content_xml)
         return SimpleUploadedFile("sample.odt", buffer.getvalue(), content_type="application/vnd.oasis.opendocument.text")
 
+    def _doc_file(self) -> SimpleUploadedFile:
+        payload = b"legacy doc payload"
+        return SimpleUploadedFile("sample.doc", payload, content_type="application/msword")
+
     def _rtf_file(self) -> SimpleUploadedFile:
         payload = r"{\rtf1\ansi Тест RTF\par Вторая строка}".encode("utf-8")
         return SimpleUploadedFile("sample.rtf", payload, content_type="application/rtf")
@@ -76,12 +80,19 @@ class UploadFlowFormatsTests(TestCase):
         self.assertEqual(run.status, AnalysisRun.Status.CREATED)
         self.assertTrue(run.original_filename.endswith(".odt"))
 
-    def test_upload_rtf_creates_pending_run(self):
+    def test_upload_doc_shows_validation_error(self):
+        response = self._upload(self._doc_file())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AnalysisRun.objects.count(), 0)
+        form = response.context["upload_form"]
+        self.assertIn("не поддерживается", str(form.errors))
+
+    def test_upload_rtf_shows_validation_error(self):
         response = self._upload(self._rtf_file())
         self.assertEqual(response.status_code, 200)
-        run = AnalysisRun.objects.get()
-        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
-        self.assertTrue(run.original_filename.endswith(".rtf"))
+        self.assertEqual(AnalysisRun.objects.count(), 0)
+        form = response.context["upload_form"]
+        self.assertIn("не поддерживается", str(form.errors))
 
     def test_upload_pdf_text_creates_pending_run(self):
         response = self._upload(self._pdf_with_text_file())

@@ -1,5 +1,6 @@
 from django import forms
 
+from apps.analysis_app.document_parsers import DocumentExtractionError, extract_document_text
 from apps.analysis_app.forms import GENERAL_SUMMARY_PU_LABEL
 from apps.analysis_app.models import FeatureFlags, PortalDbConnectionSettings, SvodkaTemplate
 from apps.portaldb.gateway import get_portal_gateway
@@ -66,6 +67,21 @@ class SvodkaTemplateAdminForm(forms.ModelForm):
         except Exception:  # noqa: BLE001
             pass
         return choices
+
+
+    def clean_file(self):
+        uploaded_file = self.cleaned_data.get("file")
+        if not uploaded_file:
+            return uploaded_file
+
+        try:
+            extract_document_text(uploaded_file, filename=getattr(uploaded_file, "name", None))
+        except DocumentExtractionError as exc:
+            raise forms.ValidationError(f"Шаблон {uploaded_file.name}: {exc}") from exc
+        finally:
+            uploaded_file.seek(0)
+
+        return uploaded_file
 
     def clean(self):
         cleaned_data = super().clean()
