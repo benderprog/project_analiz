@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from zipfile import ZipFile
+
+from django.test import SimpleTestCase
+
+from apps.analysis_app.document_parsers import (
+    PdfTextLayerMissingError,
+    UnsupportedDocumentFormatError,
+    extract_document_text,
+)
+
+
+class DocumentParserTests(SimpleTestCase):
+    def test_extract_docx(self):
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("Первая строка")
+        document.add_paragraph("Вторая строка")
+
+        with NamedTemporaryFile(suffix=".docx") as tmp:
+            document.save(tmp.name)
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "docx")
+        self.assertEqual(parsed.lines, ["Первая строка", "Вторая строка"])
+        self.assertTrue(parsed.is_text_based)
+
+    def test_extract_odt(self):
+        content_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<office:document-content
+ xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+ xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0'>
+ <office:body>
+  <office:text>
+   <text:h>Заголовок</text:h>
+   <text:p>Строка ODT</text:p>
+  </office:text>
+ </office:body>
+</office:document-content>"""
+
+        with NamedTemporaryFile(suffix=".odt") as tmp:
+            with ZipFile(tmp.name, "w") as archive:
+                archive.writestr("content.xml", content_xml)
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "odt")
+        self.assertEqual(parsed.lines, ["Заголовок", "Строка ODT"])
+
+    def test_extract_rtf(self):
+        rtf_content = r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Times;}}\f0\fs24 Первая строка\par Вторая строка}"
+
+        with NamedTemporaryFile(suffix=".rtf", mode="w", encoding="utf-8") as tmp:
+            tmp.write(rtf_content)
+            tmp.flush()
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "rtf")
+        self.assertEqual(parsed.lines, ["Первая строка", "Вторая строка"])
+
+    def test_extract_pdf_with_text_layer(self):
+        pdf_like = b"stream\nBT /F1 12 Tf 72 712 Td (Hello PDF) Tj ET\nendstream"
+
+        with NamedTemporaryFile(suffix=".pdf") as tmp:
+            Path(tmp.name).write_bytes(pdf_like)
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "pdf")
+        self.assertEqual(parsed.lines, ["Hello PDF"])
+
+    def test_extract_pdf_without_text_layer_raises(self):
+        with NamedTemporaryFile(suffix=".pdf") as tmp:
+            Path(tmp.name).write_bytes(b"stream\nq 10 0 0 10 0 0 cm /Im0 Do Q\nendstream")
+            with self.assertRaises(PdfTextLayerMissingError) as error:
+                extract_document_text(tmp.name)
+
+        self.assertIn("Scanned/image-only PDF is not supported yet", str(error.exception))
+
+    def test_unsupported_format_raises(self):
+        with NamedTemporaryFile(suffix=".txt") as tmp:
+            Path(tmp.name).write_text("text", encoding="utf-8")
+            with self.assertRaises(UnsupportedDocumentFormatError):
+                extract_document_text(tmp.name)
