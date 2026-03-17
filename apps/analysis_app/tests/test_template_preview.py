@@ -5,9 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.test import TestCase, SimpleTestCase
 from django.urls import reverse
-from unittest.mock import patch
 
-from apps.analysis_app.document_parsers import ExtractedDocument
 from apps.analysis_app.models import SvodkaTemplate
 from apps.analysis_app.template_preview import build_template_preview_context, detect_template_anchors, extract_template_text
 
@@ -117,20 +115,10 @@ class TemplateExtractTextTests(SimpleTestCase):
         self.assertIn("[END]", text)
 
 
-    def test_extract_template_text_supports_doc_via_converter(self):
+    def test_extract_template_text_rejects_doc_as_unsupported(self):
         payload = BytesIO(b"legacy doc")
         payload.name = "template.doc"
 
-        with patch(
-            "apps.analysis_app.document_parsers._extract_doc",
-            return_value=ExtractedDocument(
-                source_format="doc",
-                text="anchor\n[BEGIN]\nbody\n[END]",
-                lines=["anchor", "[BEGIN]", "body", "[END]"],
-                text_blocks=["anchor", "[BEGIN]", "body", "[END]"],
-            ),
-        ):
-            text = extract_template_text(payload)
+        text = extract_template_text(payload)
 
-        self.assertIn("[BEGIN]", text)
-        self.assertIn("[END]", text)
+        self.assertIn("legacy doc", text)
