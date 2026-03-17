@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 
 from django.conf import settings
 
 from django.db.models import QuerySet
 
+from apps.analysis_app.document_parsers import extract_document_text
 from apps.analysis_app.models import SvodkaTemplate
 
 logger = logging.getLogger(__name__)
@@ -355,6 +357,25 @@ def iter_doc_elements(document, min_chars: int = 100) -> list[DocElement]:
             )
 
     return elements
+
+
+def extracted_text_to_doc_elements(blocks: Sequence[str]) -> list[DocElement]:
+    return [DocElement(kind="paragraph", text=_normalize_ws(block)) for block in blocks if _normalize_ws(block)]
+
+
+def extract_doc_elements(path_or_document: Any, *, filename: str | None = None, min_chars: int = 100) -> list[DocElement]:
+    from docx.document import Document as DocxDocument
+
+    if isinstance(path_or_document, DocxDocument):
+        return iter_doc_elements(path_or_document, min_chars=min_chars)
+
+    resolved_filename = filename
+    if resolved_filename is None and isinstance(path_or_document, (str, Path)):
+        resolved_filename = str(path_or_document)
+
+    extracted = extract_document_text(path_or_document, filename=resolved_filename)
+    blocks = extracted.text_blocks or extracted.lines
+    return extracted_text_to_doc_elements(blocks)
 
 
 def _strip_markers(text: str, begin_marker: str, end_marker: str) -> str:
@@ -713,7 +734,12 @@ def get_template_for_run(selected_pu_id: str | None, selected_pu_name: str | Non
 
 
 def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_name: str | None, *, min_chars: int = 100) -> tuple[list[DocElement], SlicingDebugInfo]:
-    target_elements = iter_doc_elements(document, min_chars=min_chars)
+    target_elements = extract_doc_elements(document, min_chars=min_chars)
+    return slice_elements_for_run(target_elements, selected_pu_id, selected_pu_name)
+
+
+def slice_elements_for_run(target_elements: Sequence[DocElement], selected_pu_id: str | None, selected_pu_name: str | None) -> tuple[list[DocElement], SlicingDebugInfo]:
+    target_elements = list(target_elements)
     template = get_template_for_run(selected_pu_id, selected_pu_name)
 
     if not template or not template.file:
@@ -765,10 +791,8 @@ def slice_document_for_run(document, selected_pu_id: str | None, selected_pu_nam
             analyzed_text=analyzed_text,
         )
 
-    from docx import Document
-
-    template_doc = Document(template.file.path)
-    segments = build_template_segments(template_doc, template.begin_marker, template.end_marker)
+    template_elements = extract_doc_elements(template.file.path, filename=getattr(template.file, "name", None))
+    segments = build_template_segments(template_elements, template.begin_marker, template.end_marker)
     template_threshold = float(template.anchor_match_threshold or START_MIN_SIM)
     if not segments:
         analyzed_text = _truncate_debug_text("\n".join(item.text for item in target_elements if item.text))
