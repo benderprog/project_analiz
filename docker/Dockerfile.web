@@ -10,7 +10,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY docker/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+# CPU-only torch is installed explicitly here; do not move torch installation into requirements.txt unless CPU index is preserved.
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN python -c "import celery, redis; print('runtime ok')" \
+    && python -c "from kombu.transport import redis as kombu_redis; print('kombu redis ok')"
+RUN python -m pip list | grep -E '^(torch|triton|nvidia-)'
 
 COPY . /app
 

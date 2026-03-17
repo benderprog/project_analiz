@@ -14,7 +14,10 @@ __pycache__/
 .vscode/
 node_modules/
 artifacts/
+dist/
 *.tar
+*.part
+db_dumps/
 media/
 staticfiles/
 *.log

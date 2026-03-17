@@ -18,6 +18,18 @@ The command builds `docker/Dockerfile.web` and tags the image as:
 
 - `project_analiz:web-ver-1.9`
 
+`docker build` context excludes release artifacts from `.dockerignore` (including `dist/`, `*.part`, `db_dumps/`), so offline bundles and split archive parts are not copied into runtime image layers.
+
+Runtime image must include all app runtime dependencies, including Celery worker and Redis client (`celery`, `redis`) so web + worker + broker transport imports are available in closed contour.
+
+Quick verification after build:
+
+```bash
+docker run --rm project_analiz:web-ver-1.9 python -m pip show celery redis
+docker run --rm project_analiz:web-ver-1.9 python -c "import celery, redis"
+docker run --rm project_analiz:web-ver-1.9 python -c "from kombu.transport import redis as kombu_redis; print('ok')"
+```
+
 ## 2) Prepare PostgreSQL dumps (strictly with postgres:15 tools)
 
 Dumps for offline bundle must be `pg_dump -Fc` and produced by `postgres:15` tools.

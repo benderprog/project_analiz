@@ -1,74 +1,58 @@
 {% extends "analysis_app/base.html" %}
 
 {% block content %}
-<style>
-  .badge + .badge { margin-left: .35rem; }
-  .event-source-table { width: 100%; border-collapse: collapse; }
-  .event-source-table td, .event-source-table th { border: 1px solid #d9d9d9; padding: .4rem .5rem; vertical-align: top; }
-  .slicing-preview { margin: .75rem 0 1rem; }
-  .segment-preview { margin: .6rem 0; }
-  .anchor-line { padding: .35rem .5rem; border-radius: 4px; border: 1px solid transparent; margin: .25rem 0; font-size: .92rem; }
-  .anchor-start { background: #dbeafe; border-color: #93c5fd; color: #1e3a8a; }
-  .anchor-end { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
-  .segment-text { max-height: 320px; overflow: auto; background: #fafafa; border: 1px solid #ddd; padding: .6rem; white-space: pre-wrap; word-break: break-word; margin: .35rem 0; }
-  .slicing-fallback { padding: .4rem .55rem; background: #fff7ed; border: 1px solid #fdba74; margin-bottom: .5rem; }
-</style>
 <section class="card">
-  <h2>Результаты анализа</h2>
-  <p>Run ID: {{ run.run_id }}</p>
-  <p>Статус: {{ run.status }}</p>
-  <p>ПУ: {{ selected_pu_label }}</p>
-  {% if show_debug_zip_link and debug_zip_url %}
-    <p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug-пакет</a></p>
-  {% endif %}
-  {% if slicing_status %}
-    <p><strong>{{ slicing_status.label }}</strong></p>
-    {% if debug_mode %}
-      <p>
-        method={{ slicing_status.method }},
-        expected/matched={{ slicing_status.anchors_expected }}/{{ slicing_status.anchors_matched }},
-        threshold={{ slicing_status.threshold|default:"—" }}
-      </p>
-      {% if slicing_status.reasons %}
-        <p>reasons: {{ slicing_status.reasons|join:", " }}</p>
-      {% endif %}
-      {% if slicing_status.segments %}
-        <p>
-          top scores:
-          {% for seg in slicing_status.segments|slice:":3" %}
-            [#{{ seg.index }} start={{ seg.start_score|default:"—" }} end={{ seg.end_score|default:"—" }}]{% if not forloop.last %}, {% endif %}
-          {% endfor %}
-        </p>
-      {% endif %}
-    {% endif %}
-  {% endif %}
-  {% if debug_mode and debug_pipeline and debug_pipeline.stage_line %}
-    <p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>
-  {% endif %}
+  <h2 class="section-title">Результаты анализа</h2>
+  <p><strong>{{ run.original_filename|default:run.file.name }}</strong> · ПУ: {{ selected_pu_label }} · run_id: {{ run.run_id }}</p>
+  <p>Время запуска: {{ run_started_at_display }}</p>
+  {% if run.finished_at %}<p>Время завершения: {{ run_finished_at_display }}</p>{% endif %}
+  <p>
+    <span class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span>
+  </p>
+</section>
 
+<div class="summary-grid">
+  <div class="metric-card"><div class="k">Events count</div><div class="v">{{ run.paragraphs.count }}</div></div>
+  <div class="metric-card"><div class="k">Matched / mismatches</div><div class="v">{{ selected_event.match.matched|yesno:'1,0' }} / {% if selected_event.match.matched %}0{% else %}1{% endif %}</div></div>
+  <div class="metric-card"><div class="k">Portal mode</div><div class="v">{% if selected_event.portal.event_type %}ON{% else %}OFF{% endif %}</div></div>
+</div>
+
+<div class="tab-nav">
+  <button class="tab-btn is-active" type="button" data-tab="events">События</button>
+  <button class="tab-btn" type="button" data-tab="anchors">Якоря</button>
+  {% if request.user.is_staff or request.user.is_superuser %}<button class="tab-btn" type="button" data-tab="debug">Debug</button>{% endif %}
+</div>
+
+<section class="card tab-panel" data-panel="anchors" hidden>
+  {% if slicing_status %}<p><strong>{{ slicing_status.label }}</strong></p>{% endif %}
   {% if slicing_preview %}
-    <details class="slicing-preview">
-      <summary>Предпросмотр обрезки / якорей</summary>
-      {% if slicing_preview.fallback_to_full_report %}
-        <div class="slicing-fallback">Fallback: анализ всей сводки</div>
-        <pre class="segment-text">{{ slicing_preview.fallback_text }}</pre>
-      {% else %}
-        {% for seg in slicing_preview.inline_segments %}
-          <div class="segment-preview">
-            <p><strong>Сегмент #{{ seg.segment_index }}</strong></p>
-            <div class="anchor-line anchor-start">{{ seg.start_line }}</div>
-            <pre class="segment-text">{{ seg.slice_text }}</pre>
-            <div class="anchor-line anchor-end">{{ seg.end_line }}</div>
-          </div>
-          {% if not forloop.last %}<hr>{% endif %}
-        {% empty %}
-          <p>Сегменты для предпросмотра не найдены.</p>
-        {% endfor %}
-      {% endif %}
-    </details>
+  <div class="slicing-preview">
+    <p><strong>Предпросмотр обрезки / якорей</strong></p>
+    {% if slicing_preview.fallback_to_full_report %}
+      <div class="slicing-fallback">Fallback: анализ всей сводки</div>
+      <pre class="segment-text">{{ slicing_preview.fallback_text }}</pre>
+    {% else %}
+      {% for seg in slicing_preview.inline_segments %}
+        <div class="segment-preview">
+          <p><strong>Сегмент #{{ seg.segment_index }}</strong></p>
+          <div class="anchor-line anchor-start">{{ seg.start_line }}</div>
+          <pre class="segment-text">{{ seg.slice_text }}</pre>
+          <div class="anchor-line anchor-end">{{ seg.end_line }}</div>
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
   {% endif %}
 </section>
 
+{% if request.user.is_staff or request.user.is_superuser %}
+<section class="card tab-panel" data-panel="debug" hidden>
+  {% if debug_mode and show_debug_zip_link and debug_zip_url %}<p><a class="primary" href="{{ debug_zip_url }}" target="_blank" rel="noopener">Скачать debug.zip</a></p>{% endif %}
+  {% if debug_pipeline and debug_pipeline.stage_line %}<p><strong>Этапы анализа:</strong> {{ debug_pipeline.stage_line }}</p>{% endif %}
+</section>
+{% endif %}
+
+<section class="tab-panel" data-panel="events">
   <div class="analysis-layout">
     <aside class="analysis-list">
       <h3>События</h3>
@@ -720,4 +704,14 @@
 
     init();
   </script>
+</section>
+<script>
+(function(){
+ const buttons=[...document.querySelectorAll('[data-tab]')];
+ const panels=[...document.querySelectorAll('.tab-panel')];
+ const show=(name)=>{panels.forEach(p=>p.hidden=p.dataset.panel!==name);buttons.forEach(b=>b.classList.toggle('is-active',b.dataset.tab===name));};
+ buttons.forEach(b=>b.addEventListener('click',()=>show(b.dataset.tab)));
+})();
+</script>
+
 {% endblock %}

@@ -1,6 +1,6 @@
 import tempfile
 from io import BytesIO
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -82,7 +82,7 @@ class UploadAnalysisDocxTests(TestCase):
             self.assertFalse(run.celery_task_id)
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_with_selected_pu_single_file_enqueues_run(self):
+    def test_upload_with_selected_pu_single_file_creates_pending_run(self):
         from uuid import uuid4
 
         pu = CachedPU.objects.create(
@@ -99,7 +99,6 @@ class UploadAnalysisDocxTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
                 with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
-                    delay_mock.return_value = type("Task", (), {"id": "task-single"})()
                     response = self.client.post(
                         reverse("analysis-upload"),
                         {"selected_pu_id": str(pu.portal_pu_id), "file": upload},
@@ -109,11 +108,12 @@ class UploadAnalysisDocxTests(TestCase):
         run = AnalysisRun.objects.get()
         self.assertEqual(run.selected_pu_id, str(pu.portal_pu_id))
         self.assertEqual(run.selected_pu_name, "Пограничное управление Север")
-        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
-        self.assertTrue(run.celery_task_id)
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
+        self.assertFalse(run.celery_task_id)
+        delay_mock.assert_not_called()
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
-    def test_upload_docx_single_file_enqueues_with_general_summary(self):
+    def test_upload_docx_single_file_creates_pending_with_general_summary(self):
         upload = SimpleUploadedFile(
             "sample.docx",
             self._make_docx_bytes(),
@@ -123,7 +123,6 @@ class UploadAnalysisDocxTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with override_settings(MEDIA_ROOT=tmp_dir):
                 with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
-                    delay_mock.return_value = type("Task", (), {"id": "task-general"})()
                     response = self.client.post(
                         reverse("analysis-upload"),
                         {"selected_pu_id": "", "file": upload},
@@ -131,9 +130,10 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         run = AnalysisRun.objects.get()
-        self.assertEqual(run.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(run.status, AnalysisRun.Status.CREATED)
         self.assertEqual(run.selected_pu_name, GENERAL_SUMMARY_PU_LABEL)
-        self.assertTrue(run.celery_task_id)
+        self.assertFalse(run.celery_task_id)
+        delay_mock.assert_not_called()
 
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
@@ -256,6 +256,7 @@ class UploadAnalysisDocxTests(TestCase):
 
         self.assertNotContains(response, "Сбросить очередь")
         self.assertContains(response, "Удалить")
+        self.assertContains(response, "Удалить все")
 
 
     def test_queue_status_elapsed_and_results_url(self):
@@ -295,7 +296,27 @@ class UploadAnalysisDocxTests(TestCase):
         )
         self.assertEqual(runs[str(run_done.run_id)]["progress_percent"], 100)
         self.assertEqual(runs[str(run_done.run_id)]["progress_label"], "5 / 5 (100%)")
+        self.assertTrue(runs[str(run_done.run_id)]["has_results"])
+        self.assertFalse(runs[str(run_failed.run_id)]["has_results"])
         self.assertEqual(runs[str(run_failed.run_id)]["results_url"], "")
+        self.assertRegex(runs[str(run_running.run_id)]["started_at_display"], r"^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$")
+
+
+    @override_settings(USE_TZ=True, TIME_ZONE="Europe/Moscow")
+    def test_queue_status_started_at_display_uses_server_local_time(self):
+        run = AnalysisRun.objects.create(
+            original_filename="tz.docx",
+            file="uploads/tz.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=datetime(2026, 2, 1, 20, 15, tzinfo=dt_timezone.utc),
+        )
+
+        with timezone.override("Europe/Moscow"), patch("django.utils.timezone.localdate", return_value=datetime(2026, 2, 2, 0, 0).date()):
+            response = self.client.get(reverse("analysis-queue-status"))
+
+        payload = {item["run_id"]: item for item in response.json()["runs"]}
+        self.assertEqual(payload[str(run.run_id)]["started_at_display"], "01.02.2026 23:15")
+        self.assertNotEqual(payload[str(run.run_id)]["started_at_display"], "20:15")
 
     def test_queue_status_progress_payload(self):
         run = AnalysisRun.objects.create(
@@ -341,6 +362,27 @@ class UploadAnalysisDocxTests(TestCase):
         self.assertEqual(runs[str(run_running.run_id)]["status"], AnalysisRun.Status.RUNNING)
         self.assertEqual(runs[str(run_queued.run_id)]["status"], AnalysisRun.Status.QUEUED)
 
+
+    def test_upload_and_queue_templates_render_started_at_display(self):
+        now = timezone.now()
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+        AnalysisRun.objects.create(
+            original_filename="started.docx",
+            file="uploads/started.docx",
+            status=AnalysisRun.Status.RUNNING,
+            started_at=now,
+            created_session_key=session_key,
+        )
+
+        upload_response = self.client.get(reverse("analysis-upload"))
+        queue_response = self.client.get(reverse("analysis-queue"))
+
+        self.assertContains(upload_response, "Время запуска")
+        self.assertContains(queue_response, "Время запуска")
+        self.assertRegex(upload_response.content.decode("utf-8"), r">\d{2}:\d{2}<")
+        self.assertRegex(queue_response.content.decode("utf-8"), r">\d{2}:\d{2}<")
 
     @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
     def test_pending_block_prefills_selected_pu(self):
@@ -631,6 +673,186 @@ class UploadAnalysisDocxTests(TestCase):
             self.assertEqual(response.status_code, 302)
             run.refresh_from_db()
             self.assertEqual(run.status, status)
+
+
+
+    def test_upload_dropzone_script_does_not_autosubmit_and_updates_selected_files_hint(self):
+        script = Path("static/analysis_app/js/upload_dropzone.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("requestSubmit", script)
+        self.assertIn("selected-files-hint", script)
+        self.assertIn("Выбрано файлов", script)
+
+    def test_upload_page_layout_moves_pu_under_dropzone_and_hides_parameters_block(self):
+        response = self.client.get(reverse("analysis-upload"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "ПУ:")
+        self.assertContains(response, "Применяется к новым файлам; для каждого ожидающего можно изменить отдельно.")
+        self.assertNotContains(response, "Параметры")
+
+    def test_pending_section_has_start_all_and_delete_buttons(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        AnalysisRun.objects.create(
+            original_filename="pending-a.docx",
+            file="uploads/pending-a.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+        AnalysisRun.objects.create(
+            original_filename="pending-b.docx",
+            file="uploads/pending-b.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+
+        response = self.client.get(reverse("analysis-upload"))
+
+        self.assertContains(response, "Запустить все")
+        self.assertContains(response, "Запустить в очередь")
+        self.assertContains(response, "Удалить")
+        self.assertContains(response, "Удалить все")
+
+    @override_settings(ANALYSIS_USE_SYNC_TASKS=False)
+    def test_start_all_enqueues_only_current_user_pending_runs(self):
+        User = get_user_model()
+        owner = User.objects.create_user(username="startall-owner", password="test-pass")
+        other = User.objects.create_user(username="startall-other", password="test-pass")
+
+        my_run_1 = AnalysisRun.objects.create(
+            original_filename="owner-1.docx",
+            file="uploads/owner-1.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+        my_run_2 = AnalysisRun.objects.create(
+            original_filename="owner-2.docx",
+            file="uploads/owner-2.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+        foreign_run = AnalysisRun.objects.create(
+            original_filename="other-1.docx",
+            file="uploads/other-1.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=other,
+        )
+
+        self.client.force_login(owner)
+        with patch("apps.analysis_app.tasks.run_docx_analysis.delay") as delay_mock:
+            delay_mock.side_effect = [type("Task", (), {"id": "task-startall-1"})(), type("Task", (), {"id": "task-startall-2"})()]
+            response = self.client.post(reverse("analysis-pending-start-all"))
+
+        self.assertEqual(response.status_code, 302)
+        my_run_1.refresh_from_db()
+        my_run_2.refresh_from_db()
+        foreign_run.refresh_from_db()
+        self.assertEqual(my_run_1.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(my_run_2.status, AnalysisRun.Status.QUEUED)
+        self.assertEqual(foreign_run.status, AnalysisRun.Status.CREATED)
+        self.assertEqual(delay_mock.call_count, 2)
+
+
+
+    def test_pending_delete_all_deletes_only_current_user_pending_runs(self):
+        User = get_user_model()
+        owner = User.objects.create_user(username="deleteall-owner", password="test-pass")
+        other = User.objects.create_user(username="deleteall-other", password="test-pass")
+
+        my_created = AnalysisRun.objects.create(
+            original_filename="owner-created.docx",
+            file="uploads/owner-created.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=owner,
+        )
+        my_queued = AnalysisRun.objects.create(
+            original_filename="owner-queued.docx",
+            file="uploads/owner-queued.docx",
+            status=AnalysisRun.Status.QUEUED,
+            uploaded_by=owner,
+        )
+        foreign_created = AnalysisRun.objects.create(
+            original_filename="other-created.docx",
+            file="uploads/other-created.docx",
+            status=AnalysisRun.Status.CREATED,
+            uploaded_by=other,
+        )
+
+        self.client.force_login(owner)
+        response = self.client.post(reverse("analysis-pending-delete-all"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=my_created.run_id).exists())
+        self.assertTrue(AnalysisRun.objects.filter(run_id=my_queued.run_id).exists())
+        self.assertTrue(AnalysisRun.objects.filter(run_id=foreign_created.run_id).exists())
+
+    def test_pending_delete_all_deletes_only_current_session_pending_runs(self):
+        owner_client = self.client_class()
+        owner_session = owner_client.session
+        owner_session.create()
+        owner_key = owner_session.session_key or ""
+
+        outsider_client = self.client_class()
+        outsider_session = outsider_client.session
+        outsider_session.create()
+        outsider_key = outsider_session.session_key or ""
+
+        my_created = AnalysisRun.objects.create(
+            original_filename="session-created.docx",
+            file="uploads/session-created.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=owner_key,
+        )
+        foreign_created = AnalysisRun.objects.create(
+            original_filename="session-foreign.docx",
+            file="uploads/session-foreign.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=outsider_key,
+        )
+
+        response = owner_client.post(reverse("analysis-pending-delete-all"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=my_created.run_id).exists())
+        self.assertTrue(AnalysisRun.objects.filter(run_id=foreign_created.run_id).exists())
+
+    def test_queue_page_rows_include_stable_refresh_hooks(self):
+        AnalysisRun.objects.create(
+            original_filename="queue-hooks.docx",
+            file="uploads/queue-hooks.docx",
+            status=AnalysisRun.Status.RUNNING,
+            progress_total=10,
+            progress_done=5,
+        )
+
+        response = self.client.get(reverse("analysis-queue"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-run-id="')
+        self.assertContains(response, 'data-role="status-badge"')
+        self.assertContains(response, 'data-role="progress-text"')
+        self.assertContains(response, 'data-role="progress-bar"')
+        self.assertContains(response, 'data-role="elapsed"')
+
+    def test_delete_endpoint_removes_pending_created_run(self):
+        session = self.client.session
+        session.create()
+        session_key = session.session_key or ""
+
+        run = AnalysisRun.objects.create(
+            original_filename="pending-delete.docx",
+            file="uploads/pending-delete.docx",
+            status=AnalysisRun.Status.CREATED,
+            created_session_key=session_key,
+        )
+
+        response = self.client.post(reverse("analysis-run-delete", kwargs={"run_id": run.run_id}))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(AnalysisRun.objects.filter(run_id=run.run_id).exists())
 
     def _make_docx_bytes(self) -> bytes:
         document = Document()

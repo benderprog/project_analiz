@@ -4,13 +4,21 @@
   <meta charset="utf-8" />
   <title>Анализ сводки</title>
   <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/analysis_app_ui_operator_light.css" />
 </head>
-<body>
+<body class="{% if request.user.is_authenticated and request.user.is_staff or request.user.is_superuser %}ui-admin{% else %}ui-user{% endif %}">
   <header class="site-header">
     <h1>Портал событий — анализ сводки</h1>
     <nav>
       <a href="/upload/">Загрузка</a>
+      <a href="/analysis/queue/">Очередь</a>
       <a href="/admin/">Администрирование</a>
+      <div class="top-status-cluster" aria-label="runtime status">
+        <span class="status-chip">UI: {{ status_ui_label }}</span>
+        <span class="status-chip">PORTAL: {{ status_portal_label }}</span>
+        <span class="status-chip">DEBUG: {{ status_debug_label }}</span>
+        <span class="status-chip">{{ status_version_label }}</span>
+      </div>
     </nav>
   </header>
   <main class="container">

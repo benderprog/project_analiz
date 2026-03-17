@@ -5,6 +5,7 @@ from pathlib import PurePath
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.files.storage import default_storage
 from django.core.paginator import EmptyPage, Paginator
@@ -37,13 +38,11 @@ from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
     _find_datetime_span,
-    ensure_classifier_candidates,
-    extract_attributes,
     highlight_text,
-    match_event,
 )
 from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
-from apps.analysis_app.utils.dt_display import format_dt_dmy_hm
+from apps.analysis_app.ui_mode import is_admin_ui
+from apps.analysis_app.utils.dt_display import format_dt_dmy_hm, format_run_started_at
 from apps.analysis_app.utils.offender_format import offender_display
 from apps.classifier.models import EventTypePattern
 
@@ -339,6 +338,14 @@ def _progress_payload(run: AnalysisRun) -> dict[str, int | str | None]:
         "progress_percent": percent,
         "progress_label": label,
     }
+
+
+def _queue_started_at_display(run: AnalysisRun) -> str:
+    if run.started_at is not None:
+        return format_run_started_at(run.started_at)
+    if run.queued_at is not None:
+        return format_run_started_at(run.queued_at)
+    return "—"
 
 def _cached_pu_full_name_map(request) -> dict[str, str]:
     cached = getattr(request, "_pu_full_name_map", None)
@@ -866,63 +873,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     extracted = result.extracted_attributes or {}
     match_result = result.match_result or {}
     text = paragraph.text
-
-    needs_backfill = (
-        not match_result
-        or "event_type_ok" not in match_result
-        or "article_ok" not in match_result
-        or "article_classifier_ok" not in match_result
-        or "article_status" not in match_result
-        or "article_spans" not in extracted
-        or "date_span" not in extracted
-        or "time_span" not in extracted
-        or (
-            match_result.get("matched") is True
-            and (
-                not isinstance(match_result.get("predicted"), dict)
-                or match_result.get("predicted", {}).get("event_type") is None
-                or match_result.get("predicted", {}).get("classifier_article_of_law") is None
-            )
-        )
-    )
-    if needs_backfill:
-        try:
-            paragraph_run = getattr(paragraph, "run", None)
-            selected_pu_id = getattr(paragraph_run, "selected_pu_id", None)
-            extracted_attrs = extract_attributes(text, selected_pu_id=selected_pu_id)
-            new_match_result = match_event(extracted_attrs, text)
-            extracted = {
-                "date_time": format_local_naive(extracted_attrs.date_time),
-                "time_found": extracted_attrs.time_found,
-                "date_span": list(extracted_attrs.date_span) if extracted_attrs.date_span else None,
-                "time_span": list(extracted_attrs.time_span) if extracted_attrs.time_span else None,
-                "subdivision_id": extracted_attrs.subdivision_id,
-                "subdivision_name": extracted_attrs.subdivision_name,
-                "subdivision_candidates": extracted_attrs.subdivision_candidates,
-                "subdivision_span": extracted_attrs.subdivision_span,
-                "article_spans": [list(span) for span in extracted_attrs.article_spans],
-                "offenders": [offender_to_json(offender) for offender in extracted_attrs.offenders],
-                "staff": extracted_attrs.staff,
-            }
-            match_result = new_match_result
-            result.extracted_attributes = extracted
-            result.match_result = new_match_result
-            refreshed_matched = bool(new_match_result.get("matched"))
-            refreshed_title, refreshed_preview = build_title_preview(paragraph.idx, text, refreshed_matched)
-            refreshed_status = compute_status_fields(new_match_result, time_error_minutes=TIME_ERROR_MINUTES)
-            result.matched = refreshed_matched
-            result.title = refreshed_title
-            result.preview = refreshed_preview
-            result.status_timestamp = refreshed_status["timestamp"]
-            result.status_subdivision = refreshed_status["subdivision"]
-            result.status_offenders = refreshed_status["offenders"]
-            result.status_event_type = refreshed_status["event_type"]
-            result.status_article = refreshed_status["article"]
-            result.detail_payload_cache = {}
-            result.detail_payload_cached_at = None
-            result.save(update_fields=["extracted_attributes", "match_result", "matched", "title", "preview", "status_timestamp", "status_subdivision", "status_offenders", "status_event_type", "status_article", "detail_payload_cache", "detail_payload_cached_at"])
-        except Exception:  # noqa: BLE001 - page should remain renderable
-            match_result = result.match_result or match_result
+    # IMPORTANT: results page must stay read-only and use persisted worker artifacts only.
+    # Do not trigger extract/match/semantic recomputation in web request path.
     matched = bool(match_result.get("matched"))
     title, preview = build_title_preview(paragraph.idx, text, matched)
     portal = match_result.get("portal") or {}
@@ -937,25 +889,6 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         or []
     )
     candidates_were_missing = bool(best_pattern_text and not classifier_candidates)
-    if candidates_were_missing:
-        try:
-            predicted = ensure_classifier_candidates(predicted, text)
-            classifier_candidates = (
-                predicted.get("classifier_pattern_candidates")
-                or predicted.get("classifier_candidates")
-                or []
-            )
-            if classifier_candidates:
-                match_result["predicted"] = predicted
-                predicted_article = predicted.get("classifier_article_of_law")
-                if predicted_article:
-                    match_result["classifier_article_of_law"] = predicted_article
-                result.match_result = match_result
-                result.detail_payload_cache = {}
-                result.detail_payload_cached_at = None
-                result.save(update_fields=["match_result", "detail_payload_cache", "detail_payload_cached_at"])
-        except Exception:  # noqa: BLE001 - detail page should remain renderable
-            classifier_candidates = []
 
     classifier_article = (
         match_result.get("classifier_article_of_law")
@@ -1179,8 +1112,10 @@ class UploadView(View):
         for run in page_obj.object_list:
             run.elapsed_seconds = compute_elapsed_seconds(run)
             run.elapsed_display = format_elapsed(run.elapsed_seconds)
+            run.started_at_display = _queue_started_at_display(run)
             run.results_url = _results_url(run)
-            run.debug_zip_url = _debug_zip_url(run)
+            ui_debug_enabled = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
+            run.debug_zip_url = _debug_zip_url(run) if ui_debug_enabled else ""
             progress_payload = _progress_payload(run)
             run.progress_total = progress_payload["progress_total"]
             run.progress_done = progress_payload["progress_done"]
@@ -1221,7 +1156,7 @@ class UploadView(View):
             "pending_selection_forms": pending_selection_forms,
             "selected_run_id": str(selected_run_id) if selected_run_id else "",
             "queue_status_url": redirect("analysis-queue-status").url,
-            "debug_mode": FeatureFlags.is_effective_debug_enabled(),
+            "debug_mode": is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled(),
             "template_preview_by_pu": preview_by_pu,
             "template_preview_by_pu_json": json.dumps(preview_by_pu),
         }
@@ -1323,22 +1258,6 @@ class UploadView(View):
         selected_pu_name = _resolve_selected_pu_name(request, selected_pu_id)
         created_session_key = self._ensure_session_key(request)
 
-        if len(files) == 1:
-            uploaded_file = files[0]
-            run = AnalysisRun.objects.create(
-                uploaded_by=request.user if request.user.is_authenticated else None,
-                created_session_key=created_session_key,
-                file=uploaded_file,
-                original_filename=os.path.basename(uploaded_file.name or ""),
-                selected_pu_id=selected_pu_id,
-                selected_pu_name=selected_pu_name,
-                status=AnalysisRun.Status.CREATED,
-                error_message="",
-            )
-            logger.debug("Upload created analysis run run_id=%s", run.run_id)
-            self._enqueue_run(run, selected_pu_id=selected_pu_id)
-            return redirect("analysis-upload")
-
         selected_run_id = None
         for uploaded_file in files:
             run = AnalysisRun.objects.create(
@@ -1423,6 +1342,76 @@ class PendingRunCancelView(View):
         return redirect(upload_url)
 
 
+class PendingRunsStartAllView(UploadView):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        pending_queryset = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED)
+        if request.user.is_authenticated:
+            pending_queryset = pending_queryset.filter(uploaded_by=request.user)
+        else:
+            pending_queryset = pending_queryset.filter(created_session_key=self._ensure_session_key(request))
+
+        started_count = 0
+        for run_id in pending_queryset.values_list("run_id", flat=True):
+            with transaction.atomic():
+                run = AnalysisRun.objects.select_for_update().get(run_id=run_id)
+                if run.status != AnalysisRun.Status.CREATED:
+                    continue
+                if request.user.is_authenticated:
+                    if run.uploaded_by_id != request.user.id:
+                        continue
+                elif run.created_session_key != self._ensure_session_key(request):
+                    continue
+                self._enqueue_run(run, selected_pu_id=str(run.selected_pu_id or ""))
+                started_count += 1
+
+        messages.success(request, f"Запущено в очередь: {started_count}")
+        upload_url = redirect("analysis-upload").url
+        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+        if queue_page:
+            return redirect(f"{upload_url}?queue_page={queue_page}")
+        return redirect(upload_url)
+
+class PendingRunsDeleteAllView(View):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        pending_queryset = AnalysisRun.objects.filter(status=AnalysisRun.Status.CREATED)
+        if request.user.is_authenticated:
+            pending_queryset = pending_queryset.filter(uploaded_by=request.user)
+        else:
+            pending_queryset = pending_queryset.filter(created_session_key=UploadView._ensure_session_key(request))
+
+        deleted_count = 0
+        for run_id in pending_queryset.values_list("run_id", flat=True):
+            run = AnalysisRun.objects.filter(run_id=run_id).first()
+            if run is None or not _user_can_manage_run(request, run):
+                continue
+
+            upload_name = str(run.file.name or "")
+            debug_package_name = str(run.debug_package_file.name or "")
+            with transaction.atomic():
+                run = AnalysisRun.objects.select_for_update().filter(run_id=run_id).first()
+                if run is None or run.status != AnalysisRun.Status.CREATED:
+                    continue
+                run.status = AnalysisRun.Status.CANCELED
+                run.error_message = "Canceled and deleted by operator"
+                run.finished_at = timezone.now()
+                run.save(update_fields=["status", "error_message", "finished_at"])
+                run.delete()
+                _delete_run_files_after_commit(upload_name=upload_name, debug_package_name=debug_package_name)
+                deleted_count += 1
+
+        messages.success(request, f"Удалено ожидающих запусков: {deleted_count}")
+        upload_url = redirect("analysis-upload").url
+        queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
+        if queue_page:
+            return redirect(f"{upload_url}?queue_page={queue_page}")
+        return redirect(upload_url)
+
+
+
 def _user_can_manage_run(request, run: AnalysisRun) -> bool:
     if request.user.is_authenticated:
         return bool(request.user.is_staff or run.uploaded_by_id == request.user.id)
@@ -1499,9 +1488,18 @@ class AnalysisRunDeleteView(View):
         return redirect(_build_delete_action_url(request))
 
 
+class AnalysisQueueView(UploadView):
+    template_name = "analysis_app/queue.html"
+
+    def get(self, request):
+        context = self._build_context(request)
+        return render(request, self.template_name, context)
+
+
+
 class AnalysisQueueStatusView(View):
     def get(self, request):
-        debug_mode = FeatureFlags.is_effective_debug_enabled()
+        debug_mode = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
         runs = list(UploadView._queue_queryset(request)[:10])
         payload_runs = []
         for run in runs:
@@ -1517,14 +1515,21 @@ class AnalysisQueueStatusView(View):
                 "finished_at": run.finished_at.isoformat() if run.finished_at else None,
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_display": format_elapsed(elapsed_seconds),
+                "started_at_display": _queue_started_at_display(run),
+                "queued_at_display": format_run_started_at(run.queued_at),
+                "elapsed": format_elapsed(elapsed_seconds),
                 "results_url": _results_url(run),
+                "has_results": bool(_results_url(run)),
                 "debug_zip_url": _debug_zip_url(run) if debug_mode else "",
-                "error_message": run.error_message if run.status == AnalysisRun.Status.FAILED else None,
+                "debug_available": bool(_debug_zip_url(run)) if debug_mode else False,
+                "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
                 "position": None,
                 "progress_total": progress_payload["progress_total"],
                 "progress_done": progress_payload["progress_done"],
                 "progress_percent": progress_payload["progress_percent"],
+                "percent": progress_payload["progress_percent"],
                 "progress_label": progress_payload["progress_label"],
+                "updated_at": run.progress_updated_at.isoformat() if run.progress_updated_at else run.updated_at.isoformat(),
             }
             if debug_mode:
                 payload["debug_pipeline"] = _debug_pipeline_payload(run)
@@ -1563,6 +1568,8 @@ class AnalysisStatusView(View):
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
             "elapsed_seconds": elapsed_seconds,
             "elapsed_display": format_elapsed(elapsed_seconds),
+            "started_at_display": _queue_started_at_display(run),
+            "queued_at_display": format_run_started_at(run.queued_at),
             "error_message": run.error_message if run.status in [AnalysisRun.Status.FAILED, AnalysisRun.Status.CANCELED] else None,
             "worker_ok": worker_ok,
             "uploaded_filename": run.original_filename or _display_filename(run.file.name),
@@ -1574,11 +1581,12 @@ class AnalysisStatusView(View):
         return JsonResponse(payload)
 
 
-def _get_run_for_request(run_id, request) -> AnalysisRun:
+def _get_run_for_request(run_id, request, *, allow_staff: bool = False) -> AnalysisRun:
     run = get_object_or_404(AnalysisRun, run_id=run_id)
     if request.user.is_authenticated:
         if run.uploaded_by_id != request.user.id:
-            raise Http404
+            if not (allow_staff and request.user.is_staff):
+                raise Http404
         return run
 
     session_key = UploadView._ensure_session_key(request)
@@ -1593,7 +1601,7 @@ def paragraph_to_event_json(paragraph: AnalysisParagraph) -> dict:
 
 class AnalysisEventsListView(View):
     def get(self, request, run_id):
-        run = _get_run_for_request(run_id, request)
+        run = _get_run_for_request(run_id, request, allow_staff=True)
         try:
             page = max(1, int(request.GET.get("page", 1)))
         except (TypeError, ValueError):
@@ -1644,7 +1652,7 @@ class AnalysisEventsListView(View):
 
 class AnalysisEventDetailView(View):
     def get(self, request, run_id, idx):
-        run = _get_run_for_request(run_id, request)
+        run = _get_run_for_request(run_id, request, allow_staff=True)
         paragraph = get_object_or_404(
             AnalysisParagraph.objects.select_related("result", "run"),
             run=run,
@@ -1675,7 +1683,7 @@ class AnalysisDebugZipView(View):
         run = get_object_or_404(AnalysisRun, run_id=run_id)
 
         if request.user.is_authenticated:
-            if run.uploaded_by_id != request.user.id:
+            if run.uploaded_by_id != request.user.id and not request.user.is_staff:
                 raise Http404
         else:
             session_key = UploadView._ensure_session_key(request)
@@ -1692,6 +1700,13 @@ class AnalysisDebugZipView(View):
         response = HttpResponse(build_debug_zip_bytes(run), content_type="application/zip")
         response["Content-Disposition"] = f'attachment; filename="debug_{run.run_id}.zip"'
         return response
+
+
+
+def _is_staff_owner_or_session_user(*, request, run: AnalysisRun) -> bool:
+    if request.user.is_authenticated:
+        return bool(request.user.is_staff or run.uploaded_by_id == request.user.id)
+    return run.created_session_key == UploadView._ensure_session_key(request)
 
 
 class TemplatePreviewView(LoginRequiredMixin, UserPassesTestMixin, View):
@@ -1744,7 +1759,7 @@ class AnalysisDetailView(View):
     template_name = "analysis_app/detail.html"
 
     def get(self, request, run_id):
-        run = _get_run_for_request(run_id, request)
+        run = _get_run_for_request(run_id, request, allow_staff=True)
 
         selected_idx_param = request.GET.get("event")
         try:
@@ -1767,11 +1782,14 @@ class AnalysisDetailView(View):
         pu_label = GENERAL_SUMMARY_PU_LABEL
         if selected_pu:
             pu_label = str(selected_pu.full_name or selected_pu.short_name or pu_label)
+        ui_debug_enabled = is_admin_ui(request) and FeatureFlags.is_effective_debug_enabled()
         return render(
             request,
             self.template_name,
             {
                 "run": run,
+                "run_started_at_display": format_run_started_at(run.started_at),
+                "run_finished_at_display": format_run_started_at(run.finished_at),
                 "selected_idx": selected_idx,
                 "selected_event": selected_event,
                 "events_list_url": reverse("analysis-events-list", kwargs={"run_id": str(run.run_id)}),
@@ -1790,11 +1808,11 @@ class AnalysisDetailView(View):
                     "run_status": run.status,
                 },
                 "selected_pu_label": pu_label,
-                "debug_mode": FeatureFlags.is_effective_debug_enabled(),
+                "debug_mode": ui_debug_enabled,
                 "debug_zip_url": _debug_zip_url(run),
-                "show_debug_zip_link": FeatureFlags.is_effective_debug_enabled() and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED],
+                "show_debug_zip_link": ui_debug_enabled and run.status in [AnalysisRun.Status.DONE, AnalysisRun.Status.FAILED] and _is_staff_owner_or_session_user(request=request, run=run),
                 "debug_pipeline": _debug_pipeline_payload(run),
                 "slicing_status": _slicing_status_payload(run),
-                "slicing_preview": _slicing_preview_payload(run, debug_mode=FeatureFlags.is_effective_debug_enabled()),
+                "slicing_preview": _slicing_preview_payload(run, debug_mode=ui_debug_enabled),
             },
         )

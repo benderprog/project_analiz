@@ -1,0 +1,49 @@
+{% extends "analysis_app/base.html" %}
+{% load static %}
+
+{% block content %}
+<section class="card">
+  <h2 class="section-title">Очередь анализов</h2>
+  {% if queue_page_obj.object_list %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Run</th><th>Время запуска</th><th>Файл</th><th>PU</th><th>Status</th><th>Progress</th><th>Duration</th>
+          {% if debug_mode %}<th>Slicing</th><th>Portal</th><th>Debug</th>{% endif %}
+          <th class="actions-col">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="queue-table-body" data-status-url="{{ queue_status_url }}" data-poll-interval-ms="3000" data-idle-interval-ms="12000">
+        {% for run in queue_page_obj.object_list %}
+        <tr data-run-id="{{ run.run_id }}">
+          <td>{{ run.run_id|stringformat:"s"|slice:":8" }}…</td>
+          <td class="queue-started-at"><span data-role="started-at">{{ run.started_at_display }}</span></td>
+          <td>{{ run.original_filename|default:run.file.name }}</td>
+          <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
+          <td class="queue-status"><span data-role="status-badge" class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
+          <td class="queue-progress">{% if run.status == 'running' or run.status == 'queued' %}<div class="progress-wrap"><div data-role="progress-bar" class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div><div data-role="progress-text" class="progress-text">{{ run.progress_label }}</div>{% else %}—{% endif %}</td>
+          <td class="queue-elapsed"><span data-role="elapsed">{{ run.elapsed_display }}</span></td>
+          {% if debug_mode %}
+          <td>{{ run.debug_pipeline_payload.slicing_method|default:"—" }}</td>
+          <td>{% if run.debug_pipeline_payload.portal_enabled %}on{% else %}off{% endif %}</td>
+          <td>{% if run.debug_pipeline_payload.stage_line %}ok{% else %}—{% endif %}</td>
+          {% endif %}
+          <td class="queue-action actions-col">
+            <div class="actions-inline">
+              {% if run.results_url %}<a class="primary" data-role="open-link" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
+              {% if debug_mode and run.debug_zip_url %}<a data-role="debug-link" href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug</a>{% endif %}
+              <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form>
+            </div>
+            {% if run.status == 'failed' or run.status == 'canceled' %}<div class="muted" data-role="queue-details">{{ run.error_message|default:"—" }}</div>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p>Запусков пока нет.</p>{% endif %}
+  {% if request.user.is_staff or request.user.is_superuser %}<p id="queue-refresh-warning" class="muted" hidden>обновление недоступно</p>{% endif %}
+</section>
+<script src="{% static 'analysis_app/js/queue_autorefresh.js' %}"></script>
+{% endblock %}

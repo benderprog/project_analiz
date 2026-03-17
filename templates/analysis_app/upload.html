@@ -1,144 +1,108 @@
 {% extends "analysis_app/base.html" %}
+{% load static %}
 
 {% block content %}
-<style>
-  .progress-wrap { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; }
-  .progress-bar { height: 100%; background: var(--color-primary, #4caf50); }
-  .progress-text { font-size: 12px; margin-top: 4px; }
-  .queue-action-links { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .queue-error-text { margin-top: 4px; }
-  .stage-debug { margin-top: 4px; font-size: 12px; color: #475569; }
-</style>
 <section class="card">
-  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-    <h2 style="margin:0;">Очередь анализов</h2>
-  </div>
-
-  {% if queue_page_obj.object_list %}
-    <table>
-      <thead>
-        <tr>
-          <th>Статус</th>
-          <th>Файл</th>
-          <th>ПУ</th>
-          <th>Время анализа</th>
-          <th>Действие / Ошибка</th>
-        </tr>
-      </thead>
-      <tbody id="queue-table-body">
-        {% for run in queue_page_obj.object_list %}
-          <tr data-run-id="{{ run.run_id }}" {% if selected_run_id and selected_run_id == run.run_id|stringformat:"s" %}style="background:#eff6ff;"{% endif %}>
-            <td class="queue-status">{{ run.status }}</td>
-            <td>{{ run.original_filename|default:run.file.name }}</td>
-            <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
-            <td class="queue-elapsed">{{ run.elapsed_display }}</td>
-            <td class="queue-action">
-              {% if run.status == 'done' and run.results_url %}
-                <div class="queue-action-links">
-                  <a class="primary" href="{{ run.results_url }}" target="_blank" rel="noopener">Смотреть результаты</a>
-                  {% if debug_mode and run.debug_zip_url %}<a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a>{% endif %}
-                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">
-                    {% csrf_token %}
-                    <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
-                    <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
-                  </form>
-                </div>
-                {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
-              {% elif run.status == 'failed' %}
-                {% if debug_mode and run.debug_zip_url %}<div class="queue-action-links"><a href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug-пакет</a><form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form></div>{% else %}<div class="queue-action-links"><form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form></div>{% endif %}
-                <div class="queue-error-text">{{ run.error_message|default:"—" }}</div>
-                {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
-              {% elif run.status == 'queued' or run.status == 'running' %}
-                <div class="progress-wrap"><div class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
-                <div class="progress-text">{{ run.progress_label }}</div>
-                <div class="queue-action-links" style="margin-top:6px;">
-                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">
-                    {% csrf_token %}
-                    <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
-                    <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
-                  </form>
-                </div>
-                {% if debug_mode and run.debug_pipeline_payload.stage_line %}<div class="stage-debug">{{ run.debug_pipeline_payload.stage_line }}</div>{% endif %}
-              {% else %}
-                —
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-
-    <div style="display:flex; gap:8px; margin-top:12px; align-items:center;">
-      {% if queue_page_obj.has_previous %}
-        <a href="?queue_page={{ queue_page_obj.previous_page_number }}">Назад</a>
-      {% endif %}
-      <span>Страница {{ queue_page_obj.number }} из {{ queue_page_obj.paginator.num_pages }}</span>
-      {% if queue_page_obj.has_next %}
-        <a href="?queue_page={{ queue_page_obj.next_page_number }}">Вперёд</a>
-      {% endif %}
-    </div>
-  {% else %}
-    <p>Запусков пока нет.</p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <h2>Загрузка новой сводки</h2>
-  <form method="post" enctype="multipart/form-data">
+  <h2 class="section-title">Загрузка</h2>
+  <form method="post" enctype="multipart/form-data" id="upload-form">
     {% csrf_token %}
-    <p>
-      {{ upload_form.selected_pu_id.label_tag }}
-      {{ upload_form.selected_pu_id }}
-      <small>По умолчанию: «Общая сводка».</small>
-      <a id="template-preview-link" href="#" target="_blank" rel="noopener" style="margin-left:12px; display:none;">Посмотреть шаблон</a>
-    </p>
-    <p>
-      {{ upload_form.file.label_tag }}
+    <div class="drop-zone">
+      <label for="id_file"><strong>Перетащите файл сюда или выберите вручную</strong></label>
       {{ upload_form.file }}
-    </p>
-    <button type="submit" class="primary">Загрузить</button>
+    </div>
+
+    <div style="margin-top:12px;">
+      <p><strong>ПУ:</strong> {{ upload_form.selected_pu_id }}</p>
+      <p class="muted">Применяется к новым файлам; для каждого ожидающего можно изменить отдельно.</p>
+      <p><a id="template-preview-link" href="#" target="_blank" rel="noopener" style="display:none;">Открыть шаблон</a></p>
+    </div>
+
+    <p id="selected-files-hint" class="muted" style="margin-top:8px;">Выбрано файлов: 0</p>
+    <p style="margin-top:12px;"><button type="submit" class="primary">Загрузить и подготовить</button></p>
   </form>
 </section>
 
+{% if pending_selection_forms %}
 <section class="card">
-  <h2>Ожидают запуска</h2>
-  {% if pending_selection_forms %}
-    <div style="display:grid; gap:12px;">
-      {% for item in pending_selection_forms %}
-        <div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
-          <p><strong>{{ item.run.original_filename|default:item.run.file.name }}</strong></p>
-          <form method="post" id="enqueue-form-{{ item.run.run_id }}">
-            {% csrf_token %}
-            {{ item.form.upload_id }}
-            <p>
-              {{ item.form.selected_pu_id.label_tag }}
-              {{ item.form.selected_pu_id }}
-            </p>
-            {% if item.form.errors %}
-              <p style="color:#b91c1c;">{{ item.form.errors }}</p>
-            {% endif %}
-          </form>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <button type="submit" class="primary" form="enqueue-form-{{ item.run.run_id }}">Запустить в очередь</button>
-            <form method="post" action="{% url 'analysis-run-delete' item.run.run_id %}" style="margin:0;">
-              {% csrf_token %}
-              <input type="hidden" name="next" value="{{ request.get_full_path }}">
-              <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
-            </form>
-          </div>
-        </div>
-      {% endfor %}
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+    <h2 class="section-title" style="margin-bottom:0;">Ожидают запуска</h2>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <form method="post" action="{% url 'analysis-pending-start-all' %}" style="margin:0;">
+        {% csrf_token %}
+        <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+        <button type="submit" class="primary">Запустить все</button>
+      </form>
+      <form method="post" action="{% url 'analysis-pending-delete-all' %}" style="margin:0;">
+        {% csrf_token %}
+        <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+        <button type="submit" onclick="return confirm('Удалить все ожидающие запуска анализы?');">Удалить все</button>
+      </form>
     </div>
-  {% else %}
-    <p>Нет запусков в статусе ожидания.</p>
-  {% endif %}
+  </div>
+  {% for item in pending_selection_forms %}
+    <div style="display:flex; justify-content:space-between; gap:8px; border-top:1px solid #e2e8f0; padding:10px 0;">
+      <div>
+        <strong>{{ item.run.original_filename|default:item.run.file.name }}</strong>
+        <div class="muted">Стадия: {{ item.run.debug_pipeline_payload.stage_line|default:"Ожидает параметров" }}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <form method="post" id="enqueue-form-{{ item.run.run_id }}" style="margin:0;">{% csrf_token %}{{ item.form.upload_id }}{{ item.form.selected_pu_id }}</form>
+        <button type="submit" class="primary" form="enqueue-form-{{ item.run.run_id }}">Запустить в очередь</button>
+        <form method="post" action="{% url 'analysis-run-delete' item.run.run_id %}" style="margin:0;">
+          {% csrf_token %}
+          <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+          <button type="submit" onclick="return confirm('Удалить этот ожидающий запуск?');">Удалить</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2 class="section-title">Очередь/Последние запуски</h2>
+  {% if queue_page_obj.object_list %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Время запуска</th><th>Файл</th><th>ПУ</th><th>Статус</th><th>Длительность</th><th class="actions-col">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="queue-table-body">
+          {% for run in queue_page_obj.object_list|slice:":5" %}
+            <tr data-run-id="{{ run.run_id }}">
+              <td class="queue-started-at"><span data-role="started-at">{{ run.started_at_display }}</span></td>
+              <td>{{ run.original_filename|default:run.file.name }}</td>
+              <td>{{ run.selected_pu_name|default:"ПУ не выбран" }}</td>
+              <td class="queue-status"><span data-role="status-badge" class="status-pill status-{{ run.status }}">{{ run.status|upper }}</span></td>
+              <td class="queue-elapsed"><span data-role="elapsed">{{ run.elapsed_display }}</span></td>
+              <td class="queue-action actions-col">
+                <div class="actions-inline">
+                  {% if run.results_url %}<a class="primary" data-role="open-link" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
+                  <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;" data-role="delete-run-form">
+                    {% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
+                    <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
+                  </form>
+                </div>
+                {% if run.status == 'running' or run.status == 'queued' %}
+                <div class="progress-wrap"><div data-role="progress-bar" class="progress-bar" style="width: {{ run.progress_percent }}%"></div></div>
+                <div data-role="progress-text" class="progress-text">{{ run.progress_label }}</div>
+                {% endif %}
+                {% if run.status == 'failed' or run.status == 'canceled' %}<div class="muted" data-role="queue-details">{{ run.error_message|default:"—" }}</div>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}<p>Запусков пока нет.</p>{% endif %}
 </section>
 
 <script>
 (function () {
   const statusUrl = "{{ queue_status_url }}";
   const body = document.getElementById("queue-table-body");
-  const debugMode = "{{ debug_mode|yesno:'true,false' }}" === "true";
   const templatePreviewByPu = JSON.parse("{{ template_preview_by_pu_json|escapejs }}");
   const puSelect = document.getElementById("id_selected_pu_id");
   const templatePreviewLink = document.getElementById("template-preview-link");
@@ -147,109 +111,116 @@
     if (!puSelect || !templatePreviewLink) return;
     const key = puSelect.value || "";
     const url = templatePreviewByPu[key] || templatePreviewByPu[""] || "";
-    if (!url) {
-      templatePreviewLink.style.display = "none";
-      templatePreviewLink.removeAttribute("href");
-      return;
-    }
-    templatePreviewLink.href = url;
-    templatePreviewLink.style.display = "inline";
+    templatePreviewLink.style.display = url ? "inline" : "none";
+    if (url) templatePreviewLink.href = url;
   };
-
-  if (puSelect) {
-    puSelect.addEventListener("change", updateTemplatePreviewLink);
-    updateTemplatePreviewLink();
-  }
-
+  if (puSelect) { puSelect.addEventListener("change", updateTemplatePreviewLink); updateTemplatePreviewLink(); }
   if (!statusUrl || !body) return;
 
-  const escapeHtml = (value) => {
-    const div = document.createElement("div");
-    div.textContent = value || "";
-    return div.innerHTML;
+  const isActiveStatus = (status) => status === "running" || status === "queued";
+  const renderActions = (row, run) => {
+    const actionCell = row.querySelector('.queue-action');
+    if (!actionCell) return;
+    const actionsInline = actionCell.querySelector('.actions-inline');
+    if (!actionsInline) return;
+
+    const existingOpen = actionsInline.querySelector('[data-role="open-link"]');
+    if (run.has_results && run.results_url) {
+      if (!existingOpen) {
+        const link = document.createElement('a');
+        link.className = 'primary';
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.setAttribute('data-role', 'open-link');
+        link.textContent = 'Открыть';
+        actionsInline.prepend(link);
+      }
+      actionsInline.querySelector('[data-role="open-link"]').href = run.results_url;
+    } else if (existingOpen) {
+      existingOpen.remove();
+    }
+
+    let details = actionCell.querySelector('[data-role="queue-details"]');
+    if (!isActiveStatus(String(run.status || '').toLowerCase()) && run.error_message) {
+      if (!details) {
+        details = document.createElement('div');
+        details.className = 'muted';
+        details.setAttribute('data-role', 'queue-details');
+        actionCell.appendChild(details);
+      }
+      details.textContent = run.error_message;
+    } else if (details) {
+      details.remove();
+    }
   };
 
-  const getCookie = (name) => {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) return parts.pop().split(';').shift();
-    return "";
+  const updateRow = (row, run) => {
+    const status = String(run.status || "").toLowerCase();
+    const badge = row.querySelector('[data-role="status-badge"]');
+    if (badge) {
+      badge.textContent = status.toUpperCase();
+      badge.className = `status-pill status-${status}`;
+    }
+    const elapsed = row.querySelector('[data-role="elapsed"]');
+    if (elapsed) elapsed.textContent = run.elapsed_display || "—";
+    const startedAt = row.querySelector('[data-role="started-at"]');
+    if (startedAt) startedAt.textContent = run.started_at_display || "—";
+
+    const actionCell = row.querySelector('.queue-action');
+    if (!actionCell) return;
+    renderActions(row, run);
+    let progressText = row.querySelector('[data-role="progress-text"]');
+    let progressBar = row.querySelector('[data-role="progress-bar"]');
+
+    if (isActiveStatus(status)) {
+      if (!progressText || !progressBar) {
+        const wrap = document.createElement('div');
+        wrap.className = 'progress-wrap';
+        progressBar = document.createElement('div');
+        progressBar.className = 'progress-bar';
+        progressBar.setAttribute('data-role', 'progress-bar');
+        wrap.appendChild(progressBar);
+        progressText = document.createElement('div');
+        progressText.className = 'progress-text';
+        progressText.setAttribute('data-role', 'progress-text');
+        actionCell.appendChild(wrap);
+        actionCell.appendChild(progressText);
+      }
+      progressBar.style.width = `${Number(run.progress_percent || 0)}%`;
+      progressText.textContent = String(run.progress_label || '—');
+    } else {
+      if (progressText) progressText.remove();
+      if (progressBar && progressBar.parentElement) progressBar.parentElement.remove();
+    }
   };
-  const csrfToken = getCookie("csrftoken");
-  const deleteActionHtml = (runId) => {
-    const action = `/analysis/${runId}/delete/`;
-    return `<form method="post" action="${action}" style="margin:0;display:inline;">`
-      + `<input type="hidden" name="csrfmiddlewaretoken" value="${escapeHtml(csrfToken)}">`
-      + `<button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>`
-      + `</form>`;
-  };
 
-
-  const renderStageDebug = (run) => {
-    if (!debugMode) return "";
-    const stageLine = run?.debug_pipeline?.stage_line || "";
-    if (!stageLine) return "";
-    return `<div class="stage-debug">${escapeHtml(stageLine)}</div>`;
-  };
-
-  const renderProgress = (run) => {
-    const percent = Number(run.progress_percent || 0);
-    const label = escapeHtml(run.progress_label || "В очереди");
-    return `<div class="progress-wrap"><div class="progress-bar" style="width: ${percent}%"></div></div><div class="progress-text">${label}</div>${renderStageDebug(run)}`;
-  };
-
-  const renderActionLinks = (links) => `<div class="queue-action-links">${links.join("")}</div>`;
-
-  const updateRows = (runs) => {
-    const byId = new Map(runs.map((run) => [run.run_id, run]));
+  const poll = async () => {
+    const response = await fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    const byId = new Map((payload.runs || []).map((run) => [run.run_id, run]));
     body.querySelectorAll("tr[data-run-id]").forEach((row) => {
       const run = byId.get(row.dataset.runId);
       if (!run) {
         row.remove();
         return;
       }
-
-      const statusCell = row.querySelector(".queue-status");
-      const elapsedCell = row.querySelector(".queue-elapsed");
-      const actionCell = row.querySelector(".queue-action");
-
-      if (statusCell) statusCell.textContent = run.status;
-      if (elapsedCell) elapsedCell.textContent = run.elapsed_display || "—";
-
-      if (actionCell) {
-        if (run.status === "done" && run.results_url) {
-          const links = [`<a class="primary" href="${run.results_url}" target="_blank" rel="noopener">Смотреть результаты</a>`, deleteActionHtml(run.run_id)];
-          if (debugMode && run.debug_zip_url) {
-            links.push(`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`);
-          }
-          actionCell.innerHTML = `${renderActionLinks(links)}${renderStageDebug(run)}`;
-        } else if (run.status === "failed") {
-          const debugLink = debugMode && run.debug_zip_url
-            ? renderActionLinks([`<a href="${run.debug_zip_url}" target="_blank" rel="noopener">Debug-пакет</a>`, deleteActionHtml(run.run_id)])
-            : renderActionLinks([deleteActionHtml(run.run_id)]);
-          actionCell.innerHTML = `${debugLink}<div class="queue-error-text">${escapeHtml(run.error_message || "—")}</div>${renderStageDebug(run)}`;
-        } else if (run.status === "queued" || run.status === "running") {
-          actionCell.innerHTML = `${renderProgress(run)}<div class="queue-action-links" style="margin-top:6px;">${deleteActionHtml(run.run_id)}</div>`;
-        } else {
-          actionCell.textContent = "—";
-        }
-      }
+      updateRow(row, run);
     });
+    return (payload.runs || []).some((run) => isActiveStatus(String(run.status || '').toLowerCase()));
   };
 
-  const poll = async () => {
+  const tick = async () => {
     try {
-      const response = await fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } });
-      if (!response.ok) return;
-      const payload = await response.json();
-      updateRows(payload.runs || []);
-    } catch (error) {
-      console.debug("queue poll failed", error);
+      const active = await poll();
+      setTimeout(tick, active ? 3000 : 10000);
+    } catch (_) {
+      setTimeout(tick, 10000);
     }
   };
 
-  setInterval(poll, 5000);
+  setTimeout(tick, 3000);
 })();
 </script>
-
+<script src="{% static 'analysis_app/js/upload_dropzone.js' %}"></script>
 {% endblock %}

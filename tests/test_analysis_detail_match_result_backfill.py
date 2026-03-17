@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -6,9 +5,6 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.analysis_app.models import AnalysisParagraph, AnalysisResult, AnalysisRun
-from apps.classifier.models import EventType, EventTypePattern
-
-
 class AnalysisDetailMatchResultBackfillTests(TestCase):
     def _session_key(self):
         session = self.client.session
@@ -16,7 +12,7 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         session.save()
         return session.session_key
 
-    def test_detail_view_backfills_legacy_match_result_and_statuses(self):
+    def test_detail_view_uses_persisted_legacy_match_result_without_backfill(self):
         run = AnalysisRun.objects.create(
             created_session_key=self._session_key(),
             file=SimpleUploadedFile(
@@ -32,43 +28,20 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
             match_result={"matched": True, "predicted": None},
         )
 
-        attrs = SimpleNamespace()
-        rebuilt_match_result = {
-            "matched": True,
-            "event_type_ok": True,
-            "article_ok": False,
-            "predicted": {
-                "event_type": "Несоблюдение режима",
-                "article_of_law": "18.8 ч.1",
-                "event_pattern": {"event_type_label": "Несоблюдение режима"},
-            },
-            "portal": {
-                "event_type": "Несоблюдение режима",
-                "article_of_law": "18.8 ч.2",
-            },
-        }
-
         with (
-            patch("apps.analysis_app.views.extract_attributes", return_value=attrs) as extract_mock,
-            patch("apps.analysis_app.views.match_event", return_value=rebuilt_match_result) as match_mock,
+            patch("apps.analysis_app.services.extract_attributes", side_effect=AssertionError("must not backfill")) as extract_mock,
+            patch("apps.analysis_app.services.match_event", side_effect=AssertionError("must not backfill")) as match_mock,
         ):
             response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
 
         self.assertEqual(response.status_code, 200)
-        extract_mock.assert_called_once()
-        self.assertEqual(extract_mock.call_args.args[0], "Текст абзаца")
-        match_mock.assert_called_once_with(attrs, "Текст абзаца")
+        extract_mock.assert_not_called()
+        match_mock.assert_not_called()
 
         selected_event = response.context["selected_event"]
         self.assertEqual(selected_event["idx"], 5)
 
-    def test_detail_view_backfills_missing_classifier_candidates(self):
-        phrase = "вещество растительного происхождения"
-        t1 = EventType.objects.create(event_type="Внос/вынос")
-        t2 = EventType.objects.create(event_type="Специальные действия (СД)")
-        EventTypePattern.objects.create(event_type=t1, pattern=phrase, article_of_law="18.3 ч. 1")
-        EventTypePattern.objects.create(event_type=t2, pattern=phrase)
-
+    def test_detail_view_does_not_load_semantic_model(self):
         run = AnalysisRun.objects.create(
             created_session_key=self._session_key(),
             file=SimpleUploadedFile(
@@ -80,7 +53,7 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         paragraph = AnalysisParagraph.objects.create(
             run=run,
             idx=1,
-            text=f"В сводке указано: {phrase}.",
+            text="В сводке указано: событие.",
         )
         AnalysisResult.objects.create(
             paragraph=paragraph,
@@ -93,23 +66,18 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
                 "article_status": "red",
                 "predicted": {
                     "event_type": "Внос/вынос",
-                    "best_pattern_text": phrase,
+                    "best_pattern_text": "кандидат",
                     "classifier_candidates": [],
                     "classifier_pattern_candidates": [],
                 },
             },
         )
 
-        response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
-        self.assertEqual(response.status_code, 200)
+        with patch("apps.analysis_app.services.get_sentence_model", side_effect=AssertionError("model load forbidden")) as model_mock:
+            response = self.client.get(reverse("analysis-detail", kwargs={"run_id": run.run_id}))
 
-        paragraph.refresh_from_db()
-        predicted = (paragraph.result.match_result or {}).get("predicted") or {}
-        candidates = predicted.get("classifier_candidates") or []
-        self.assertEqual(len(candidates), 2)
-        self.assertEqual(predicted.get("classifier_pattern_candidates"), candidates)
-        by_type = {item.get("event_type_name"): item for item in candidates}
-        self.assertEqual(by_type["Внос/вынос"].get("classifier_article"), "18.3 ч. 1")
+        self.assertEqual(response.status_code, 200)
+        model_mock.assert_not_called()
 
 
     def test_detail_view_shows_safe_slicing_preview_with_anchor_labels(self):
@@ -148,7 +116,8 @@ class AnalysisDetailMatchResultBackfillTests(TestCase):
         self.assertEqual(response.status_code, 200)
         content = response.content.decode("utf-8")
         self.assertIn("Предпросмотр обрезки / якорей", content)
-        self.assertNotIn('<details class="slicing-preview" open>', content)
+        self.assertIn('<section class="card tab-panel" data-panel="anchors" hidden>', content)
+        self.assertNotIn('<details class="slicing-preview"', content)
         self.assertIn("Fallback: анализ всей сводки", content)
         self.assertNotIn("<script>alert(1)</script>", content)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", content)
