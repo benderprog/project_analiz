@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 GENERAL_SUMMARY_PU_LABEL = "Общая сводка"
-SUPPORTED_UPLOAD_EXTENSIONS = {".docx", ".odt", ".rtf", ".pdf"}
-SUPPORTED_UPLOAD_ACCEPT = ".docx,.odt,.rtf,.pdf"
+SUPPORTED_UPLOAD_EXTENSIONS = {".doc", ".docx", ".odt", ".rtf", ".pdf"}
+SUPPORTED_UPLOAD_ACCEPT = ".doc,.docx,.odt,.rtf,.pdf"
 
 
 def is_general_summary_pu(selected_pu_id: str | uuid.UUID | None) -> bool:
@@ -52,7 +52,7 @@ class UploadDocxForm(forms.Form):
             ext = os.path.splitext(uploaded_file.name or "")[1].lower()
             if ext not in SUPPORTED_UPLOAD_EXTENSIONS:
                 raise forms.ValidationError(
-                    f"Файл {uploaded_file.name} не поддерживается. Допустимые форматы: DOCX, ODT, RTF, PDF."
+                    f"Файл {uploaded_file.name} не поддерживается. Допустимые форматы: DOC, DOCX, ODT, RTF, PDF."
                 )
             try:
                 extract_document_text(uploaded_file, filename=uploaded_file.name)
