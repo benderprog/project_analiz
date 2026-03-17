@@ -38,10 +38,7 @@ from apps.analysis_app.services import (
     TABLE_ROW_JOINER,
     _find_case_insensitive_span,
     _find_datetime_span,
-    ensure_classifier_candidates,
-    extract_attributes,
     highlight_text,
-    match_event,
 )
 from apps.analysis_app.template_preview import build_template_preview_context, extract_template_text
 from apps.analysis_app.ui_mode import is_admin_ui
@@ -876,63 +873,8 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
     extracted = result.extracted_attributes or {}
     match_result = result.match_result or {}
     text = paragraph.text
-
-    needs_backfill = (
-        not match_result
-        or "event_type_ok" not in match_result
-        or "article_ok" not in match_result
-        or "article_classifier_ok" not in match_result
-        or "article_status" not in match_result
-        or "article_spans" not in extracted
-        or "date_span" not in extracted
-        or "time_span" not in extracted
-        or (
-            match_result.get("matched") is True
-            and (
-                not isinstance(match_result.get("predicted"), dict)
-                or match_result.get("predicted", {}).get("event_type") is None
-                or match_result.get("predicted", {}).get("classifier_article_of_law") is None
-            )
-        )
-    )
-    if needs_backfill:
-        try:
-            paragraph_run = getattr(paragraph, "run", None)
-            selected_pu_id = getattr(paragraph_run, "selected_pu_id", None)
-            extracted_attrs = extract_attributes(text, selected_pu_id=selected_pu_id)
-            new_match_result = match_event(extracted_attrs, text)
-            extracted = {
-                "date_time": format_local_naive(extracted_attrs.date_time),
-                "time_found": extracted_attrs.time_found,
-                "date_span": list(extracted_attrs.date_span) if extracted_attrs.date_span else None,
-                "time_span": list(extracted_attrs.time_span) if extracted_attrs.time_span else None,
-                "subdivision_id": extracted_attrs.subdivision_id,
-                "subdivision_name": extracted_attrs.subdivision_name,
-                "subdivision_candidates": extracted_attrs.subdivision_candidates,
-                "subdivision_span": extracted_attrs.subdivision_span,
-                "article_spans": [list(span) for span in extracted_attrs.article_spans],
-                "offenders": [offender_to_json(offender) for offender in extracted_attrs.offenders],
-                "staff": extracted_attrs.staff,
-            }
-            match_result = new_match_result
-            result.extracted_attributes = extracted
-            result.match_result = new_match_result
-            refreshed_matched = bool(new_match_result.get("matched"))
-            refreshed_title, refreshed_preview = build_title_preview(paragraph.idx, text, refreshed_matched)
-            refreshed_status = compute_status_fields(new_match_result, time_error_minutes=TIME_ERROR_MINUTES)
-            result.matched = refreshed_matched
-            result.title = refreshed_title
-            result.preview = refreshed_preview
-            result.status_timestamp = refreshed_status["timestamp"]
-            result.status_subdivision = refreshed_status["subdivision"]
-            result.status_offenders = refreshed_status["offenders"]
-            result.status_event_type = refreshed_status["event_type"]
-            result.status_article = refreshed_status["article"]
-            result.detail_payload_cache = {}
-            result.detail_payload_cached_at = None
-            result.save(update_fields=["extracted_attributes", "match_result", "matched", "title", "preview", "status_timestamp", "status_subdivision", "status_offenders", "status_event_type", "status_article", "detail_payload_cache", "detail_payload_cached_at"])
-        except Exception:  # noqa: BLE001 - page should remain renderable
-            match_result = result.match_result or match_result
+    # IMPORTANT: results page must stay read-only and use persisted worker artifacts only.
+    # Do not trigger extract/match/semantic recomputation in web request path.
     matched = bool(match_result.get("matched"))
     title, preview = build_title_preview(paragraph.idx, text, matched)
     portal = match_result.get("portal") or {}
@@ -947,25 +889,6 @@ def _build_event_card(paragraph: AnalysisParagraph) -> dict:
         or []
     )
     candidates_were_missing = bool(best_pattern_text and not classifier_candidates)
-    if candidates_were_missing:
-        try:
-            predicted = ensure_classifier_candidates(predicted, text)
-            classifier_candidates = (
-                predicted.get("classifier_pattern_candidates")
-                or predicted.get("classifier_candidates")
-                or []
-            )
-            if classifier_candidates:
-                match_result["predicted"] = predicted
-                predicted_article = predicted.get("classifier_article_of_law")
-                if predicted_article:
-                    match_result["classifier_article_of_law"] = predicted_article
-                result.match_result = match_result
-                result.detail_payload_cache = {}
-                result.detail_payload_cached_at = None
-                result.save(update_fields=["match_result", "detail_payload_cache", "detail_payload_cached_at"])
-        except Exception:  # noqa: BLE001 - detail page should remain renderable
-            classifier_candidates = []
 
     classifier_article = (
         match_result.get("classifier_article_of_law")

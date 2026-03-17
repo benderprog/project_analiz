@@ -44,7 +44,7 @@ class UiModeTests(TestCase):
         self.assertContains(response, '>Debug<', html=False)
         self.assertContains(response, '<button class="tab-btn" type="button" data-tab="anchors">Якоря</button>', html=False)
         self.assertContains(response, '<section class="card tab-panel" data-panel="anchors" hidden>', html=False)
-        self.assertContains(response, '<details class="slicing-preview">', html=False)
+        self.assertContains(response, '<div class="slicing-preview">', html=False)
         self.assertNotContains(response, 'Сводка/якоря')
         self.assertNotContains(response, "Режим:")
 
@@ -64,7 +64,7 @@ class UiModeTests(TestCase):
         self.assertContains(response, '<section class="card tab-panel" data-panel="anchors" hidden>', html=False)
         self.assertContains(response, '<button class="tab-btn" type="button" data-tab="anchors">Якоря</button>', html=False)
         self.assertNotContains(response, 'Сводка/якоря')
-        self.assertContains(response, '<details class="slicing-preview"', html=False)
+        self.assertContains(response, '<div class="slicing-preview"', html=False)
 
     def test_top_status_bar_renders_with_runtime_indicators(self):
         staff = get_user_model().objects.create_user(username="staff3", password="pass", is_staff=True)
