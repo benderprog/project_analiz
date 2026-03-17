@@ -286,6 +286,46 @@ class DocumentParserTests(SimpleTestCase):
         self.assertEqual(parsed.lines, ["DOC line 1", "DOC line 2"])
         self.assertEqual(parsed.meta.get("converted_from"), "doc")
 
+    def test_extract_doc_falls_back_to_single_docx_in_output_dir(self):
+        from docx import Document
+
+        with NamedTemporaryFile(suffix=".DOC") as tmp:
+            Path(tmp.name).write_bytes(b"legacy doc payload")
+
+            def _fake_convert(cmd, capture_output, text, check):
+                out_dir = Path(cmd[cmd.index("--outdir") + 1])
+                converted = Document()
+                converted.add_paragraph("Converted fallback")
+                converted.save(out_dir / "unexpected output name.docx")
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with patch("apps.analysis_app.document_parsers.shutil.which", return_value="/usr/bin/soffice"), patch(
+                "apps.analysis_app.document_parsers.subprocess.run",
+                side_effect=_fake_convert,
+            ):
+                parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.lines, ["Converted fallback"])
+        self.assertEqual(parsed.meta.get("conversion_output_file"), "unexpected output name.docx")
+
+    def test_extract_doc_includes_conversion_diagnostics_on_missing_output(self):
+        with NamedTemporaryFile(suffix=".doc") as tmp:
+            Path(tmp.name).write_bytes(b"legacy doc payload")
+
+            with patch("apps.analysis_app.document_parsers.shutil.which", return_value="/usr/bin/soffice"), patch(
+                "apps.analysis_app.document_parsers.subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stdout="converter stdout", stderr="converter stderr"),
+            ):
+                with self.assertRaises(DocConversionError) as error:
+                    extract_document_text(tmp.name)
+
+        message = str(error.exception)
+        self.assertIn("command:", message)
+        self.assertIn("returncode:", message)
+        self.assertIn("stdout:", message)
+        self.assertIn("stderr:", message)
+        self.assertIn("output_dir_listing:", message)
+
     @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0)
     def test_parse_uploaded_document_supports_doc_summary_via_conversion(self):
         with NamedTemporaryFile(suffix=".doc") as tmp:
