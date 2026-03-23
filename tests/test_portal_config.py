@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 from django.core.management import call_command
@@ -13,7 +14,7 @@ from apps.portaldb.portal_config import (
     load_yaml,
     resolve_portal_config_path,
 )
-from apps.portaldb.sql_registry import SQLRegistry
+from apps.portaldb.sql_registry import SQLRegistry, get_sql_registry
 
 
 class PortalConfigTests(SimpleTestCase):
@@ -143,3 +144,25 @@ class PortalConfigTests(SimpleTestCase):
         self.assertIn("Resolved SQL base dir:", output)
         self.assertIn("SQL missing files:", output)
         self.assertNotIn("portal_pass", output)
+
+
+    def test_get_sql_registry_prod_ro_uses_sql_prod_ro_dir(self):
+        project_root = Path(__file__).resolve().parents[1]
+        env = {
+            "PORTAL_CONFIG_PATH": "configs/portal/portal.yml",
+            "PORTAL_PROFILE": "prod_ro",
+            "PORTAL_DB_NAME": "portal_db_test",
+            "PORTAL_DB_USER": "portal_user",
+            "PORTAL_DB_PASSWORD": "portal_pass",
+            "PORTAL_DB_HOST": "127.0.0.1",
+            "PORTAL_DB_PORT": "5432",
+            "PORTAL_GATEWAY_BACKEND": "sql",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            registry = get_sql_registry(project_root=project_root)
+
+        self.assertEqual(registry.base_dir, (project_root / "configs" / "portal" / "sql_prod_ro").resolve())
+        self.assertEqual(registry.count_missing_queries(), 0)
+        resolved = registry._resolve_query_path("list_pus")
+        self.assertIn("configs/portal/sql_prod_ro", str(resolved))
