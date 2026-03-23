@@ -314,3 +314,33 @@ class SliceDocumentForRunFallbackTests(SimpleTestCase):
         finally:
             os.unlink(report_path)
             os.unlink(template_path)
+
+
+    @override_settings(SKIP_SEMANTIC_MODEL=True, TEMPLATE_MIN_SLICE_CHARS=1, ANALYSIS_ANCHOR_FALLBACK_FULL_REPORT_MAX_ELEMENTS=2)
+    def test_large_anchor_fallback_is_limited_to_anchor_slices(self):
+        report_path = self._write_docx(["start", "inside", "end", "tail"])
+        template_path = self._write_docx(["pre", "[BEGIN]", "body", "[END]", "post"])
+        try:
+            report_doc = Document(report_path)
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_path),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[
+                    SegmentAnchors(start_anchor_text="start", end_anchor_text="end", index=0),
+                    SegmentAnchors(start_anchor_text="missing", end_anchor_text="missing-end", index=1),
+                ],
+            ):
+                kept, info = slice_document_for_run(report_doc, selected_pu_id="1", selected_pu_name="ПУ")
+
+            self.assertTrue(info.anchors_missing)
+            self.assertFalse(info.fallback_to_full_report)
+            self.assertEqual(info.fallback_reason, "anchors-missing-limited")
+            self.assertEqual([item.text for item in kept], ["inside"])
+        finally:
+            os.unlink(report_path)
+            os.unlink(template_path)

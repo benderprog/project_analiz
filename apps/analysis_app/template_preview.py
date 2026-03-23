@@ -8,7 +8,8 @@ from typing import Any
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 
-from apps.analysis_app.svodka_templates import iter_doc_elements, parse_template_marker_blocks
+from apps.analysis_app.document_parsers import extract_document_text
+from apps.analysis_app.svodka_templates import parse_template_marker_blocks
 
 
 @dataclass(frozen=True)
@@ -158,17 +159,13 @@ def extract_template_text(file_obj: Any) -> str:
         return ""
 
     file_obj.seek(0)
-    raw_content = file_obj.read()
-    file_obj.seek(0)
-
     try:
-        from docx import Document
-
-        document = Document(file_obj)
-        lines = [element.text for element in iter_doc_elements(document) if element.text]
+        extracted = extract_document_text(file_obj, filename=getattr(file_obj, "name", None))
         file_obj.seek(0)
-        return "\n".join(lines)
+        return "\n".join(extracted.text_blocks or extracted.lines)
     except Exception:  # noqa: BLE001
+        file_obj.seek(0)
+        raw_content = file_obj.read()
         file_obj.seek(0)
         if isinstance(raw_content, bytes):
             return raw_content.decode("utf-8", errors="ignore")

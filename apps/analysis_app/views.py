@@ -3,12 +3,13 @@ import logging
 import os
 from pathlib import PurePath
 from datetime import timedelta
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.files.storage import default_storage
-from django.core.paginator import EmptyPage, Paginator
+from django.core.paginator import EmptyPage, PageNotAnInteger, Paginator
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -1107,7 +1108,7 @@ class UploadView(View):
         page_number = request.GET.get("queue_page", "1")
         try:
             page_obj = paginator.page(page_number)
-        except EmptyPage:
+        except (EmptyPage, PageNotAnInteger):
             page_obj = paginator.page(paginator.num_pages or 1)
         for run in page_obj.object_list:
             run.elapsed_seconds = compute_elapsed_seconds(run)
@@ -1421,12 +1422,31 @@ def _user_can_manage_run(request, run: AnalysisRun) -> bool:
 def _build_delete_action_url(request) -> str:
     next_url = request.POST.get("next") or request.GET.get("next")
     if next_url:
+        queue_url = reverse("analysis-queue")
+        parsed_next = urlparse(next_url)
+        if parsed_next.path == queue_url:
+            raw_page = parse_qs(parsed_next.query).get("queue_page", ["1"])[0]
+            queue_page = _normalize_queue_page_for_request(request, raw_page)
+            query = urlencode({"queue_page": queue_page})
+            return urlunparse(("", "", queue_url, "", query, ""))
         return next_url
     upload_url = redirect("analysis-upload").url
     queue_page = request.POST.get("queue_page") or request.GET.get("queue_page")
     if queue_page:
         return f"{upload_url}?queue_page={queue_page}"
     return upload_url
+
+
+def _normalize_queue_page_for_request(request, page_number: str | int | None) -> int:
+    paginator = Paginator(UploadView._queue_queryset(request), 20)
+    max_page = paginator.num_pages or 1
+    try:
+        candidate = int(page_number or 1)
+    except (TypeError, ValueError):
+        return max_page
+    if candidate < 1:
+        return 1
+    return min(candidate, max_page)
 
 
 def _delete_run_files_after_commit(*, upload_name: str, debug_package_name: str) -> None:

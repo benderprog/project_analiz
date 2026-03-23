@@ -33,7 +33,7 @@
             <div class="actions-inline">
               {% if run.results_url %}<a class="primary" data-role="open-link" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
               {% if debug_mode and run.debug_zip_url %}<a data-role="debug-link" href="{{ run.debug_zip_url }}" target="_blank" rel="noopener">Debug</a>{% endif %}
-              <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button></form>
+              <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;">{% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}"><input type="hidden" name="next" value="{% url 'analysis-queue' %}?queue_page={{ queue_page_obj.number|default:1 }}"><button type="submit">Удалить</button></form>
             </div>
             {% if run.status == 'failed' or run.status == 'canceled' %}<div class="muted" data-role="queue-details">{{ run.error_message|default:"—" }}</div>{% endif %}
           </td>
@@ -43,6 +43,28 @@
     </table>
   </div>
   {% else %}<p>Запусков пока нет.</p>{% endif %}
+
+  {% if queue_paginator.num_pages > 1 %}
+  <div class="muted" style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+    <span>Страница {{ queue_page_obj.number }} из {{ queue_paginator.num_pages }}</span>
+    <div style="display:flex; gap:8px; align-items:center;">
+      {% if queue_page_obj.has_previous %}
+      <a href="{% url 'analysis-queue' %}?queue_page={{ queue_page_obj.previous_page_number }}">← Назад</a>
+      {% endif %}
+      {% for page_number in queue_paginator.page_range %}
+        {% if page_number == queue_page_obj.number %}
+        <strong>{{ page_number }}</strong>
+        {% else %}
+        <a href="{% url 'analysis-queue' %}?queue_page={{ page_number }}">{{ page_number }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if queue_page_obj.has_next %}
+      <a href="{% url 'analysis-queue' %}?queue_page={{ queue_page_obj.next_page_number }}">Вперед →</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
   {% if request.user.is_staff or request.user.is_superuser %}<p id="queue-refresh-warning" class="muted" hidden>обновление недоступно</p>{% endif %}
 </section>
 <script src="{% static 'analysis_app/js/queue_autorefresh.js' %}"></script>

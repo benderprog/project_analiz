@@ -1,6 +1,7 @@
 import logging
 import time as pytime
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
@@ -25,7 +26,11 @@ def cleanup_run_upload(run: AnalysisRun) -> None:
         logger.warning("Failed to cleanup uploaded file for run %s", run.run_id, exc_info=True)
 
 
-@app.task(bind=True)
+@app.task(
+    bind=True,
+    soft_time_limit=getattr(settings, "ANALYSIS_TASK_SOFT_TIME_LIMIT", 1800),
+    time_limit=getattr(settings, "ANALYSIS_TASK_TIME_LIMIT", 1860),
+)
 def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> None:
     with transaction.atomic():
         run = AnalysisRun.objects.select_for_update().get(run_id=run_id)
@@ -58,10 +63,13 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
     last_db_update = timezone.now()
     debug_enabled = FeatureFlags.is_effective_debug_enabled()
     pipeline_started = pytime.monotonic()
+    pipeline_stage = "starting"
     pipeline = {"current_stage": "starting", "stages": [], "total_ms": 0}
 
     def _save_pipeline(stage_name=None, stage_ms=None, *, current_stage=None, force: bool = False) -> None:
-        nonlocal last_db_update
+        nonlocal last_db_update, pipeline_stage
+        if current_stage:
+            pipeline_stage = current_stage
         if not debug_enabled:
             return
         now = timezone.now()
@@ -117,8 +125,34 @@ def run_docx_analysis(self, run_id: str, selected_pu_id: str | None = None) -> N
             run.debug_package_created_at = timezone.now()
             run.save(update_fields=["debug_package_file", "debug_package_created_at"])
             prune_debug_packages_for_owner(run)
+    except SoftTimeLimitExceeded as exc:
+        logger.warning("Document analysis soft time limit exceeded for run %s", run_id, exc_info=True)
+        run.status = AnalysisRun.Status.FAILED
+        timelimit = getattr(self.request, "timelimit", None)
+        hard_limit = timelimit[0] if isinstance(timelimit, (list, tuple)) and len(timelimit) > 0 else None
+        soft_limit = timelimit[1] if isinstance(timelimit, (list, tuple)) and len(timelimit) > 1 else None
+        stage_label = pipeline_stage or "unknown"
+        limit_details = ""
+        if soft_limit or hard_limit:
+            limit_details = f" (soft={soft_limit or '-'}s, hard={hard_limit or '-'}s)"
+        run.error_message = (
+            "Превышен лимит времени обработки сводки"
+            f" на этапе '{stage_label}'{limit_details}."
+        )
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error_message", "finished_at"])
+        if debug_enabled:
+            _save_pipeline(current_stage=f"timeout:{stage_label}", force=True)
+            debug_bytes = build_debug_zip_bytes(run)
+            filename = f"debug_{run.run_id}.zip"
+            run.debug_package_file.save(filename, ContentFile(debug_bytes), save=False)
+            run.debug_package_created_at = timezone.now()
+            run.save(update_fields=["debug_package_file", "debug_package_created_at"])
+            prune_debug_packages_for_owner(run)
+        cleanup_run_upload(run)
+        raise exc
     except Exception as exc:  # noqa: BLE001
-        logger.exception("DOCX analysis failed for run %s", run_id)
+        logger.exception("Document analysis failed for run %s", run_id)
         run.status = AnalysisRun.Status.FAILED
         run.error_message = str(exc)
         run.finished_at = timezone.now()

@@ -9,6 +9,16 @@
     <div class="drop-zone">
       <label for="id_file"><strong>Перетащите файл сюда или выберите вручную</strong></label>
       {{ upload_form.file }}
+      {% if upload_form.file.errors %}
+      <div class="muted" style="color:#b91c1c; margin-top:8px;">
+        {% for error in upload_form.file.errors %}<div>{{ error }}</div>{% endfor %}
+      </div>
+      {% endif %}
+      {% if upload_form.non_field_errors %}
+      <div class="muted" style="color:#b91c1c; margin-top:8px;">
+        {% for error in upload_form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+      </div>
+      {% endif %}
     </div>
 
     <div style="margin-top:12px;">
@@ -51,7 +61,7 @@
         <form method="post" action="{% url 'analysis-run-delete' item.run.run_id %}" style="margin:0;">
           {% csrf_token %}
           <input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
-          <button type="submit" onclick="return confirm('Удалить этот ожидающий запуск?');">Удалить</button>
+          <button type="submit">Удалить</button>
         </form>
       </div>
     </div>
@@ -82,7 +92,7 @@
                   {% if run.results_url %}<a class="primary" data-role="open-link" href="{{ run.results_url }}" target="_blank" rel="noopener">Открыть</a>{% endif %}
                   <form method="post" action="{% url 'analysis-run-delete' run.run_id %}" style="margin:0;" data-role="delete-run-form">
                     {% csrf_token %}<input type="hidden" name="queue_page" value="{{ queue_page_obj.number|default:1 }}">
-                    <button type="submit" onclick="return confirm('Удалить анализ и все связанные результаты?');">Удалить</button>
+                    <button type="submit">Удалить</button>
                   </form>
                 </div>
                 {% if run.status == 'running' or run.status == 'queued' %}

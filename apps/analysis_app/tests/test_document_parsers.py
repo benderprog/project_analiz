@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from zipfile import ZipFile
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from django.test import SimpleTestCase, override_settings
+
+from apps.analysis_app.document_parsers import (
+    PdfTextLayerMissingError,
+    UnsupportedDocumentFormatError,
+    extract_document_text,
+)
+from apps.analysis_app.services import parse_uploaded_document
+from apps.analysis_app.svodka_templates import SegmentAnchors
+
+
+class DocumentParserTests(SimpleTestCase):
+    def test_extract_docx(self):
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("Первая строка")
+        document.add_paragraph("Вторая строка")
+
+        with NamedTemporaryFile(suffix=".docx") as tmp:
+            document.save(tmp.name)
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "docx")
+        self.assertEqual(parsed.lines, ["Первая строка", "Вторая строка"])
+        self.assertTrue(parsed.is_text_based)
+
+    def test_extract_odt(self):
+        content_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<office:document-content
+ xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+ xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0'>
+ <office:body>
+  <office:text>
+   <text:h>Заголовок</text:h>
+   <text:p>Строка ODT</text:p>
+  </office:text>
+ </office:body>
+</office:document-content>"""
+
+        with NamedTemporaryFile(suffix=".odt") as tmp:
+            with ZipFile(tmp.name, "w") as archive:
+                archive.writestr("content.xml", content_xml)
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "odt")
+        self.assertEqual(parsed.lines, ["Заголовок", "Строка ODT"])
+        self.assertEqual(parsed.text_blocks, ["Заголовок", "Строка ODT"])
+
+
+    def test_extract_pdf_with_text_layer(self):
+        pdf_like = b"stream\nBT /F1 12 Tf 72 712 Td (Hello PDF) Tj ET\nendstream"
+
+        with NamedTemporaryFile(suffix=".pdf") as tmp:
+            Path(tmp.name).write_bytes(pdf_like)
+            parsed = extract_document_text(tmp.name)
+
+        self.assertEqual(parsed.source_format, "pdf")
+        self.assertEqual(parsed.lines, ["Hello PDF"])
+        self.assertEqual(parsed.text_blocks, ["Hello PDF"])
+
+    def test_extract_pdf_without_text_layer_raises(self):
+        with NamedTemporaryFile(suffix=".pdf") as tmp:
+            Path(tmp.name).write_bytes(b"stream\nq 10 0 0 10 0 0 cm /Im0 Do Q\nendstream")
+            with self.assertRaises(PdfTextLayerMissingError) as error:
+                extract_document_text(tmp.name)
+
+        self.assertIn("Scanned/image-only PDF is not supported yet", str(error.exception))
+
+    def test_extract_doc_is_unsupported(self):
+        with NamedTemporaryFile(suffix=".doc") as tmp:
+            Path(tmp.name).write_bytes(b"legacy doc")
+            with self.assertRaises(UnsupportedDocumentFormatError):
+                extract_document_text(tmp.name)
+
+    def test_extract_rtf_is_unsupported(self):
+        with NamedTemporaryFile(suffix=".rtf", mode="w", encoding="utf-8") as tmp:
+            tmp.write(r"{\rtf1\ansi text}")
+            tmp.flush()
+            with self.assertRaises(UnsupportedDocumentFormatError):
+                extract_document_text(tmp.name)
+    def test_unsupported_format_raises(self):
+        with NamedTemporaryFile(suffix=".txt") as tmp:
+            Path(tmp.name).write_text("text", encoding="utf-8")
+            with self.assertRaises(UnsupportedDocumentFormatError):
+                extract_document_text(tmp.name)
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0)
+    def test_parse_uploaded_document_keeps_docx_path_regression(self):
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("Событие 1")
+        document.add_paragraph("Событие 2")
+
+        with NamedTemporaryFile(suffix=".docx") as tmp:
+            document.save(tmp.name)
+            events, _ = parse_uploaded_document(tmp.name, filename="sample.docx", return_slicing_meta=True)
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual([e.joined_text for e in events], ["Событие 1", "Событие 2"])
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0)
+    def test_parse_uploaded_document_uses_structured_blocks_for_odt(self):
+        content_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<office:document-content
+ xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+ xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0'>
+ <office:body>
+  <office:text>
+   <text:p>Первое событие</text:p>
+   <text:p>Второе событие</text:p>
+  </office:text>
+ </office:body>
+</office:document-content>"""
+
+        with NamedTemporaryFile(suffix=".odt") as tmp:
+            with ZipFile(tmp.name, "w") as archive:
+                archive.writestr("content.xml", content_xml)
+            events, _ = parse_uploaded_document(tmp.name, filename="sample.odt", return_slicing_meta=True)
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual([e.joined_text for e in events], ["Первое событие", "Второе событие"])
+
+
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0, TEMPLATE_MIN_SLICE_CHARS=1, SKIP_SEMANTIC_MODEL=True)
+    def test_parse_uploaded_document_applies_docx_template_for_odt_summary(self):
+        from docx import Document
+
+        content_xml = """<?xml version='1.0' encoding='UTF-8'?>
+<office:document-content
+ xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'
+ xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0'>
+ <office:body>
+  <office:text>
+   <text:p>start anchor</text:p>
+   <text:p>Внутри шаблона ODT</text:p>
+   <text:p>end anchor</text:p>
+  </office:text>
+ </office:body>
+</office:document-content>"""
+
+        template = Document()
+        template.add_paragraph("header")
+        template.add_paragraph("[BEGIN]")
+        template.add_paragraph("body")
+        template.add_paragraph("[END]")
+        template.add_paragraph("footer")
+
+        with NamedTemporaryFile(suffix=".odt") as summary_tmp, NamedTemporaryFile(suffix=".docx") as template_tmp:
+            with ZipFile(summary_tmp.name, "w") as archive:
+                archive.writestr("content.xml", content_xml)
+            template.save(template_tmp.name)
+
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_tmp.name, name="template.docx"),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+                scope="pu",
+                pu_id="1",
+                template_id="fake-template",
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start anchor", end_anchor_text="end anchor", index=0)],
+            ):
+                events, meta = parse_uploaded_document(
+                    summary_tmp.name,
+                    filename="summary.odt",
+                    selected_pu_id="1",
+                    selected_pu_name="ПУ",
+                    return_slicing_meta=True,
+                )
+
+        self.assertEqual([e.joined_text for e in events], ["Внутри шаблона ODT"])
+        self.assertEqual(meta.get("slice_strategy"), "template_anchors")
+        self.assertEqual(meta.get("anchors_matched"), 1)
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0, TEMPLATE_MIN_SLICE_CHARS=1, SKIP_SEMANTIC_MODEL=True)
+    def test_parse_uploaded_document_applies_docx_template_for_docx_summary_regression(self):
+        from docx import Document
+
+        summary = Document()
+        summary.add_paragraph("start anchor")
+        summary.add_paragraph("inside docx")
+        summary.add_paragraph("end anchor")
+
+        template = Document()
+        template.add_paragraph("header")
+        template.add_paragraph("[BEGIN]")
+        template.add_paragraph("body")
+        template.add_paragraph("[END]")
+        template.add_paragraph("footer")
+
+        with NamedTemporaryFile(suffix=".docx") as summary_tmp, NamedTemporaryFile(suffix=".docx") as template_tmp:
+            summary.save(summary_tmp.name)
+            template.save(template_tmp.name)
+
+            fake_template = SimpleNamespace(
+                file=SimpleNamespace(path=template_tmp.name, name="template.docx"),
+                begin_marker="[BEGIN]",
+                end_marker="[END]",
+                anchor_match_threshold=0.6,
+                scope="pu",
+                pu_id="1",
+                template_id="fake-template",
+            )
+            with patch("apps.analysis_app.svodka_templates.get_template_for_run", return_value=fake_template), patch(
+                "apps.analysis_app.svodka_templates.build_template_segments",
+                return_value=[SegmentAnchors(start_anchor_text="start anchor", end_anchor_text="end anchor", index=0)],
+            ):
+                events, meta = parse_uploaded_document(
+                    summary_tmp.name,
+                    filename="summary.docx",
+                    selected_pu_id="1",
+                    selected_pu_name="ПУ",
+                    return_slicing_meta=True,
+                )
+
+        self.assertEqual([e.joined_text for e in events], ["inside docx"])
+        self.assertEqual(meta.get("slice_strategy"), "template_anchors")
+        self.assertEqual(meta.get("anchors_matched"), 1)
+
+
+    @override_settings(MIN_EVENT_PARAGRAPH_CHARS=0)
+    def test_parse_uploaded_document_uses_blocks_for_pdf(self):
+        pdf_like = b"stream\nBT /F1 12 Tf 72 712 Td (PDF block 1) Tj ET\nendstream\nstream\nBT /F1 12 Tf 72 680 Td (PDF block 2) Tj ET\nendstream"
+
+        with NamedTemporaryFile(suffix=".pdf") as tmp:
+            Path(tmp.name).write_bytes(pdf_like)
+            events, _ = parse_uploaded_document(tmp.name, filename="sample.pdf", return_slicing_meta=True)
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual([e.joined_text for e in events], ["PDF block 1", "PDF block 2"])
