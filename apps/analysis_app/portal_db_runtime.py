@@ -47,6 +47,12 @@ def build_django_db_settings(db_obj: PortalDbConnectionSettings, current_setting
     }
 
 
+def _resolve_runtime_sql_profile(db_profile: str) -> str:
+    if db_profile == PortalDbConnectionSettings.Profile.PROD:
+        return "prod_ro"
+    return "dev"
+
+
 def _same_connection_settings(current: dict, desired: dict) -> bool:
     keys = ("ENGINE", "NAME", "USER", "PASSWORD", "HOST", "PORT")
     if not all(current.get(key) == desired.get(key) for key in keys):
@@ -70,6 +76,8 @@ def apply_portal_db_settings() -> None:
 
     current = connections.databases.get("portal", {})
     desired = build_django_db_settings(db_obj, current)
+
+    os.environ["PORTAL_PROFILE"] = _resolve_runtime_sql_profile(db_obj.profile)
 
     if not desired.get("PASSWORD"):
         if current.get("PASSWORD") not in (None, ""):
