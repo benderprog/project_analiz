@@ -4,8 +4,8 @@ select distinct
   e.find_subdivision_unit_id as subdivision_id,
   e.event_type,
   e.article_of_law
-from event e
-join offenders o on o.event_id = e.event_id
+from resource.event e
+join resource.offenders o on o.event_id = e.event_id
 where replace(lower(o.second_name), 'ё', 'е') = replace(lower(%(second_name)s), 'ё', 'е')
   and e.find_subdivision_unit_id = %(subdivision_id)s
   and (
