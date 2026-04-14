@@ -94,7 +94,7 @@ docker tag project_analiz_web:latest "project_analiz:web-ver-${VERSION}"
 docker image inspect "project_analiz:web-ver-${VERSION}" >/dev/null && echo "OK web tag"
 ```
 
-## E) Optional: prefetch model
+## E) Prefetch model (mandatory)
 
 ```bash
 MODEL="paraphrase-multilingual-MiniLM-L12-v2"
@@ -102,11 +102,13 @@ OUT="models/${MODEL}"
 bash scripts/prefetch_model.sh --model "${MODEL}" --out "${OUT}"
 ```
 
+`offline.sh bundle` требует локальный каталог `models/paraphrase-multilingual-MiniLM-L12-v2` и всегда кладет модель в bundle.
+
 ## F) Build offline bundle
 
 ```bash
 rm -rf dist
-bash scripts/offline/offline.sh bundle --version 1.10 --with-model \
+bash scripts/offline/offline.sh bundle --version 1.10 \
   --db-app-dump "$DUMP_DIR/app_db.dump" \
   --db-portal-dump "$DUMP_DIR/portal_db_test.dump" \
   --archive

@@ -51,6 +51,7 @@ def test_offline_script_help():
     assert "restore" in result.stdout
     assert "ps" in result.stdout
     assert "logs" in result.stdout
+    assert "--with-model" not in result.stdout
 
 
 
@@ -60,6 +61,7 @@ def test_offline_bundle_writes_portal_nested_config_and_sql_paths():
 
     assert "portal/portal.yml" in content
     assert "configs/portal/sql" in content
+    assert "configs/portal/sql_prod_ro" in content
     assert "PORTAL_CONFIG_PATH=/app/configs/portal.yml" in content
 
 
@@ -115,3 +117,12 @@ def test_offline_script_prepares_shared_media_directory():
     content = script_path.read_text(encoding="utf-8")
 
     assert '"${compose_dir}/media"' in content
+
+
+def test_offline_bundle_requires_and_copies_semantic_model():
+    script_path = REPO_ROOT / "scripts" / "offline" / "offline.sh"
+    content = script_path.read_text(encoding="utf-8")
+
+    assert "Required semantic model not found" in content
+    assert "Copying local semantic model cache" in content
+    assert "Required semantic model was not copied into bundle compose/models." in content
