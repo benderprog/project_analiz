@@ -5,6 +5,7 @@
 - Local image: `project_analiz:web-ver-<version>`
 - Local image: `postgres:15`
 - Local image: `redis:7-alpine`
+- Local semantic model cache: `models/paraphrase-multilingual-MiniLM-L12-v2`
 - Dumps in custom format (`-Fc`):
   - `app_db.dump`
   - `portal_db_test.dump`
@@ -34,7 +35,15 @@ docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/app_db.d
 docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_db_test.dump >/dev/null"
 ```
 
-## 3. Build bundle
+## 3. Prefetch semantic model (mandatory)
+
+```bash
+MODEL="paraphrase-multilingual-MiniLM-L12-v2"
+OUT="models/${MODEL}"
+bash scripts/prefetch_model.sh --model "${MODEL}" --out "${OUT}"
+```
+
+## 4. Build bundle
 
 ```bash
 ./scripts/offline/offline.sh bundle \
@@ -44,7 +53,9 @@ docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_d
   --archive
 ```
 
-## 4. Import and run in closed contour
+`bundle` всегда включает локальную семантическую модель в `compose/models`. Если каталог модели отсутствует, сборка завершится ошибкой.
+
+## 5. Import and run in closed contour
 
 ```bash
 tar -xzf offline_bundle_1_9.tar.gz
@@ -59,7 +70,7 @@ Worker auto-limits:
 - `worker` стартует через helper и ставит лимиты Celery на 80% CPU/RAM, доступных контейнеру (с учетом cgroup).
 - Для админ-ограничений контейнера можно опционально задать Docker/Compose ресурсы (`cpus`, `mem_limit`) — worker автоматически уважает эти лимиты и берет 80% от них.
 
-## 5. Operations
+## 6. Operations
 
 ```bash
 bash scripts/offline/offline.sh ps

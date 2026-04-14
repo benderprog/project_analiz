@@ -51,7 +51,15 @@ docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/app_db.d
 docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_db_test.dump >/dev/null"
 ```
 
-## 3) Build offline bundle
+## 3) Prefetch semantic model (mandatory)
+
+```bash
+MODEL="paraphrase-multilingual-MiniLM-L12-v2"
+OUT="models/${MODEL}"
+bash scripts/prefetch_model.sh --model "${MODEL}" --out "${OUT}"
+```
+
+## 4) Build offline bundle
 
 ```bash
 ./scripts/offline/offline.sh bundle \
@@ -61,9 +69,9 @@ docker run --rm -v "$PWD:/work" postgres:15 sh -lc "pg_restore -l /work/portal_d
   --archive
 ```
 
-Bundle includes all images declared in `docker/offline/compose.yml` (web/worker image, `postgres:15`, redis, etc.).
+Bundle includes all images declared in `docker/offline/compose.yml` (web/worker image, `postgres:15`, redis, etc.) и локальную семантическую модель в `compose/models`. Если модель не подготовлена локально, `bundle` завершится ошибкой.
 
-## 4) Closed contour deployment
+## 5) Closed contour deployment
 
 ```bash
 tar -xzf dist/offline_bundle_1_9.tar.gz

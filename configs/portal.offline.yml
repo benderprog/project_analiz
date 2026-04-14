@@ -24,3 +24,23 @@ profiles:
         search_by_offender: event/search_by_offender.sql
         search_by_offender_subdivision: event/search_by_offender_subdivision.sql
         event_snapshot: event/event_snapshot.sql
+
+  prod_ro:
+    database:
+      engine: django.db.backends.postgresql
+      name: ${PORTAL_DB_NAME}
+      user: ${PORTAL_DB_USER}
+      password: ${PORTAL_DB_PASSWORD}
+      host: ${PORTAL_DB_HOST}
+      port: ${PORTAL_DB_PORT}
+    sql:
+      base_dir: configs/portal/sql_prod_ro
+      queries:
+        list_pus: pu/list_pus.sql
+        list_subdivisions: subdivision/list_subdivisions.sql
+        search_by_subdivision_time: event/search_by_subdivision_time.sql
+        search_by_time: event/search_by_time.sql
+        event_offenders: event/event_offenders.sql
+        search_by_offender: event/search_by_offender.sql
+        search_by_offender_subdivision: event/search_by_offender_subdivision.sql
+        event_snapshot: event/event_snapshot.sql

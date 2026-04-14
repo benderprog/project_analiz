@@ -356,6 +356,37 @@ class PortalDbRuntimeTests(TestCase):
         finally:
             connections.databases["portal"] = original
 
+
+    @patch("apps.analysis_app.portal_db_runtime.decrypt_password", return_value="test-pass")
+    def test_apply_portal_db_settings_sets_portal_profile_env_for_test(self, _):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.TEST
+        settings_obj.host = "test-host"
+        settings_obj.port = 5432
+        settings_obj.db_name = "test_db"
+        settings_obj.user = "test_user"
+        settings_obj.password_encrypted = "token"
+        settings_obj.save()
+
+        with patch.dict(os.environ, {"PORTAL_PROFILE": "prod_ro"}, clear=False):
+            apply_portal_db_settings()
+            self.assertEqual(os.environ.get("PORTAL_PROFILE"), "dev")
+
+    @patch("apps.analysis_app.portal_db_runtime.decrypt_password", return_value="prod-pass")
+    def test_apply_portal_db_settings_sets_portal_profile_env_for_prod(self, _):
+        settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()
+        settings_obj.profile = PortalDbConnectionSettings.Profile.PROD
+        settings_obj.host = "prod-host"
+        settings_obj.port = 5432
+        settings_obj.db_name = "prod_db"
+        settings_obj.user = "prod_user"
+        settings_obj.password_encrypted = "token"
+        settings_obj.save()
+
+        with patch.dict(os.environ, {"PORTAL_PROFILE": "dev"}, clear=False):
+            apply_portal_db_settings()
+            self.assertEqual(os.environ.get("PORTAL_PROFILE"), "prod_ro")
+
     @patch("apps.analysis_app.portal_db_runtime.decrypt_password", side_effect=RuntimeError("bad-token"))
     def test_apply_portal_db_settings_uses_current_password_when_env_missing(self, _):
         settings_obj = PortalDbConnectionSettings.objects.order_by("id").first()

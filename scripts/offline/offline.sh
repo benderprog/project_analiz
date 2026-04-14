@@ -12,7 +12,7 @@ usage() {
 Offline bundle / runtime helper
 
 Usage:
-  ./scripts/offline/offline.sh bundle --version 1.9 --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db_test.dump [--with-model] [--archive]
+  ./scripts/offline/offline.sh bundle --version 1.9 --db-app-dump /abs/path/app_db.dump --db-portal-dump /abs/path/portal_db_test.dump [--archive]
   ./scripts/offline/offline.sh import
   ./scripts/offline/offline.sh restore
   ./scripts/offline/offline.sh reset-db
@@ -70,7 +70,6 @@ bundle_cmd() {
   require_cmd docker
 
   local version=""
-  local with_model="0"
   local db_app_dump=""
   local db_portal_dump=""
   local make_archive="0"
@@ -82,7 +81,7 @@ bundle_cmd() {
         shift 2
         ;;
       --with-model)
-        with_model="1"
+        log "Flag --with-model is deprecated: semantic model is always included in bundle."
         shift
         ;;
       --db-app-dump)
@@ -114,6 +113,8 @@ bundle_cmd() {
   [[ "${db_portal_dump}" = /* ]] || die "--db-portal-dump must be an absolute path"
   [[ -f "${db_app_dump}" ]] || die "App DB dump not found: ${db_app_dump}"
   [[ -f "${db_portal_dump}" ]] || die "Portal DB dump not found: ${db_portal_dump}"
+  local required_model_dir="${REPO_ROOT}/models/paraphrase-multilingual-MiniLM-L12-v2"
+  [[ -d "${required_model_dir}" ]] || die "Required semantic model not found: ${required_model_dir}. Run scripts/prefetch_model.sh before bundling."
 
   local bundle_dir
   bundle_dir="${OFFLINE_BUNDLE_DIR:-$(default_bundle_dir_for_version "$version")}"
@@ -132,6 +133,7 @@ bundle_cmd() {
   cp "${REPO_ROOT}/docker/offline/compose.yml" "${compose_dir}/compose.yml"
   local portal_backend="${PORTAL_GATEWAY_BACKEND:-sql}"
   local sql_source_dir="${REPO_ROOT}/configs/portal/sql"
+  local sql_source_prod_ro_dir="${REPO_ROOT}/configs/portal/sql_prod_ro"
   [[ -f "${REPO_ROOT}/configs/portal.offline.yml" ]] || die "Missing portal config template: configs/portal.offline.yml"
   cp "${REPO_ROOT}/configs/portal.offline.yml" "${configs_dir}/portal.yml"
   mkdir -p "${configs_dir}/portal"
@@ -139,9 +141,16 @@ bundle_cmd() {
   if [[ "${portal_backend}" == "sql" && ! -d "${sql_source_dir}" ]]; then
     die "PORTAL_GATEWAY_BACKEND=sql requires ${sql_source_dir} to exist for bundling."
   fi
+  if [[ "${portal_backend}" == "sql" && ! -d "${sql_source_prod_ro_dir}" ]]; then
+    die "PORTAL_GATEWAY_BACKEND=sql requires ${sql_source_prod_ro_dir} to exist for bundling."
+  fi
   mkdir -p "${configs_dir}/portal/sql"
+  mkdir -p "${configs_dir}/portal/sql_prod_ro"
   if [[ -d "${sql_source_dir}" ]]; then
     cp -a "${sql_source_dir}/." "${configs_dir}/portal/sql/"
+  fi
+  if [[ -d "${sql_source_prod_ro_dir}" ]]; then
+    cp -a "${sql_source_prod_ro_dir}/." "${configs_dir}/portal/sql_prod_ro/"
   fi
 
   cp "${REPO_ROOT}/scripts/offline/offline.sh" "${scripts_dir}/offline.sh"
@@ -184,13 +193,11 @@ ENV
 
   mkdir -p "${compose_dir}/models" "${compose_dir}/db_dumps" "${compose_dir}/media"
 
-  if [[ "${with_model}" == "1" ]]; then
-    [[ -d "${REPO_ROOT}/models/paraphrase-multilingual-MiniLM-L12-v2" ]] || die "Model directory not found at models/paraphrase-multilingual-MiniLM-L12-v2. Prefetch model before bundling."
-    log "Copying local model cache"
-    mkdir -p "${models_dir}"
-    cp -a "${REPO_ROOT}/models/." "${models_dir}/"
-    cp -a "${models_dir}/." "${compose_dir}/models/"
-  fi
+  log "Copying local semantic model cache"
+  mkdir -p "${models_dir}"
+  cp -a "${REPO_ROOT}/models/." "${models_dir}/"
+  cp -a "${models_dir}/." "${compose_dir}/models/"
+  [[ -d "${compose_dir}/models/paraphrase-multilingual-MiniLM-L12-v2" ]] || die "Required semantic model was not copied into bundle compose/models."
 
   log "Copying DB dumps"
   cp "${db_app_dump}" "${dumps_dir}/app_db.dump"
